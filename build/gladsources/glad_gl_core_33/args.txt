@@ -1,0 +1,1 @@
+--out-path /home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33 --api gl:core=3.3 --reproducible c --loader

@@ -1,0 +1,14 @@
+# Target labels
+ glfw-populate
+# Source files and their labels
+/home/malesko/dev/jitgl/build/_deps/glfw-subbuild/CMakeFiles/glfw-populate
+/home/malesko/dev/jitgl/build/_deps/glfw-subbuild/CMakeFiles/glfw-populate.rule
+/home/malesko/dev/jitgl/build/_deps/glfw-subbuild/CMakeFiles/glfw-populate-complete.rule
+/home/malesko/dev/jitgl/build/_deps/glfw-subbuild/glfw-populate-prefix/src/glfw-populate-stamp/glfw-populate-build.rule
+/home/malesko/dev/jitgl/build/_deps/glfw-subbuild/glfw-populate-prefix/src/glfw-populate-stamp/glfw-populate-configure.rule
+/home/malesko/dev/jitgl/build/_deps/glfw-subbuild/glfw-populate-prefix/src/glfw-populate-stamp/glfw-populate-download.rule
+/home/malesko/dev/jitgl/build/_deps/glfw-subbuild/glfw-populate-prefix/src/glfw-populate-stamp/glfw-populate-install.rule
+/home/malesko/dev/jitgl/build/_deps/glfw-subbuild/glfw-populate-prefix/src/glfw-populate-stamp/glfw-populate-mkdir.rule
+/home/malesko/dev/jitgl/build/_deps/glfw-subbuild/glfw-populate-prefix/src/glfw-populate-stamp/glfw-populate-patch.rule
+/home/malesko/dev/jitgl/build/_deps/glfw-subbuild/glfw-populate-prefix/src/glfw-populate-stamp/glfw-populate-test.rule
+/home/malesko/dev/jitgl/build/_deps/glfw-subbuild/glfw-populate-prefix/src/glfw-populate-stamp/glfw-populate-update.rule

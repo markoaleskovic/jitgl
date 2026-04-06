@@ -1,0 +1,12 @@
+# This is a generated file and its contents are an internal implementation detail.
+# The download step will be re-executed if anything in this file changes.
+# No other meaning or use of this file is supported.
+
+method=url
+command=/usr/bin/cmake;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;/home/malesko/dev/jitgl/build/_deps/text_editor-subbuild/text_editor-populate-prefix/src/text_editor-populate-stamp/download-text_editor-populate.cmake;COMMAND;/usr/bin/cmake;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;/home/malesko/dev/jitgl/build/_deps/text_editor-subbuild/text_editor-populate-prefix/src/text_editor-populate-stamp/verify-text_editor-populate.cmake;COMMAND;/usr/bin/cmake;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;/home/malesko/dev/jitgl/build/_deps/text_editor-subbuild/text_editor-populate-prefix/src/text_editor-populate-stamp/extract-text_editor-populate.cmake
+source_dir=/home/malesko/dev/jitgl/build/_deps/text_editor-src
+work_dir=/home/malesko/dev/jitgl/build/_deps
+url(s)=https://github.com/BalazsJako/ImGuiColorTextEdit/archive/refs/heads/master.tar.gz
+hash=
+      no_extract=
+

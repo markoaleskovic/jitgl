@@ -1,0 +1,3 @@
+/home/malesko/dev/jitgl/build/_deps/text_editor-subbuild/CMakeFiles/text_editor-populate.dir
+/home/malesko/dev/jitgl/build/_deps/text_editor-subbuild/CMakeFiles/edit_cache.dir
+/home/malesko/dev/jitgl/build/_deps/text_editor-subbuild/CMakeFiles/rebuild_cache.dir
