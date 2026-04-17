@@ -6,5 +6,5 @@ CXX_DEFINES =
 
 CXX_INCLUDES = -I/home/malesko/dev/jitgl/build/_deps/imgui-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src/backends -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include
 
-CXX_FLAGS = -g -std=gnu++20
+CXX_FLAGS = -std=gnu++20
 

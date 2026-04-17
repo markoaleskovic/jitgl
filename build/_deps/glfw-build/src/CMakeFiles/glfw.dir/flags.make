@@ -6,5 +6,5 @@ C_DEFINES = -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11
 
 C_INCLUDES = -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src
 
-C_FLAGS = -g -std=c99 -fPIC -Wall
+C_FLAGS = -std=c99 -fPIC -Wall
 

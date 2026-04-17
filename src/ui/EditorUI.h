@@ -1,20 +1,19 @@
 #pragma once
 
-#include <mutex>
-#include <vector>
 #include <string>
-#include <TextEditor.h>
+#include <vector>
+#include <mutex>
+#include <functional>
+#include "TextEditor.h"
 
 struct GLFWwindow;
 
-struct Document{
+struct Document {
     std::string filename;
     std::string filepath;
-    
     TextEditor editor;
-
     bool isOpen = true;
-    bool isDirty = false;           // if user typed unsaved changes
+    bool isDirty = false;
     double lastModifiedTime = 0.0;
     std::string lastKnownText;
 };
@@ -24,29 +23,37 @@ public:
     EditorUI();
     ~EditorUI();
 
-    // Lifecycle methods called by the Engine
     void Init(GLFWwindow* window);
     void NewFrame();
     void Draw();
     void Render();
     void Shutdown();
 
-    //scanning the filesystem
-    void LoadWorkspace(const std::string& directoryPath);
+    // Data injection methods
+    void AddDocument(const std::string& filename, const std::string& filepath, const std::string& content);
+    void SetSaveCallback(std::function<bool(const std::string&, const std::string&)> cb);
 
     void AddConsoleOutput(const std::string& text);
+    void AddLogOutput(const std::string& text);
 
 private:
     GLFWwindow* window;
     std::vector<Document> openDocuments;
     std::vector<std::string> consoleLines;
+    std::vector<std::string> logLines;
     std::mutex consoleMutex;
-    bool scrollToBottom = true;
+    std::mutex logMutex;
 
-    // UI Component Renderers
+    bool consoleScrollToBottom = true;
+    bool logScrollToBottom = true;
+
+    char commandBuffer[512] = "";
+    std::vector<std::string> commandHistory;
+
+    std::function<bool(const std::string&, const std::string&)> onSaveDocument_;
+
     void SetupDockspace();
     void DrawMenuBar();
-    void DrawViewportPane();
     void DrawConsolePane();
     void DrawTextEditorPane();
 };

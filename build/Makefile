@@ -533,6 +533,54 @@ src/core/Engine.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/jit_ide.dir/build.make CMakeFiles/jit_ide.dir/src/core/Engine.cpp.s
 .PHONY : src/core/Engine.cpp.s
 
+src/core/WorkspaceManager.o: src/core/WorkspaceManager.cpp.o
+.PHONY : src/core/WorkspaceManager.o
+
+# target to build an object file
+src/core/WorkspaceManager.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/jit_ide.dir/build.make CMakeFiles/jit_ide.dir/src/core/WorkspaceManager.cpp.o
+.PHONY : src/core/WorkspaceManager.cpp.o
+
+src/core/WorkspaceManager.i: src/core/WorkspaceManager.cpp.i
+.PHONY : src/core/WorkspaceManager.i
+
+# target to preprocess a source file
+src/core/WorkspaceManager.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/jit_ide.dir/build.make CMakeFiles/jit_ide.dir/src/core/WorkspaceManager.cpp.i
+.PHONY : src/core/WorkspaceManager.cpp.i
+
+src/core/WorkspaceManager.s: src/core/WorkspaceManager.cpp.s
+.PHONY : src/core/WorkspaceManager.s
+
+# target to generate assembly for a file
+src/core/WorkspaceManager.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/jit_ide.dir/build.make CMakeFiles/jit_ide.dir/src/core/WorkspaceManager.cpp.s
+.PHONY : src/core/WorkspaceManager.cpp.s
+
+src/jit/JitEngine.o: src/jit/JitEngine.cpp.o
+.PHONY : src/jit/JitEngine.o
+
+# target to build an object file
+src/jit/JitEngine.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/jit_ide.dir/build.make CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.o
+.PHONY : src/jit/JitEngine.cpp.o
+
+src/jit/JitEngine.i: src/jit/JitEngine.cpp.i
+.PHONY : src/jit/JitEngine.i
+
+# target to preprocess a source file
+src/jit/JitEngine.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/jit_ide.dir/build.make CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.i
+.PHONY : src/jit/JitEngine.cpp.i
+
+src/jit/JitEngine.s: src/jit/JitEngine.cpp.s
+.PHONY : src/jit/JitEngine.s
+
+# target to generate assembly for a file
+src/jit/JitEngine.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/jit_ide.dir/build.make CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.s
+.PHONY : src/jit/JitEngine.cpp.s
+
 src/main.o: src/main.cpp.o
 .PHONY : src/main.o
 
@@ -557,6 +605,54 @@ src/main.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/jit_ide.dir/build.make CMakeFiles/jit_ide.dir/src/main.cpp.s
 .PHONY : src/main.cpp.s
 
+src/system/ConsoleRedirectSession.o: src/system/ConsoleRedirectSession.cpp.o
+.PHONY : src/system/ConsoleRedirectSession.o
+
+# target to build an object file
+src/system/ConsoleRedirectSession.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/jit_ide.dir/build.make CMakeFiles/jit_ide.dir/src/system/ConsoleRedirectSession.cpp.o
+.PHONY : src/system/ConsoleRedirectSession.cpp.o
+
+src/system/ConsoleRedirectSession.i: src/system/ConsoleRedirectSession.cpp.i
+.PHONY : src/system/ConsoleRedirectSession.i
+
+# target to preprocess a source file
+src/system/ConsoleRedirectSession.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/jit_ide.dir/build.make CMakeFiles/jit_ide.dir/src/system/ConsoleRedirectSession.cpp.i
+.PHONY : src/system/ConsoleRedirectSession.cpp.i
+
+src/system/ConsoleRedirectSession.s: src/system/ConsoleRedirectSession.cpp.s
+.PHONY : src/system/ConsoleRedirectSession.s
+
+# target to generate assembly for a file
+src/system/ConsoleRedirectSession.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/jit_ide.dir/build.make CMakeFiles/jit_ide.dir/src/system/ConsoleRedirectSession.cpp.s
+.PHONY : src/system/ConsoleRedirectSession.cpp.s
+
+src/system/ConsoleRedirector.o: src/system/ConsoleRedirector.cpp.o
+.PHONY : src/system/ConsoleRedirector.o
+
+# target to build an object file
+src/system/ConsoleRedirector.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/jit_ide.dir/build.make CMakeFiles/jit_ide.dir/src/system/ConsoleRedirector.cpp.o
+.PHONY : src/system/ConsoleRedirector.cpp.o
+
+src/system/ConsoleRedirector.i: src/system/ConsoleRedirector.cpp.i
+.PHONY : src/system/ConsoleRedirector.i
+
+# target to preprocess a source file
+src/system/ConsoleRedirector.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/jit_ide.dir/build.make CMakeFiles/jit_ide.dir/src/system/ConsoleRedirector.cpp.i
+.PHONY : src/system/ConsoleRedirector.cpp.i
+
+src/system/ConsoleRedirector.s: src/system/ConsoleRedirector.cpp.s
+.PHONY : src/system/ConsoleRedirector.s
+
+# target to generate assembly for a file
+src/system/ConsoleRedirector.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/jit_ide.dir/build.make CMakeFiles/jit_ide.dir/src/system/ConsoleRedirector.cpp.s
+.PHONY : src/system/ConsoleRedirector.cpp.s
+
 src/ui/EditorUI.o: src/ui/EditorUI.cpp.o
 .PHONY : src/ui/EditorUI.o
 
@@ -580,6 +676,30 @@ src/ui/EditorUI.s: src/ui/EditorUI.cpp.s
 src/ui/EditorUI.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/jit_ide.dir/build.make CMakeFiles/jit_ide.dir/src/ui/EditorUI.cpp.s
 .PHONY : src/ui/EditorUI.cpp.s
+
+src/watcher/FileWatcher.o: src/watcher/FileWatcher.cpp.o
+.PHONY : src/watcher/FileWatcher.o
+
+# target to build an object file
+src/watcher/FileWatcher.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/jit_ide.dir/build.make CMakeFiles/jit_ide.dir/src/watcher/FileWatcher.cpp.o
+.PHONY : src/watcher/FileWatcher.cpp.o
+
+src/watcher/FileWatcher.i: src/watcher/FileWatcher.cpp.i
+.PHONY : src/watcher/FileWatcher.i
+
+# target to preprocess a source file
+src/watcher/FileWatcher.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/jit_ide.dir/build.make CMakeFiles/jit_ide.dir/src/watcher/FileWatcher.cpp.i
+.PHONY : src/watcher/FileWatcher.cpp.i
+
+src/watcher/FileWatcher.s: src/watcher/FileWatcher.cpp.s
+.PHONY : src/watcher/FileWatcher.s
+
+# target to generate assembly for a file
+src/watcher/FileWatcher.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/jit_ide.dir/build.make CMakeFiles/jit_ide.dir/src/watcher/FileWatcher.cpp.s
+.PHONY : src/watcher/FileWatcher.cpp.s
 
 # Help Target
 help:
@@ -632,12 +752,27 @@ help:
 	@echo "... src/core/Engine.o"
 	@echo "... src/core/Engine.i"
 	@echo "... src/core/Engine.s"
+	@echo "... src/core/WorkspaceManager.o"
+	@echo "... src/core/WorkspaceManager.i"
+	@echo "... src/core/WorkspaceManager.s"
+	@echo "... src/jit/JitEngine.o"
+	@echo "... src/jit/JitEngine.i"
+	@echo "... src/jit/JitEngine.s"
 	@echo "... src/main.o"
 	@echo "... src/main.i"
 	@echo "... src/main.s"
+	@echo "... src/system/ConsoleRedirectSession.o"
+	@echo "... src/system/ConsoleRedirectSession.i"
+	@echo "... src/system/ConsoleRedirectSession.s"
+	@echo "... src/system/ConsoleRedirector.o"
+	@echo "... src/system/ConsoleRedirector.i"
+	@echo "... src/system/ConsoleRedirector.s"
 	@echo "... src/ui/EditorUI.o"
 	@echo "... src/ui/EditorUI.i"
 	@echo "... src/ui/EditorUI.s"
+	@echo "... src/watcher/FileWatcher.o"
+	@echo "... src/watcher/FileWatcher.i"
+	@echo "... src/watcher/FileWatcher.s"
 .PHONY : help
 
 

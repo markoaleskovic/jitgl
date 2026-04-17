@@ -10,8 +10,13 @@ set(CMAKE_DEPENDS_LANGUAGES
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
   "/home/malesko/dev/jitgl/build/_deps/text_editor-src/TextEditor.cpp" "CMakeFiles/jit_ide.dir/_deps/text_editor-src/TextEditor.cpp.o" "gcc" "CMakeFiles/jit_ide.dir/_deps/text_editor-src/TextEditor.cpp.o.d"
   "/home/malesko/dev/jitgl/src/core/Engine.cpp" "CMakeFiles/jit_ide.dir/src/core/Engine.cpp.o" "gcc" "CMakeFiles/jit_ide.dir/src/core/Engine.cpp.o.d"
+  "/home/malesko/dev/jitgl/src/core/WorkspaceManager.cpp" "CMakeFiles/jit_ide.dir/src/core/WorkspaceManager.cpp.o" "gcc" "CMakeFiles/jit_ide.dir/src/core/WorkspaceManager.cpp.o.d"
+  "/home/malesko/dev/jitgl/src/jit/JitEngine.cpp" "CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.o" "gcc" "CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.o.d"
   "/home/malesko/dev/jitgl/src/main.cpp" "CMakeFiles/jit_ide.dir/src/main.cpp.o" "gcc" "CMakeFiles/jit_ide.dir/src/main.cpp.o.d"
+  "/home/malesko/dev/jitgl/src/system/ConsoleRedirectSession.cpp" "CMakeFiles/jit_ide.dir/src/system/ConsoleRedirectSession.cpp.o" "gcc" "CMakeFiles/jit_ide.dir/src/system/ConsoleRedirectSession.cpp.o.d"
+  "/home/malesko/dev/jitgl/src/system/ConsoleRedirector.cpp" "CMakeFiles/jit_ide.dir/src/system/ConsoleRedirector.cpp.o" "gcc" "CMakeFiles/jit_ide.dir/src/system/ConsoleRedirector.cpp.o.d"
   "/home/malesko/dev/jitgl/src/ui/EditorUI.cpp" "CMakeFiles/jit_ide.dir/src/ui/EditorUI.cpp.o" "gcc" "CMakeFiles/jit_ide.dir/src/ui/EditorUI.cpp.o.d"
+  "/home/malesko/dev/jitgl/src/watcher/FileWatcher.cpp" "CMakeFiles/jit_ide.dir/src/watcher/FileWatcher.cpp.o" "gcc" "CMakeFiles/jit_ide.dir/src/watcher/FileWatcher.cpp.o.d"
   "" "jit_ide" "gcc" "CMakeFiles/jit_ide.dir/link.d"
   )
 

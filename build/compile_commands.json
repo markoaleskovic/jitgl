@@ -1,223 +1,253 @@
 [
 {
   "directory": "/home/malesko/dev/jitgl/build",
-  "command": "/usr/bin/cc  -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include -g -o CMakeFiles/glad_gl_core_33.dir/gladsources/glad_gl_core_33/src/gl.c.o -c /home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/src/gl.c",
+  "command": "/usr/bin/cc  -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include  -o CMakeFiles/glad_gl_core_33.dir/gladsources/glad_gl_core_33/src/gl.c.o -c /home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/src/gl.c",
   "file": "/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/src/gl.c",
   "output": "CMakeFiles/glad_gl_core_33.dir/gladsources/glad_gl_core_33/src/gl.c.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build",
-  "command": "/usr/bin/c++  -I/home/malesko/dev/jitgl/build/_deps/imgui-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src/backends -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include -g -std=gnu++20 -o CMakeFiles/imgui_lib.dir/_deps/imgui-src/imgui.cpp.o -c /home/malesko/dev/jitgl/build/_deps/imgui-src/imgui.cpp",
+  "command": "/usr/bin/c++  -I/home/malesko/dev/jitgl/build/_deps/imgui-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src/backends -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include -std=gnu++20 -o CMakeFiles/imgui_lib.dir/_deps/imgui-src/imgui.cpp.o -c /home/malesko/dev/jitgl/build/_deps/imgui-src/imgui.cpp",
   "file": "/home/malesko/dev/jitgl/build/_deps/imgui-src/imgui.cpp",
   "output": "CMakeFiles/imgui_lib.dir/_deps/imgui-src/imgui.cpp.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build",
-  "command": "/usr/bin/c++  -I/home/malesko/dev/jitgl/build/_deps/imgui-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src/backends -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include -g -std=gnu++20 -o CMakeFiles/imgui_lib.dir/_deps/imgui-src/imgui_draw.cpp.o -c /home/malesko/dev/jitgl/build/_deps/imgui-src/imgui_draw.cpp",
+  "command": "/usr/bin/c++  -I/home/malesko/dev/jitgl/build/_deps/imgui-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src/backends -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include -std=gnu++20 -o CMakeFiles/imgui_lib.dir/_deps/imgui-src/imgui_draw.cpp.o -c /home/malesko/dev/jitgl/build/_deps/imgui-src/imgui_draw.cpp",
   "file": "/home/malesko/dev/jitgl/build/_deps/imgui-src/imgui_draw.cpp",
   "output": "CMakeFiles/imgui_lib.dir/_deps/imgui-src/imgui_draw.cpp.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build",
-  "command": "/usr/bin/c++  -I/home/malesko/dev/jitgl/build/_deps/imgui-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src/backends -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include -g -std=gnu++20 -o CMakeFiles/imgui_lib.dir/_deps/imgui-src/imgui_tables.cpp.o -c /home/malesko/dev/jitgl/build/_deps/imgui-src/imgui_tables.cpp",
+  "command": "/usr/bin/c++  -I/home/malesko/dev/jitgl/build/_deps/imgui-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src/backends -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include -std=gnu++20 -o CMakeFiles/imgui_lib.dir/_deps/imgui-src/imgui_tables.cpp.o -c /home/malesko/dev/jitgl/build/_deps/imgui-src/imgui_tables.cpp",
   "file": "/home/malesko/dev/jitgl/build/_deps/imgui-src/imgui_tables.cpp",
   "output": "CMakeFiles/imgui_lib.dir/_deps/imgui-src/imgui_tables.cpp.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build",
-  "command": "/usr/bin/c++  -I/home/malesko/dev/jitgl/build/_deps/imgui-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src/backends -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include -g -std=gnu++20 -o CMakeFiles/imgui_lib.dir/_deps/imgui-src/imgui_widgets.cpp.o -c /home/malesko/dev/jitgl/build/_deps/imgui-src/imgui_widgets.cpp",
+  "command": "/usr/bin/c++  -I/home/malesko/dev/jitgl/build/_deps/imgui-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src/backends -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include -std=gnu++20 -o CMakeFiles/imgui_lib.dir/_deps/imgui-src/imgui_widgets.cpp.o -c /home/malesko/dev/jitgl/build/_deps/imgui-src/imgui_widgets.cpp",
   "file": "/home/malesko/dev/jitgl/build/_deps/imgui-src/imgui_widgets.cpp",
   "output": "CMakeFiles/imgui_lib.dir/_deps/imgui-src/imgui_widgets.cpp.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build",
-  "command": "/usr/bin/c++  -I/home/malesko/dev/jitgl/build/_deps/imgui-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src/backends -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include -g -std=gnu++20 -o CMakeFiles/imgui_lib.dir/_deps/imgui-src/backends/imgui_impl_glfw.cpp.o -c /home/malesko/dev/jitgl/build/_deps/imgui-src/backends/imgui_impl_glfw.cpp",
+  "command": "/usr/bin/c++  -I/home/malesko/dev/jitgl/build/_deps/imgui-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src/backends -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include -std=gnu++20 -o CMakeFiles/imgui_lib.dir/_deps/imgui-src/backends/imgui_impl_glfw.cpp.o -c /home/malesko/dev/jitgl/build/_deps/imgui-src/backends/imgui_impl_glfw.cpp",
   "file": "/home/malesko/dev/jitgl/build/_deps/imgui-src/backends/imgui_impl_glfw.cpp",
   "output": "CMakeFiles/imgui_lib.dir/_deps/imgui-src/backends/imgui_impl_glfw.cpp.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build",
-  "command": "/usr/bin/c++  -I/home/malesko/dev/jitgl/build/_deps/imgui-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src/backends -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include -g -std=gnu++20 -o CMakeFiles/imgui_lib.dir/_deps/imgui-src/backends/imgui_impl_opengl3.cpp.o -c /home/malesko/dev/jitgl/build/_deps/imgui-src/backends/imgui_impl_opengl3.cpp",
+  "command": "/usr/bin/c++  -I/home/malesko/dev/jitgl/build/_deps/imgui-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src/backends -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include -std=gnu++20 -o CMakeFiles/imgui_lib.dir/_deps/imgui-src/backends/imgui_impl_opengl3.cpp.o -c /home/malesko/dev/jitgl/build/_deps/imgui-src/backends/imgui_impl_opengl3.cpp",
   "file": "/home/malesko/dev/jitgl/build/_deps/imgui-src/backends/imgui_impl_opengl3.cpp",
   "output": "CMakeFiles/imgui_lib.dir/_deps/imgui-src/backends/imgui_impl_opengl3.cpp.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build",
-  "command": "/usr/bin/c++ -D_GNU_SOURCE -D_GLIBCXX_USE_CXX11_ABI=\"1 -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS\" -I/home/malesko/dev/jitgl/src -I/home/malesko/dev/jitgl/build/_deps/text_editor-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src/backends -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include -g -std=gnu++20 -o CMakeFiles/jit_ide.dir/src/main.cpp.o -c /home/malesko/dev/jitgl/src/main.cpp",
+  "command": "/usr/bin/c++ -DJIT_CLANG_RESOURCE_DIR=\\\"/usr/lib/clang/22\\\" -DJIT_GLAD_INCLUDE_DIR=\\\"/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include\\\" -DJIT_PROJECT_BINARY_DIR=\\\"/home/malesko/dev/jitgl/build\\\" -DJIT_PROJECT_SOURCE_DIR=\\\"/home/malesko/dev/jitgl\\\" -D_GLIBCXX_USE_CXX11_ABI=1 -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Djit_ide_EXPORTS -I/home/malesko/dev/jitgl/src -I/home/malesko/dev/jitgl/build/_deps/text_editor-src -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include -I/home/malesko/dev/jitgl/build/_deps/imgui-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src/backends -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -std=gnu++20 -o CMakeFiles/jit_ide.dir/src/main.cpp.o -c /home/malesko/dev/jitgl/src/main.cpp",
   "file": "/home/malesko/dev/jitgl/src/main.cpp",
   "output": "CMakeFiles/jit_ide.dir/src/main.cpp.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build",
-  "command": "/usr/bin/c++ -D_GNU_SOURCE -D_GLIBCXX_USE_CXX11_ABI=\"1 -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS\" -I/home/malesko/dev/jitgl/src -I/home/malesko/dev/jitgl/build/_deps/text_editor-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src/backends -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include -g -std=gnu++20 -o CMakeFiles/jit_ide.dir/src/core/Engine.cpp.o -c /home/malesko/dev/jitgl/src/core/Engine.cpp",
+  "command": "/usr/bin/c++ -DJIT_CLANG_RESOURCE_DIR=\\\"/usr/lib/clang/22\\\" -DJIT_GLAD_INCLUDE_DIR=\\\"/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include\\\" -DJIT_PROJECT_BINARY_DIR=\\\"/home/malesko/dev/jitgl/build\\\" -DJIT_PROJECT_SOURCE_DIR=\\\"/home/malesko/dev/jitgl\\\" -D_GLIBCXX_USE_CXX11_ABI=1 -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Djit_ide_EXPORTS -I/home/malesko/dev/jitgl/src -I/home/malesko/dev/jitgl/build/_deps/text_editor-src -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include -I/home/malesko/dev/jitgl/build/_deps/imgui-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src/backends -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -std=gnu++20 -o CMakeFiles/jit_ide.dir/src/core/Engine.cpp.o -c /home/malesko/dev/jitgl/src/core/Engine.cpp",
   "file": "/home/malesko/dev/jitgl/src/core/Engine.cpp",
   "output": "CMakeFiles/jit_ide.dir/src/core/Engine.cpp.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build",
-  "command": "/usr/bin/c++ -D_GNU_SOURCE -D_GLIBCXX_USE_CXX11_ABI=\"1 -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS\" -I/home/malesko/dev/jitgl/src -I/home/malesko/dev/jitgl/build/_deps/text_editor-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src/backends -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include -g -std=gnu++20 -o CMakeFiles/jit_ide.dir/src/ui/EditorUI.cpp.o -c /home/malesko/dev/jitgl/src/ui/EditorUI.cpp",
+  "command": "/usr/bin/c++ -DJIT_CLANG_RESOURCE_DIR=\\\"/usr/lib/clang/22\\\" -DJIT_GLAD_INCLUDE_DIR=\\\"/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include\\\" -DJIT_PROJECT_BINARY_DIR=\\\"/home/malesko/dev/jitgl/build\\\" -DJIT_PROJECT_SOURCE_DIR=\\\"/home/malesko/dev/jitgl\\\" -D_GLIBCXX_USE_CXX11_ABI=1 -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Djit_ide_EXPORTS -I/home/malesko/dev/jitgl/src -I/home/malesko/dev/jitgl/build/_deps/text_editor-src -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include -I/home/malesko/dev/jitgl/build/_deps/imgui-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src/backends -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -std=gnu++20 -o CMakeFiles/jit_ide.dir/src/ui/EditorUI.cpp.o -c /home/malesko/dev/jitgl/src/ui/EditorUI.cpp",
   "file": "/home/malesko/dev/jitgl/src/ui/EditorUI.cpp",
   "output": "CMakeFiles/jit_ide.dir/src/ui/EditorUI.cpp.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build",
-  "command": "/usr/bin/c++ -D_GNU_SOURCE -D_GLIBCXX_USE_CXX11_ABI=\"1 -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS\" -I/home/malesko/dev/jitgl/src -I/home/malesko/dev/jitgl/build/_deps/text_editor-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src/backends -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include -g -std=gnu++20 -o CMakeFiles/jit_ide.dir/_deps/text_editor-src/TextEditor.cpp.o -c /home/malesko/dev/jitgl/build/_deps/text_editor-src/TextEditor.cpp",
+  "command": "/usr/bin/c++ -DJIT_CLANG_RESOURCE_DIR=\\\"/usr/lib/clang/22\\\" -DJIT_GLAD_INCLUDE_DIR=\\\"/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include\\\" -DJIT_PROJECT_BINARY_DIR=\\\"/home/malesko/dev/jitgl/build\\\" -DJIT_PROJECT_SOURCE_DIR=\\\"/home/malesko/dev/jitgl\\\" -D_GLIBCXX_USE_CXX11_ABI=1 -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Djit_ide_EXPORTS -I/home/malesko/dev/jitgl/src -I/home/malesko/dev/jitgl/build/_deps/text_editor-src -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include -I/home/malesko/dev/jitgl/build/_deps/imgui-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src/backends -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -std=gnu++20 -o CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.o -c /home/malesko/dev/jitgl/src/jit/JitEngine.cpp",
+  "file": "/home/malesko/dev/jitgl/src/jit/JitEngine.cpp",
+  "output": "CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.o"
+},
+{
+  "directory": "/home/malesko/dev/jitgl/build",
+  "command": "/usr/bin/c++ -DJIT_CLANG_RESOURCE_DIR=\\\"/usr/lib/clang/22\\\" -DJIT_GLAD_INCLUDE_DIR=\\\"/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include\\\" -DJIT_PROJECT_BINARY_DIR=\\\"/home/malesko/dev/jitgl/build\\\" -DJIT_PROJECT_SOURCE_DIR=\\\"/home/malesko/dev/jitgl\\\" -D_GLIBCXX_USE_CXX11_ABI=1 -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Djit_ide_EXPORTS -I/home/malesko/dev/jitgl/src -I/home/malesko/dev/jitgl/build/_deps/text_editor-src -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include -I/home/malesko/dev/jitgl/build/_deps/imgui-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src/backends -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -std=gnu++20 -o CMakeFiles/jit_ide.dir/src/watcher/FileWatcher.cpp.o -c /home/malesko/dev/jitgl/src/watcher/FileWatcher.cpp",
+  "file": "/home/malesko/dev/jitgl/src/watcher/FileWatcher.cpp",
+  "output": "CMakeFiles/jit_ide.dir/src/watcher/FileWatcher.cpp.o"
+},
+{
+  "directory": "/home/malesko/dev/jitgl/build",
+  "command": "/usr/bin/c++ -DJIT_CLANG_RESOURCE_DIR=\\\"/usr/lib/clang/22\\\" -DJIT_GLAD_INCLUDE_DIR=\\\"/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include\\\" -DJIT_PROJECT_BINARY_DIR=\\\"/home/malesko/dev/jitgl/build\\\" -DJIT_PROJECT_SOURCE_DIR=\\\"/home/malesko/dev/jitgl\\\" -D_GLIBCXX_USE_CXX11_ABI=1 -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Djit_ide_EXPORTS -I/home/malesko/dev/jitgl/src -I/home/malesko/dev/jitgl/build/_deps/text_editor-src -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include -I/home/malesko/dev/jitgl/build/_deps/imgui-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src/backends -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -std=gnu++20 -o CMakeFiles/jit_ide.dir/_deps/text_editor-src/TextEditor.cpp.o -c /home/malesko/dev/jitgl/build/_deps/text_editor-src/TextEditor.cpp",
   "file": "/home/malesko/dev/jitgl/build/_deps/text_editor-src/TextEditor.cpp",
   "output": "CMakeFiles/jit_ide.dir/_deps/text_editor-src/TextEditor.cpp.o"
 },
 {
+  "directory": "/home/malesko/dev/jitgl/build",
+  "command": "/usr/bin/c++ -DJIT_CLANG_RESOURCE_DIR=\\\"/usr/lib/clang/22\\\" -DJIT_GLAD_INCLUDE_DIR=\\\"/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include\\\" -DJIT_PROJECT_BINARY_DIR=\\\"/home/malesko/dev/jitgl/build\\\" -DJIT_PROJECT_SOURCE_DIR=\\\"/home/malesko/dev/jitgl\\\" -D_GLIBCXX_USE_CXX11_ABI=1 -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Djit_ide_EXPORTS -I/home/malesko/dev/jitgl/src -I/home/malesko/dev/jitgl/build/_deps/text_editor-src -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include -I/home/malesko/dev/jitgl/build/_deps/imgui-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src/backends -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -std=gnu++20 -o CMakeFiles/jit_ide.dir/src/system/ConsoleRedirector.cpp.o -c /home/malesko/dev/jitgl/src/system/ConsoleRedirector.cpp",
+  "file": "/home/malesko/dev/jitgl/src/system/ConsoleRedirector.cpp",
+  "output": "CMakeFiles/jit_ide.dir/src/system/ConsoleRedirector.cpp.o"
+},
+{
+  "directory": "/home/malesko/dev/jitgl/build",
+  "command": "/usr/bin/c++ -DJIT_CLANG_RESOURCE_DIR=\\\"/usr/lib/clang/22\\\" -DJIT_GLAD_INCLUDE_DIR=\\\"/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include\\\" -DJIT_PROJECT_BINARY_DIR=\\\"/home/malesko/dev/jitgl/build\\\" -DJIT_PROJECT_SOURCE_DIR=\\\"/home/malesko/dev/jitgl\\\" -D_GLIBCXX_USE_CXX11_ABI=1 -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Djit_ide_EXPORTS -I/home/malesko/dev/jitgl/src -I/home/malesko/dev/jitgl/build/_deps/text_editor-src -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include -I/home/malesko/dev/jitgl/build/_deps/imgui-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src/backends -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -std=gnu++20 -o CMakeFiles/jit_ide.dir/src/core/WorkspaceManager.cpp.o -c /home/malesko/dev/jitgl/src/core/WorkspaceManager.cpp",
+  "file": "/home/malesko/dev/jitgl/src/core/WorkspaceManager.cpp",
+  "output": "CMakeFiles/jit_ide.dir/src/core/WorkspaceManager.cpp.o"
+},
+{
+  "directory": "/home/malesko/dev/jitgl/build",
+  "command": "/usr/bin/c++ -DJIT_CLANG_RESOURCE_DIR=\\\"/usr/lib/clang/22\\\" -DJIT_GLAD_INCLUDE_DIR=\\\"/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include\\\" -DJIT_PROJECT_BINARY_DIR=\\\"/home/malesko/dev/jitgl/build\\\" -DJIT_PROJECT_SOURCE_DIR=\\\"/home/malesko/dev/jitgl\\\" -D_GLIBCXX_USE_CXX11_ABI=1 -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -Djit_ide_EXPORTS -I/home/malesko/dev/jitgl/src -I/home/malesko/dev/jitgl/build/_deps/text_editor-src -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include -I/home/malesko/dev/jitgl/build/_deps/imgui-src -I/home/malesko/dev/jitgl/build/_deps/imgui-src/backends -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -std=gnu++20 -o CMakeFiles/jit_ide.dir/src/system/ConsoleRedirectSession.cpp.o -c /home/malesko/dev/jitgl/src/system/ConsoleRedirectSession.cpp",
+  "file": "/home/malesko/dev/jitgl/src/system/ConsoleRedirectSession.cpp",
+  "output": "CMakeFiles/jit_ide.dir/src/system/ConsoleRedirectSession.cpp.o"
+},
+{
   "directory": "/home/malesko/dev/jitgl/build/_deps/glfw-build/src",
-  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -g -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/context.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/context.c",
+  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/context.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/context.c",
   "file": "/home/malesko/dev/jitgl/build/_deps/glfw-src/src/context.c",
   "output": "_deps/glfw-build/src/CMakeFiles/glfw.dir/context.c.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build/_deps/glfw-build/src",
-  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -g -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/init.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/init.c",
+  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/init.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/init.c",
   "file": "/home/malesko/dev/jitgl/build/_deps/glfw-src/src/init.c",
   "output": "_deps/glfw-build/src/CMakeFiles/glfw.dir/init.c.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build/_deps/glfw-build/src",
-  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -g -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/input.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/input.c",
+  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/input.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/input.c",
   "file": "/home/malesko/dev/jitgl/build/_deps/glfw-src/src/input.c",
   "output": "_deps/glfw-build/src/CMakeFiles/glfw.dir/input.c.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build/_deps/glfw-build/src",
-  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -g -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/monitor.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/monitor.c",
+  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/monitor.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/monitor.c",
   "file": "/home/malesko/dev/jitgl/build/_deps/glfw-src/src/monitor.c",
   "output": "_deps/glfw-build/src/CMakeFiles/glfw.dir/monitor.c.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build/_deps/glfw-build/src",
-  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -g -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/platform.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/platform.c",
+  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/platform.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/platform.c",
   "file": "/home/malesko/dev/jitgl/build/_deps/glfw-src/src/platform.c",
   "output": "_deps/glfw-build/src/CMakeFiles/glfw.dir/platform.c.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build/_deps/glfw-build/src",
-  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -g -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/vulkan.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/vulkan.c",
+  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/vulkan.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/vulkan.c",
   "file": "/home/malesko/dev/jitgl/build/_deps/glfw-src/src/vulkan.c",
   "output": "_deps/glfw-build/src/CMakeFiles/glfw.dir/vulkan.c.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build/_deps/glfw-build/src",
-  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -g -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/window.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/window.c",
+  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/window.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/window.c",
   "file": "/home/malesko/dev/jitgl/build/_deps/glfw-src/src/window.c",
   "output": "_deps/glfw-build/src/CMakeFiles/glfw.dir/window.c.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build/_deps/glfw-build/src",
-  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -g -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/egl_context.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/egl_context.c",
+  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/egl_context.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/egl_context.c",
   "file": "/home/malesko/dev/jitgl/build/_deps/glfw-src/src/egl_context.c",
   "output": "_deps/glfw-build/src/CMakeFiles/glfw.dir/egl_context.c.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build/_deps/glfw-build/src",
-  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -g -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/osmesa_context.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/osmesa_context.c",
+  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/osmesa_context.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/osmesa_context.c",
   "file": "/home/malesko/dev/jitgl/build/_deps/glfw-src/src/osmesa_context.c",
   "output": "_deps/glfw-build/src/CMakeFiles/glfw.dir/osmesa_context.c.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build/_deps/glfw-build/src",
-  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -g -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/null_init.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/null_init.c",
+  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/null_init.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/null_init.c",
   "file": "/home/malesko/dev/jitgl/build/_deps/glfw-src/src/null_init.c",
   "output": "_deps/glfw-build/src/CMakeFiles/glfw.dir/null_init.c.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build/_deps/glfw-build/src",
-  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -g -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/null_monitor.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/null_monitor.c",
+  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/null_monitor.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/null_monitor.c",
   "file": "/home/malesko/dev/jitgl/build/_deps/glfw-src/src/null_monitor.c",
   "output": "_deps/glfw-build/src/CMakeFiles/glfw.dir/null_monitor.c.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build/_deps/glfw-build/src",
-  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -g -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/null_window.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/null_window.c",
+  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/null_window.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/null_window.c",
   "file": "/home/malesko/dev/jitgl/build/_deps/glfw-src/src/null_window.c",
   "output": "_deps/glfw-build/src/CMakeFiles/glfw.dir/null_window.c.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build/_deps/glfw-build/src",
-  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -g -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/null_joystick.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/null_joystick.c",
+  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/null_joystick.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/null_joystick.c",
   "file": "/home/malesko/dev/jitgl/build/_deps/glfw-src/src/null_joystick.c",
   "output": "_deps/glfw-build/src/CMakeFiles/glfw.dir/null_joystick.c.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build/_deps/glfw-build/src",
-  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -g -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/posix_module.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/posix_module.c",
+  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/posix_module.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/posix_module.c",
   "file": "/home/malesko/dev/jitgl/build/_deps/glfw-src/src/posix_module.c",
   "output": "_deps/glfw-build/src/CMakeFiles/glfw.dir/posix_module.c.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build/_deps/glfw-build/src",
-  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -g -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/posix_time.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/posix_time.c",
+  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/posix_time.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/posix_time.c",
   "file": "/home/malesko/dev/jitgl/build/_deps/glfw-src/src/posix_time.c",
   "output": "_deps/glfw-build/src/CMakeFiles/glfw.dir/posix_time.c.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build/_deps/glfw-build/src",
-  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -g -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/posix_thread.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/posix_thread.c",
+  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/posix_thread.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/posix_thread.c",
   "file": "/home/malesko/dev/jitgl/build/_deps/glfw-src/src/posix_thread.c",
   "output": "_deps/glfw-build/src/CMakeFiles/glfw.dir/posix_thread.c.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build/_deps/glfw-build/src",
-  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -g -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/x11_init.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/x11_init.c",
+  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/x11_init.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/x11_init.c",
   "file": "/home/malesko/dev/jitgl/build/_deps/glfw-src/src/x11_init.c",
   "output": "_deps/glfw-build/src/CMakeFiles/glfw.dir/x11_init.c.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build/_deps/glfw-build/src",
-  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -g -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/x11_monitor.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/x11_monitor.c",
+  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/x11_monitor.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/x11_monitor.c",
   "file": "/home/malesko/dev/jitgl/build/_deps/glfw-src/src/x11_monitor.c",
   "output": "_deps/glfw-build/src/CMakeFiles/glfw.dir/x11_monitor.c.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build/_deps/glfw-build/src",
-  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -g -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/x11_window.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/x11_window.c",
+  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/x11_window.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/x11_window.c",
   "file": "/home/malesko/dev/jitgl/build/_deps/glfw-src/src/x11_window.c",
   "output": "_deps/glfw-build/src/CMakeFiles/glfw.dir/x11_window.c.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build/_deps/glfw-build/src",
-  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -g -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/xkb_unicode.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/xkb_unicode.c",
+  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/xkb_unicode.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/xkb_unicode.c",
   "file": "/home/malesko/dev/jitgl/build/_deps/glfw-src/src/xkb_unicode.c",
   "output": "_deps/glfw-build/src/CMakeFiles/glfw.dir/xkb_unicode.c.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build/_deps/glfw-build/src",
-  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -g -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/glx_context.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/glx_context.c",
+  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/glx_context.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/glx_context.c",
   "file": "/home/malesko/dev/jitgl/build/_deps/glfw-src/src/glx_context.c",
   "output": "_deps/glfw-build/src/CMakeFiles/glfw.dir/glx_context.c.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build/_deps/glfw-build/src",
-  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -g -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/wl_init.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/wl_init.c",
+  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/wl_init.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/wl_init.c",
   "file": "/home/malesko/dev/jitgl/build/_deps/glfw-src/src/wl_init.c",
   "output": "_deps/glfw-build/src/CMakeFiles/glfw.dir/wl_init.c.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build/_deps/glfw-build/src",
-  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -g -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/wl_monitor.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/wl_monitor.c",
+  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/wl_monitor.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/wl_monitor.c",
   "file": "/home/malesko/dev/jitgl/build/_deps/glfw-src/src/wl_monitor.c",
   "output": "_deps/glfw-build/src/CMakeFiles/glfw.dir/wl_monitor.c.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build/_deps/glfw-build/src",
-  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -g -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/wl_window.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/wl_window.c",
+  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/wl_window.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/wl_window.c",
   "file": "/home/malesko/dev/jitgl/build/_deps/glfw-src/src/wl_window.c",
   "output": "_deps/glfw-build/src/CMakeFiles/glfw.dir/wl_window.c.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build/_deps/glfw-build/src",
-  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -g -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/linux_joystick.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/linux_joystick.c",
+  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/linux_joystick.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/linux_joystick.c",
   "file": "/home/malesko/dev/jitgl/build/_deps/glfw-src/src/linux_joystick.c",
   "output": "_deps/glfw-build/src/CMakeFiles/glfw.dir/linux_joystick.c.o"
 },
 {
   "directory": "/home/malesko/dev/jitgl/build/_deps/glfw-build/src",
-  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -g -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/posix_poll.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/posix_poll.c",
+  "command": "/usr/bin/cc -DHAVE_MEMFD_CREATE -D_DEFAULT_SOURCE -D_GLFW_WAYLAND -D_GLFW_X11 -I/home/malesko/dev/jitgl/build/_deps/glfw-src/include -I/home/malesko/dev/jitgl/build/_deps/glfw-src/src -I/home/malesko/dev/jitgl/build/_deps/glfw-build/src -std=c99 -fPIC -Wall -o CMakeFiles/glfw.dir/posix_poll.c.o -c /home/malesko/dev/jitgl/build/_deps/glfw-src/src/posix_poll.c",
   "file": "/home/malesko/dev/jitgl/build/_deps/glfw-src/src/posix_poll.c",
   "output": "_deps/glfw-build/src/CMakeFiles/glfw.dir/posix_poll.c.o"
 }

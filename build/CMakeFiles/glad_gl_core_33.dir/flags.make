@@ -6,5 +6,5 @@ C_DEFINES =
 
 C_INCLUDES = -I/home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include
 
-C_FLAGS = -g
+C_FLAGS = 
 

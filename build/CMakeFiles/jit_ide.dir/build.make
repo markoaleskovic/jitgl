@@ -114,10 +114,38 @@ CMakeFiles/jit_ide.dir/src/ui/EditorUI.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/jit_ide.dir/src/ui/EditorUI.cpp.s"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/malesko/dev/jitgl/src/ui/EditorUI.cpp -o CMakeFiles/jit_ide.dir/src/ui/EditorUI.cpp.s
 
+CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.o: CMakeFiles/jit_ide.dir/flags.make
+CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.o: /home/malesko/dev/jitgl/src/jit/JitEngine.cpp
+CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.o: CMakeFiles/jit_ide.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/malesko/dev/jitgl/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Building CXX object CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.o -MF CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.o.d -o CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.o -c /home/malesko/dev/jitgl/src/jit/JitEngine.cpp
+
+CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/malesko/dev/jitgl/src/jit/JitEngine.cpp > CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.i
+
+CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/malesko/dev/jitgl/src/jit/JitEngine.cpp -o CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.s
+
+CMakeFiles/jit_ide.dir/src/watcher/FileWatcher.cpp.o: CMakeFiles/jit_ide.dir/flags.make
+CMakeFiles/jit_ide.dir/src/watcher/FileWatcher.cpp.o: /home/malesko/dev/jitgl/src/watcher/FileWatcher.cpp
+CMakeFiles/jit_ide.dir/src/watcher/FileWatcher.cpp.o: CMakeFiles/jit_ide.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/malesko/dev/jitgl/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Building CXX object CMakeFiles/jit_ide.dir/src/watcher/FileWatcher.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/jit_ide.dir/src/watcher/FileWatcher.cpp.o -MF CMakeFiles/jit_ide.dir/src/watcher/FileWatcher.cpp.o.d -o CMakeFiles/jit_ide.dir/src/watcher/FileWatcher.cpp.o -c /home/malesko/dev/jitgl/src/watcher/FileWatcher.cpp
+
+CMakeFiles/jit_ide.dir/src/watcher/FileWatcher.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/jit_ide.dir/src/watcher/FileWatcher.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/malesko/dev/jitgl/src/watcher/FileWatcher.cpp > CMakeFiles/jit_ide.dir/src/watcher/FileWatcher.cpp.i
+
+CMakeFiles/jit_ide.dir/src/watcher/FileWatcher.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/jit_ide.dir/src/watcher/FileWatcher.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/malesko/dev/jitgl/src/watcher/FileWatcher.cpp -o CMakeFiles/jit_ide.dir/src/watcher/FileWatcher.cpp.s
+
 CMakeFiles/jit_ide.dir/_deps/text_editor-src/TextEditor.cpp.o: CMakeFiles/jit_ide.dir/flags.make
 CMakeFiles/jit_ide.dir/_deps/text_editor-src/TextEditor.cpp.o: _deps/text_editor-src/TextEditor.cpp
 CMakeFiles/jit_ide.dir/_deps/text_editor-src/TextEditor.cpp.o: CMakeFiles/jit_ide.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/malesko/dev/jitgl/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Building CXX object CMakeFiles/jit_ide.dir/_deps/text_editor-src/TextEditor.cpp.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/malesko/dev/jitgl/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Building CXX object CMakeFiles/jit_ide.dir/_deps/text_editor-src/TextEditor.cpp.o"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/jit_ide.dir/_deps/text_editor-src/TextEditor.cpp.o -MF CMakeFiles/jit_ide.dir/_deps/text_editor-src/TextEditor.cpp.o.d -o CMakeFiles/jit_ide.dir/_deps/text_editor-src/TextEditor.cpp.o -c /home/malesko/dev/jitgl/build/_deps/text_editor-src/TextEditor.cpp
 
 CMakeFiles/jit_ide.dir/_deps/text_editor-src/TextEditor.cpp.i: cmake_force
@@ -128,12 +156,59 @@ CMakeFiles/jit_ide.dir/_deps/text_editor-src/TextEditor.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/jit_ide.dir/_deps/text_editor-src/TextEditor.cpp.s"
 	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/malesko/dev/jitgl/build/_deps/text_editor-src/TextEditor.cpp -o CMakeFiles/jit_ide.dir/_deps/text_editor-src/TextEditor.cpp.s
 
+CMakeFiles/jit_ide.dir/src/system/ConsoleRedirector.cpp.o: CMakeFiles/jit_ide.dir/flags.make
+CMakeFiles/jit_ide.dir/src/system/ConsoleRedirector.cpp.o: /home/malesko/dev/jitgl/src/system/ConsoleRedirector.cpp
+CMakeFiles/jit_ide.dir/src/system/ConsoleRedirector.cpp.o: CMakeFiles/jit_ide.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/malesko/dev/jitgl/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_7) "Building CXX object CMakeFiles/jit_ide.dir/src/system/ConsoleRedirector.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/jit_ide.dir/src/system/ConsoleRedirector.cpp.o -MF CMakeFiles/jit_ide.dir/src/system/ConsoleRedirector.cpp.o.d -o CMakeFiles/jit_ide.dir/src/system/ConsoleRedirector.cpp.o -c /home/malesko/dev/jitgl/src/system/ConsoleRedirector.cpp
+
+CMakeFiles/jit_ide.dir/src/system/ConsoleRedirector.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/jit_ide.dir/src/system/ConsoleRedirector.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/malesko/dev/jitgl/src/system/ConsoleRedirector.cpp > CMakeFiles/jit_ide.dir/src/system/ConsoleRedirector.cpp.i
+
+CMakeFiles/jit_ide.dir/src/system/ConsoleRedirector.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/jit_ide.dir/src/system/ConsoleRedirector.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/malesko/dev/jitgl/src/system/ConsoleRedirector.cpp -o CMakeFiles/jit_ide.dir/src/system/ConsoleRedirector.cpp.s
+
+CMakeFiles/jit_ide.dir/src/core/WorkspaceManager.cpp.o: CMakeFiles/jit_ide.dir/flags.make
+CMakeFiles/jit_ide.dir/src/core/WorkspaceManager.cpp.o: /home/malesko/dev/jitgl/src/core/WorkspaceManager.cpp
+CMakeFiles/jit_ide.dir/src/core/WorkspaceManager.cpp.o: CMakeFiles/jit_ide.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/malesko/dev/jitgl/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_8) "Building CXX object CMakeFiles/jit_ide.dir/src/core/WorkspaceManager.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/jit_ide.dir/src/core/WorkspaceManager.cpp.o -MF CMakeFiles/jit_ide.dir/src/core/WorkspaceManager.cpp.o.d -o CMakeFiles/jit_ide.dir/src/core/WorkspaceManager.cpp.o -c /home/malesko/dev/jitgl/src/core/WorkspaceManager.cpp
+
+CMakeFiles/jit_ide.dir/src/core/WorkspaceManager.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/jit_ide.dir/src/core/WorkspaceManager.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/malesko/dev/jitgl/src/core/WorkspaceManager.cpp > CMakeFiles/jit_ide.dir/src/core/WorkspaceManager.cpp.i
+
+CMakeFiles/jit_ide.dir/src/core/WorkspaceManager.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/jit_ide.dir/src/core/WorkspaceManager.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/malesko/dev/jitgl/src/core/WorkspaceManager.cpp -o CMakeFiles/jit_ide.dir/src/core/WorkspaceManager.cpp.s
+
+CMakeFiles/jit_ide.dir/src/system/ConsoleRedirectSession.cpp.o: CMakeFiles/jit_ide.dir/flags.make
+CMakeFiles/jit_ide.dir/src/system/ConsoleRedirectSession.cpp.o: /home/malesko/dev/jitgl/src/system/ConsoleRedirectSession.cpp
+CMakeFiles/jit_ide.dir/src/system/ConsoleRedirectSession.cpp.o: CMakeFiles/jit_ide.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/malesko/dev/jitgl/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Building CXX object CMakeFiles/jit_ide.dir/src/system/ConsoleRedirectSession.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/jit_ide.dir/src/system/ConsoleRedirectSession.cpp.o -MF CMakeFiles/jit_ide.dir/src/system/ConsoleRedirectSession.cpp.o.d -o CMakeFiles/jit_ide.dir/src/system/ConsoleRedirectSession.cpp.o -c /home/malesko/dev/jitgl/src/system/ConsoleRedirectSession.cpp
+
+CMakeFiles/jit_ide.dir/src/system/ConsoleRedirectSession.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/jit_ide.dir/src/system/ConsoleRedirectSession.cpp.i"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/malesko/dev/jitgl/src/system/ConsoleRedirectSession.cpp > CMakeFiles/jit_ide.dir/src/system/ConsoleRedirectSession.cpp.i
+
+CMakeFiles/jit_ide.dir/src/system/ConsoleRedirectSession.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/jit_ide.dir/src/system/ConsoleRedirectSession.cpp.s"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/malesko/dev/jitgl/src/system/ConsoleRedirectSession.cpp -o CMakeFiles/jit_ide.dir/src/system/ConsoleRedirectSession.cpp.s
+
 # Object files for target jit_ide
 jit_ide_OBJECTS = \
 "CMakeFiles/jit_ide.dir/src/main.cpp.o" \
 "CMakeFiles/jit_ide.dir/src/core/Engine.cpp.o" \
 "CMakeFiles/jit_ide.dir/src/ui/EditorUI.cpp.o" \
-"CMakeFiles/jit_ide.dir/_deps/text_editor-src/TextEditor.cpp.o"
+"CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.o" \
+"CMakeFiles/jit_ide.dir/src/watcher/FileWatcher.cpp.o" \
+"CMakeFiles/jit_ide.dir/_deps/text_editor-src/TextEditor.cpp.o" \
+"CMakeFiles/jit_ide.dir/src/system/ConsoleRedirector.cpp.o" \
+"CMakeFiles/jit_ide.dir/src/core/WorkspaceManager.cpp.o" \
+"CMakeFiles/jit_ide.dir/src/system/ConsoleRedirectSession.cpp.o"
 
 # External object files for target jit_ide
 jit_ide_EXTERNAL_OBJECTS =
@@ -141,20 +216,26 @@ jit_ide_EXTERNAL_OBJECTS =
 jit_ide: CMakeFiles/jit_ide.dir/src/main.cpp.o
 jit_ide: CMakeFiles/jit_ide.dir/src/core/Engine.cpp.o
 jit_ide: CMakeFiles/jit_ide.dir/src/ui/EditorUI.cpp.o
+jit_ide: CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.o
+jit_ide: CMakeFiles/jit_ide.dir/src/watcher/FileWatcher.cpp.o
 jit_ide: CMakeFiles/jit_ide.dir/_deps/text_editor-src/TextEditor.cpp.o
+jit_ide: CMakeFiles/jit_ide.dir/src/system/ConsoleRedirector.cpp.o
+jit_ide: CMakeFiles/jit_ide.dir/src/core/WorkspaceManager.cpp.o
+jit_ide: CMakeFiles/jit_ide.dir/src/system/ConsoleRedirectSession.cpp.o
 jit_ide: CMakeFiles/jit_ide.dir/build.make
 jit_ide: CMakeFiles/jit_ide.dir/compiler_depend.ts
 jit_ide: libimgui_lib.a
 jit_ide: _deps/glfw-build/src/libglfw3.a
 jit_ide: libglad_gl_core_33.a
 jit_ide: /usr/lib/libclang-cpp.so.22.1
-jit_ide: /usr/lib/libLLVM.so.22.1
+jit_ide: /usr/lib/libclang.so.22.1.2
 jit_ide: /usr/lib/librt.a
 jit_ide: /usr/lib/libm.so
 jit_ide: /usr/lib/libGLX.so
 jit_ide: /usr/lib/libOpenGL.so
+jit_ide: /usr/lib/libLLVM.so.22.1
 jit_ide: CMakeFiles/jit_ide.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/malesko/dev/jitgl/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Linking CXX executable jit_ide"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/malesko/dev/jitgl/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_10) "Linking CXX executable jit_ide"
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/jit_ide.dir/link.txt --verbose=$(VERBOSE)
 
 # Rule to build all files generated by this target.

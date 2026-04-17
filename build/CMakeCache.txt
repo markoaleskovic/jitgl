@@ -25,7 +25,7 @@ CMAKE_AR:FILEPATH=/usr/bin/ar
 
 //Choose the type of build, options are: None Debug Release RelWithDebInfo
 // MinSizeRel ...
-CMAKE_BUILD_TYPE:STRING=Debug
+CMAKE_BUILD_TYPE:STRING=
 
 //Enable/Disable color output during build.
 CMAKE_COLOR_MAKEFILE:BOOL=ON
@@ -299,8 +299,8 @@ CURL_LIBRARY_DEBUG:FILEPATH=CURL_LIBRARY_DEBUG-NOTFOUND
 //Path to a library.
 CURL_LIBRARY_RELEASE:FILEPATH=/usr/lib/libcurl.so
 
-//No help, variable specified on the command line.
-Clang_DIR:UNINITIALIZED=/usr/lib/cmake/clang
+//The directory containing a CMake configuration file for Clang.
+Clang_DIR:PATH=/usr/lib/cmake/clang
 
 //Directory under which to collect all populated content
 FETCHCONTENT_BASE_DIR:PATH=/home/malesko/dev/jitgl/build/_deps
@@ -420,8 +420,8 @@ LIBXML2_LIBRARY:FILEPATH=/usr/lib/libxml2.so
 //Path to a program.
 LIBXML2_XMLLINT_EXECUTABLE:FILEPATH=/usr/bin/xmllint
 
-//No help, variable specified on the command line.
-LLVM_DIR:UNINITIALIZED=/usr/lib/cmake/llvm
+//The directory containing a CMake configuration file for LLVM.
+LLVM_DIR:PATH=/usr/lib/cmake/llvm
 
 //Path to a file.
 LibEdit_INCLUDE_DIRS:PATH=/usr/include
