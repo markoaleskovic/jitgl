@@ -100,7 +100,6 @@ add_executable(jit_ide
     src/jit/JitEngine.cpp
     src/watcher/FileWatcher.cpp
     ${text_editor_SOURCE_DIR}/TextEditor.cpp
-    src/system/ConsoleRedirector.cpp
         src/core/WorkspaceManager.cpp
         src/system/ConsoleRedirectSession.cpp
 )

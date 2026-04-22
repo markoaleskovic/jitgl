@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/home/malesko/dev/jitgl/build/_deps/glad-subbuild/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

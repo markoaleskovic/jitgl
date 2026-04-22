@@ -8,8 +8,6 @@
 #include <algorithm>
 #include <cstddef>
 
-#include "jit/JitEngine.h"
-
 namespace {
     constexpr double AUTOSAVE_DEBOUNCE_SECONDS = 0.05;
     constexpr const char* GLSL_VERSION = "#version 330 core";

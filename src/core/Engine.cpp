@@ -439,8 +439,6 @@ void Engine::SubmitDueCompiles(double nowSeconds) {
             }
         }
         ui_->SetCompilationStatus(inFlight, !compileFailures_.empty(), stalled);
-        // If we ever want to show "STALLED" in UI, we'd need another flag or method.
-        // For now, at least we know internally.
         return;
     }
 
