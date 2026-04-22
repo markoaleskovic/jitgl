@@ -4,7 +4,7 @@
 ConsoleRedirector::ConsoleRedirector(EditorUI* uiInstance) : ui_(uiInstance) {}
 
 std::streamsize ConsoleRedirector::xsputn(const char* s, std::streamsize n) {
-    std::lock_guard<std::mutex> lock(bufferMutex_);
+    std::scoped_lock<std::mutex> lock(bufferMutex_);
     for (std::streamsize i = 0; i < n; ++i) {
         const char ch = s[i];
         if (ch == '\n') {
@@ -24,8 +24,8 @@ int ConsoleRedirector::overflow(int c) {
         return c;
     }
 
-    const char ch = static_cast<char>(c);
-    std::lock_guard<std::mutex> lock(bufferMutex_);
+    const auto ch = static_cast<char>(c);
+    std::scoped_lock<std::mutex> lock(bufferMutex_);
     if (ch == '\n') {
         if (!pendingLine_.empty()) {
             ui_->AddConsoleOutput(pendingLine_);

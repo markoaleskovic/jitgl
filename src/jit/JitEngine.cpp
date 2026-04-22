@@ -87,20 +87,20 @@ bool JitEngine::Init(const std::string& preamblePath) {
             pos = preamble_.find(pragmaOnce, pos);
         }
     }
-    argStorage_.push_back("-std=c++17");
-    argStorage_.push_back("-xc++");
-    argStorage_.push_back("-O0");
-    argStorage_.push_back("-fPIC");
-    argStorage_.push_back("-fno-rtti");
-    argStorage_.push_back("-ferror-limit=8");
+    argStorage_.emplace_back("-std=c++17");
+    argStorage_.emplace_back("-xc++");
+    argStorage_.emplace_back("-O0");
+    argStorage_.emplace_back("-fPIC");
+    argStorage_.emplace_back("-fno-rtti");
+    argStorage_.emplace_back("-ferror-limit=8");
 
     if (JIT_CLANG_RESOURCE_DIR[0] != '\0') {
-        argStorage_.push_back("-resource-dir");
-        argStorage_.push_back(JIT_CLANG_RESOURCE_DIR);
+        argStorage_.emplace_back("-resource-dir");
+        argStorage_.emplace_back(JIT_CLANG_RESOURCE_DIR);
     }
 
-    argStorage_.push_back("-I/usr/include");
-    argStorage_.push_back("-I/usr/local/include");
+    argStorage_.emplace_back("-I/usr/include");
+    argStorage_.emplace_back("-I/usr/local/include");
 
     std::string gladIncludes = JIT_GLAD_INCLUDE_DIR;
     while (!gladIncludes.empty()) {

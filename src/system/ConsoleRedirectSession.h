@@ -26,6 +26,10 @@ private:
     void ReaderLoop();
     void FlushPendingLine();
 
+    bool WaitForPipeData();
+    bool ReadAvailableData(char* buffer, std::size_t bufferSize);
+    void ConsumeBuffer(const char* buffer, ssize_t count);
+
     EditorUI* ui_ = nullptr;
     std::thread readerThread_;
     std::atomic<bool> readerRunning_{ false };

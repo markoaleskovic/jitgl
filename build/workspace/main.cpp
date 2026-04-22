@@ -3,8 +3,7 @@
 // All OpenGL functions are available directly.
 
 extern "C" void init(EngineContext* ctx) {
-    // Called once after first successful JIT compile
-	GLClearColor(255,255,255);
+    // Called once after first successful JIT compi
 }
 
 extern "C" void update(EngineContext* ctx) {
@@ -14,6 +13,12 @@ extern "C" void update(EngineContext* ctx) {
 extern "C" void renderFrame(EngineContext* ctx) {
 
 }
+
+
+
+
+
+
 
 
 

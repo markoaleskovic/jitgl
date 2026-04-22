@@ -19,6 +19,59 @@ ConsoleRedirectSession::~ConsoleRedirectSession() {
     Stop();
 }
 
+bool ConsoleRedirectSession::WaitForPipeData() {
+    pollfd pfd{};
+    pfd.fd = pipeReadFd_;
+    pfd.events = POLLIN | POLLHUP | POLLERR;
+
+    const int pollResult = poll(&pfd, 1, 100);
+    if (pollResult < 0) {
+        return errno == EINTR;
+    }
+
+    if (pollResult == 0) {
+        FlushPendingLine();
+        return true;
+    }
+
+    if ((pfd.revents & POLLHUP) != 0) {
+        return false;
+    }
+
+    if ((pfd.revents & POLLERR) != 0) {
+        return false;
+    }
+
+    return (pfd.revents & POLLIN) != 0;
+}
+
+bool ConsoleRedirectSession::ReadAvailableData(char* buffer, std::size_t bufferSize) {
+    const ssize_t n = read(pipeReadFd_, buffer, bufferSize);
+    if (n <= 0) {
+        if (!readerRunning_.load()) {
+            return false;
+        }
+        return errno == EINTR;
+    }
+
+    ConsumeBuffer(buffer, n);
+    return true;
+}
+
+void ConsoleRedirectSession::ConsumeBuffer(const char* buffer, ssize_t count) {
+    for (ssize_t i = 0; i < count; ++i) {
+        const char ch = buffer[i];
+        if (ch == '\n') {
+            FlushPendingLine();
+            continue;
+        }
+
+        if (ch != '\r') {
+            pendingLine_.push_back(ch);
+        }
+    }
+}
+
 bool ConsoleRedirectSession::Start(EditorUI* ui) {
     if (active_ || ui == nullptr) {
         return false;
@@ -74,58 +127,21 @@ bool ConsoleRedirectSession::Start(EditorUI* ui) {
 
 void ConsoleRedirectSession::ReaderLoop() {
     char buffer[1024];
+
     while (readerRunning_.load()) {
-        pollfd pfd{};
-        pfd.fd = pipeReadFd_;
-        pfd.events = POLLIN | POLLHUP | POLLERR;
-        const int pollResult = poll(&pfd, 1, 100);
-        if (pollResult < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            break;
-        }
-        if (pollResult == 0) {
-            FlushPendingLine();
-            continue;
-        }
-        if ((pfd.revents & POLLHUP) != 0) {
-            break;
-        }
-        if ((pfd.revents & POLLERR) != 0) {
-            break;
-        }
-        if ((pfd.revents & POLLIN) == 0) {
-            continue;
-        }
-
-        const ssize_t n = read(pipeReadFd_, buffer, sizeof(buffer));
-        if (n <= 0) {
-            if (!readerRunning_.load()) {
-                break;
-            }
-            if (errno == EINTR) {
-                continue;
-            }
+        if (!WaitForPipeData()) {
             break;
         }
 
-        for (ssize_t i = 0; i < n; ++i) {
-            const char ch = buffer[i];
-            if (ch == '\n') {
-                FlushPendingLine();
-                continue;
-            }
-            if (ch != '\r') {
-                pendingLine_.push_back(ch);
-            }
+        if (!ReadAvailableData(buffer, sizeof(buffer))) {
+            break;
         }
+
         FlushPendingLine();
     }
 
     FlushPendingLine();
 }
-
 void ConsoleRedirectSession::FlushPendingLine() {
     if (ui_ && !pendingLine_.empty()) {
         ui_->AddConsoleOutput(pendingLine_);

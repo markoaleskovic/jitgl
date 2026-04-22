@@ -3,7 +3,7 @@
 
 namespace fs = std::filesystem;
 namespace {
-    constexpr auto POLL_INTERVAL = std::chrono::milliseconds(250);
+    constexpr auto POLL_INTERVAL = std::chrono::milliseconds(800);
 }
 FileWatcher::FileWatcher(std::string watchDir, Callback cb)
     : watchDir_(std::move(watchDir)), callback_(std::move(cb)) {}
