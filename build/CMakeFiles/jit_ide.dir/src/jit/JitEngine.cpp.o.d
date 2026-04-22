@@ -197,7 +197,6 @@ CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.o: \
  /usr/include/c++/15.2.1/bits/ranges_algobase.h \
  /usr/include/c++/15.2.1/pstl/glue_memory_defs.h \
  /usr/include/c++/15.2.1/pstl/execution_defs.h \
- /usr/include/c++/15.2.1/atomic \
  /home/malesko/dev/jitgl/src/runtime/EngineContext.h \
  /home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include/glad/gl.h \
  /home/malesko/dev/jitgl/build/gladsources/glad_gl_core_33/include/KHR/khrplatform.h \
@@ -227,7 +226,7 @@ CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.o: \
  /usr/include/c++/15.2.1/pstl/glue_algorithm_defs.h \
  /usr/include/c++/15.2.1/cstring /usr/include/string.h \
  /usr/include/strings.h /usr/include/llvm/ADT/IntrusiveRefCntPtr.h \
- /usr/include/llvm/ADT/StringRef.h \
+ /usr/include/c++/15.2.1/atomic /usr/include/llvm/ADT/StringRef.h \
  /usr/include/llvm/ADT/STLFunctionalExtras.h \
  /usr/include/llvm/ADT/STLForwardCompat.h \
  /usr/include/llvm/ADT/iterator_range.h \
@@ -566,94 +565,8 @@ CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.o: \
  /usr/include/llvm/Config/AsmParsers.def \
  /usr/include/llvm/Config/Disassemblers.def \
  /usr/include/llvm/Config/TargetMCAs.def \
- /usr/include/llvm/ExecutionEngine/Orc/LLJIT.h \
- /usr/include/llvm/ExecutionEngine/Orc/AbsoluteSymbols.h \
- /usr/include/llvm/ExecutionEngine/Orc/MaterializationUnit.h \
- /usr/include/llvm/ExecutionEngine/Orc/CoreContainers.h \
- /usr/include/llvm/ExecutionEngine/Orc/CompileOnDemandLayer.h \
- /usr/include/llvm/ExecutionEngine/Orc/IndirectionUtils.h \
- /usr/include/llvm/ExecutionEngine/Orc/Core.h \
- /usr/include/llvm/ExecutionEngine/Orc/WaitingOnGraph.h \
- /usr/include/llvm/ExecutionEngine/Orc/OrcABISupport.h \
- /usr/include/llvm/ExecutionEngine/Orc/RedirectionManager.h \
- /usr/include/llvm/Support/Process.h /usr/include/llvm/Support/Program.h \
- /usr/include/llvm/Transforms/Utils/ValueMapper.h \
- /usr/include/llvm/IR/ValueHandle.h /usr/include/llvm/IR/Value.h \
- /usr/include/llvm/IR/Use.h /usr/include/llvm/IR/Value.def \
- /usr/include/llvm/IR/ValueMap.h /usr/include/llvm/IR/TrackingMDRef.h \
- /usr/include/llvm/IR/Metadata.h /usr/include/llvm/IR/Constant.h \
- /usr/include/llvm/IR/User.h /usr/include/llvm/IR/LLVMContext.h \
- /usr/include/llvm/IR/DiagnosticHandler.h \
- /usr/include/llvm/IR/FixedMetadataKinds.def \
- /usr/include/llvm/IR/Metadata.def /usr/include/llvm/Support/Mutex.h \
- /usr/include/llvm/Support/Threading.h \
- /usr/include/llvm/ExecutionEngine/Orc/Layer.h \
- /usr/include/llvm/ExecutionEngine/Orc/Mangling.h \
- /usr/include/llvm/ExecutionEngine/Orc/ThreadSafeModule.h \
- /usr/include/llvm/IR/Module.h /usr/include/llvm/IR/Attributes.h \
- /usr/include/llvm/Support/ModRef.h /usr/include/llvm/IR/Attributes.inc \
- /usr/include/llvm/IR/Comdat.h /usr/include/llvm/IR/DataLayout.h \
- /usr/include/llvm/IR/Function.h /usr/include/llvm/IR/Argument.h \
- /usr/include/llvm/IR/BasicBlock.h \
- /usr/include/llvm/IR/DebugProgramInstruction.h \
- /usr/include/llvm/IR/DbgVariableFragmentInfo.h \
- /usr/include/llvm/IR/DebugLoc.h /usr/include/llvm/IR/Instruction.h \
- /usr/include/llvm/ADT/Bitfields.h \
- /usr/include/llvm/IR/SymbolTableListTraits.h \
- /usr/include/llvm/IR/Instruction.def /usr/include/llvm/IR/CallingConv.h \
- /usr/include/llvm/IR/GlobalObject.h /usr/include/llvm/IR/GlobalValue.h \
- /usr/include/llvm/IR/OperandTraits.h /usr/include/llvm/IR/GlobalAlias.h \
- /usr/include/llvm/IR/GlobalIFunc.h /usr/include/llvm/IR/GlobalVariable.h \
- /usr/include/llvm/IR/ProfileSummary.h \
- /usr/include/llvm/ExecutionEngine/Orc/LazyReexports.h \
- /usr/include/llvm/ExecutionEngine/Orc/Speculation.h \
- /usr/include/llvm/ExecutionEngine/Orc/DebugUtils.h \
- /usr/include/llvm/ExecutionEngine/Orc/IRCompileLayer.h \
- /usr/include/llvm/ExecutionEngine/Orc/Shared/OrcError.h \
- /usr/include/llvm/ExecutionEngine/RuntimeDyld.h \
- /usr/include/llvm/DebugInfo/DIContext.h \
- /usr/include/llvm/Object/ObjectFile.h \
- /usr/include/llvm/BinaryFormat/Magic.h \
- /usr/include/llvm/BinaryFormat/Swift.h \
- /usr/include/llvm/BinaryFormat/Swift.def \
- /usr/include/llvm/Object/Binary.h /usr/include/llvm/Object/Error.h \
- /usr/include/llvm/Object/SymbolicFile.h \
- /usr/include/c++/15.2.1/cinttypes /usr/include/llvm/Support/WithColor.h \
- /usr/include/llvm/BinaryFormat/Dwarf.def \
- /usr/include/llvm/IR/Constants.h /usr/include/llvm/IR/ConstantRange.h \
- /usr/include/llvm/IR/InstrTypes.h /usr/include/llvm/IR/FMF.h \
- /usr/include/llvm/IR/GEPNoWrapFlags.h /usr/include/llvm/IR/Intrinsics.h \
- /usr/include/llvm/IR/IntrinsicEnums.inc /usr/include/llvm/IR/Mangler.h \
- /usr/include/llvm/ExecutionEngine/Orc/CompileUtils.h \
- /usr/include/llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h \
- /usr/include/llvm/Target/TargetMachine.h \
- /usr/include/llvm/IR/PassManager.h /usr/include/llvm/IR/Analysis.h \
- /usr/include/llvm/IR/PassManagerInternal.h \
- /usr/include/llvm/Support/TypeName.h \
- /usr/include/llvm/Support/PGOOptions.h \
- /usr/include/llvm/Target/CGPassBuilderOption.h \
- /usr/include/llvm/TargetParser/SubtargetFeature.h \
- /usr/include/llvm/ExecutionEngine/Orc/ExecutionUtils.h \
- /usr/include/llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h \
- /usr/include/llvm/ExecutionEngine/Orc/LinkGraphLinkingLayer.h \
- /usr/include/llvm/ExecutionEngine/Orc/LinkGraphLayer.h \
- /usr/include/llvm/ExecutionEngine/JITLink/JITLink.h \
- /usr/include/llvm/Support/BinaryStreamReader.h \
- /usr/include/llvm/Support/BinaryStreamArray.h \
- /usr/include/llvm/Support/BinaryStreamRef.h \
- /usr/include/llvm/Support/BinaryStream.h \
- /usr/include/llvm/Support/BinaryStreamError.h \
- /usr/include/llvm/Support/ConvertUTF.h \
- /usr/include/llvm/Support/BinaryStreamWriter.h \
- /usr/include/llvm/Object/Archive.h \
- /usr/include/llvm/ADT/fallible_iterator.h \
- /usr/include/llvm/Support/DynamicLibrary.h \
- /usr/include/llvm/ExecutionEngine/Orc/IRPartitionLayer.h \
- /usr/include/llvm/ExecutionEngine/Orc/IRTransformLayer.h \
- /usr/include/llvm/Support/ThreadPool.h \
- /usr/include/llvm/Support/Jobserver.h \
- /usr/include/llvm/Support/RWMutex.h /usr/include/c++/15.2.1/shared_mutex \
- /usr/include/llvm/Support/thread.h /usr/include/c++/15.2.1/fstream \
+ /usr/include/llvm/Support/ManagedStatic.h \
+ /usr/include/c++/15.2.1/fstream \
  /usr/include/c++/15.2.1/x86_64-pc-linux-gnu/bits/basic_file.h \
  /usr/include/c++/15.2.1/x86_64-pc-linux-gnu/bits/c++io.h \
  /usr/include/c++/15.2.1/bits/fstream.tcc

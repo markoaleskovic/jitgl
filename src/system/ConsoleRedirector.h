@@ -5,6 +5,8 @@
 #ifndef JIT_IDE_CONSOLEREDIRECTOR_H
 #define JIT_IDE_CONSOLEREDIRECTOR_H
 #include <ios>
+#include <mutex>
+#include <string>
 
 class EditorUI;
 
@@ -18,6 +20,8 @@ protected:
 
 private:
     EditorUI* ui_;
+    std::string pendingLine_;
+    std::mutex bufferMutex_;
 };
 
 

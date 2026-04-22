@@ -34,7 +34,13 @@ void FileWatcher::Start() {
                 if (ec) continue;
 
                 auto it = lastWriteTimes_.find(path);
-                if (it != lastWriteTimes_.end() && it->second != currentTime) {
+                if (it == lastWriteTimes_.end()) {
+                    lastWriteTimes_[path] = currentTime;
+                    callback_(path);
+                    continue;
+                }
+
+                if (it->second != currentTime) {
                     it->second = currentTime;
                     callback_(path);
                 }

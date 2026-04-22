@@ -7,6 +7,7 @@
 
 #include <string>
 #include <vector>
+#include <optional>
 
 struct WorkspaceFile {
     std::string filename;
@@ -22,6 +23,9 @@ public:
     void Initialize();
     std::vector<WorkspaceFile> LoadAllFiles() const;
     bool SaveFile(const std::string& filepath, const std::string& content) const;
+    std::optional<std::string> ReadFile(const std::string& filepath) const;
+    bool IsPathInsideWorkspace(const std::string& filepath) const;
+    const std::string& Directory() const { return directory_; }
 
 private:
     std::string directory_;

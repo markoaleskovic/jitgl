@@ -5,11 +5,11 @@
 #ifndef JIT_IDE_CONSOLEREDIRECTSESSION_H
 #define JIT_IDE_CONSOLEREDIRECTSESSION_H
 
-#include <memory>
-#include <streambuf>
+#include <atomic>
+#include <string>
+#include <thread>
 
 class EditorUI;
-class ConsoleRedirector;
 
 class ConsoleRedirectSession {
 public:
@@ -23,9 +23,17 @@ public:
     void Stop();
 
 private:
-    std::unique_ptr<ConsoleRedirector> redirector_;
-    std::streambuf* oldCout_ = nullptr;
-    std::streambuf* oldCerr_ = nullptr;
+    void ReaderLoop();
+    void FlushPendingLine();
+
+    EditorUI* ui_ = nullptr;
+    std::thread readerThread_;
+    std::atomic<bool> readerRunning_{ false };
+    int oldStdoutFd_ = -1;
+    int oldStderrFd_ = -1;
+    int pipeReadFd_ = -1;
+    int pipeWriteFd_ = -1;
+    std::string pendingLine_;
     bool active_ = false;
 };
 

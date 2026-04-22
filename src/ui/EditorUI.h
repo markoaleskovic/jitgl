@@ -31,7 +31,11 @@ public:
 
     // Data injection methods
     void AddDocument(const std::string& filename, const std::string& filepath, const std::string& content);
+    void UpdateDocumentContent(const std::string& filepath, const std::string& content);
     void SetSaveCallback(std::function<bool(const std::string&, const std::string&)> cb);
+    void SetDocumentChangedCallback(std::function<void(const std::string&, const std::string&)> cb);
+    void SetActiveDocumentChangedCallback(std::function<void(const std::string&, const std::string&)> cb);
+    void SetRendererTexture(unsigned int texture, int width, int height);
 
     void AddConsoleOutput(const std::string& text);
     void AddLogOutput(const std::string& text);
@@ -51,9 +55,19 @@ private:
     std::vector<std::string> commandHistory;
 
     std::function<bool(const std::string&, const std::string&)> onSaveDocument_;
+    std::function<void(const std::string&, const std::string&)> onDocumentChanged_;
+    std::function<void(const std::string&, const std::string&)> onActiveDocumentChanged_;
+
+    std::string activeDocumentPath_;
+    unsigned int rendererTexture_ = 0;
+    int rendererTextureWidth_ = 0;
+    int rendererTextureHeight_ = 0;
 
     void SetupDockspace();
     void DrawMenuBar();
     void DrawConsolePane();
     void DrawTextEditorPane();
+
+    bool shutdown_ = false;
+    bool initialized_ = false;
 };

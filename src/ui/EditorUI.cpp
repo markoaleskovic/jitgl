@@ -5,10 +5,16 @@
 #include <GLFW/glfw3.h>
 #include <string>
 #include <imgui_internal.h>
+#include <algorithm>
+#include <cstddef>
+
+#include "jit/JitEngine.h"
 
 namespace {
     constexpr double AUTOSAVE_DEBOUNCE_SECONDS = 0.5;
     constexpr const char* GLSL_VERSION = "#version 330 core";
+    constexpr std::size_t MAX_CONSOLE_LINES = 2000;
+    constexpr std::size_t MAX_LOG_LINES = 2000;
 }
 
 EditorUI::EditorUI() : window(nullptr) {}
@@ -31,6 +37,10 @@ void EditorUI::Init(GLFWwindow *win) {
 
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init(GLSL_VERSION);
+
+    initialized_ = true;
+    shutdown_ = false;
+
 }
 
 void EditorUI::NewFrame() {
@@ -82,6 +92,17 @@ void EditorUI::SetupDockspace() {
 }
 
 void EditorUI::AddDocument(const std::string& filename, const std::string& filepath, const std::string& content) {
+    auto existing = std::find_if(openDocuments.begin(), openDocuments.end(), [&](const Document& doc) {
+        return doc.filepath == filepath;
+    });
+    if (existing != openDocuments.end()) {
+        existing->filename = filename;
+        existing->editor.SetText(content);
+        existing->lastKnownText = content;
+        existing->isDirty = false;
+        return;
+    }
+
     Document doc;
     doc.filename = filename;
     doc.filepath = filepath;
@@ -91,10 +112,41 @@ void EditorUI::AddDocument(const std::string& filename, const std::string& filep
     doc.isDirty = false;
     doc.isOpen = true;
     openDocuments.push_back(doc);
+
+    if (activeDocumentPath_.empty()) {
+        activeDocumentPath_ = filepath;
+    }
+}
+
+void EditorUI::UpdateDocumentContent(const std::string& filepath, const std::string& content) {
+    auto existing = std::find_if(openDocuments.begin(), openDocuments.end(), [&](const Document& doc) {
+        return doc.filepath == filepath;
+    });
+    if (existing == openDocuments.end()) {
+        return;
+    }
+
+    existing->editor.SetText(content);
+    existing->lastKnownText = content;
+    existing->isDirty = false;
 }
 
 void EditorUI::SetSaveCallback(std::function<bool(const std::string&, const std::string&)> cb) {
     onSaveDocument_ = std::move(cb);
+}
+
+void EditorUI::SetDocumentChangedCallback(std::function<void(const std::string&, const std::string&)> cb) {
+    onDocumentChanged_ = std::move(cb);
+}
+
+void EditorUI::SetActiveDocumentChangedCallback(std::function<void(const std::string&, const std::string&)> cb) {
+    onActiveDocumentChanged_ = std::move(cb);
+}
+
+void EditorUI::SetRendererTexture(unsigned int texture, int width, int height) {
+    rendererTexture_ = texture;
+    rendererTextureWidth_ = width;
+    rendererTextureHeight_ = height;
 }
 
 void EditorUI::DrawMenuBar() {
@@ -129,6 +181,13 @@ void EditorUI::DrawTextEditorPane() {
             ImGuiTabItemFlags tabFlags = doc.isDirty ? ImGuiTabItemFlags_UnsavedDocument : ImGuiTabItemFlags_None;
 
             if (ImGui::BeginTabItem(doc.filename.c_str(), &doc.isOpen, tabFlags)) {
+                if (activeDocumentPath_ != doc.filepath) {
+                    activeDocumentPath_ = doc.filepath;
+                    if (onActiveDocumentChanged_) {
+                        onActiveDocumentChanged_(doc.filepath, doc.lastKnownText);
+                    }
+                }
+
                 doc.editor.Render(doc.filename.c_str());
                 std::string currentText = doc.editor.GetText();
 
@@ -136,6 +195,9 @@ void EditorUI::DrawTextEditorPane() {
                     doc.isDirty = true;
                     doc.lastModifiedTime = currentTime;
                     doc.lastKnownText = std::move(currentText); // Move semantics avoid a string copy here
+                    if (onDocumentChanged_) {
+                        onDocumentChanged_(doc.filepath, doc.lastKnownText);
+                    }
                 }
                 ImGui::EndTabItem();
             }
@@ -162,12 +224,20 @@ void EditorUI::DrawTextEditorPane() {
 void EditorUI::AddConsoleOutput(const std::string &text) {
     std::lock_guard<std::mutex> lock(consoleMutex);
     consoleLines.push_back(text);
+    if (consoleLines.size() > MAX_CONSOLE_LINES) {
+        const std::size_t removeCount = consoleLines.size() - MAX_CONSOLE_LINES;
+        consoleLines.erase(consoleLines.begin(), consoleLines.begin() + static_cast<std::ptrdiff_t>(removeCount));
+    }
     consoleScrollToBottom = true;
 }
 
 void EditorUI::AddLogOutput(const std::string &text) {
     std::lock_guard<std::mutex> lock(logMutex);
     logLines.push_back(text);
+    if (logLines.size() > MAX_LOG_LINES) {
+        const std::size_t removeCount = logLines.size() - MAX_LOG_LINES;
+        logLines.erase(logLines.begin(), logLines.begin() + static_cast<std::ptrdiff_t>(removeCount));
+    }
     logScrollToBottom = true;
 }
 
@@ -177,7 +247,32 @@ void EditorUI::DrawConsolePane() {
 
     if (ImGui::BeginTabBar("UtilityTabs", ImGuiTabBarFlags_None)) {
         if (ImGui::BeginTabItem("Renderer")) {
-            ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "[OpenGL Viewport Placeholder]");
+            if (rendererTexture_ != 0 && rendererTextureWidth_ > 0 && rendererTextureHeight_ > 0) {
+                const ImVec2 avail = ImGui::GetContentRegionAvail();
+                const float srcAspect = static_cast<float>(rendererTextureWidth_) / static_cast<float>(rendererTextureHeight_);
+                ImVec2 imageSize = avail;
+                if (imageSize.x > 0.0f && imageSize.y > 0.0f) {
+                    const float dstAspect = imageSize.x / imageSize.y;
+                    if (dstAspect > srcAspect) {
+                        imageSize.x = imageSize.y * srcAspect;
+                    } else {
+                        imageSize.y = imageSize.x / srcAspect;
+                    }
+                }
+
+                const ImVec2 cursor = ImGui::GetCursorPos();
+                const float offsetX = (avail.x - imageSize.x) * 0.5f;
+                const float offsetY = (avail.y - imageSize.y) * 0.5f;
+                ImGui::SetCursorPos(ImVec2(cursor.x + (offsetX > 0.0f ? offsetX : 0.0f),
+                                           cursor.y + (offsetY > 0.0f ? offsetY : 0.0f)));
+
+                ImGui::Image(static_cast<ImTextureID>(rendererTexture_),
+                             imageSize,
+                             ImVec2(0.0f, 1.0f),
+                             ImVec2(1.0f, 0.0f));
+            } else {
+                ImGui::TextUnformatted("Renderer not ready.");
+            }
             ImGui::EndTabItem();
         }
 
@@ -259,7 +354,15 @@ void EditorUI::Render() {
 }
 
 void EditorUI::Shutdown() {
+    if (shutdown_ || !initialized_) {
+        return;
+    }
+    shutdown_ = true;
+    initialized_ = false;
+
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
+
+    window = nullptr;
 }

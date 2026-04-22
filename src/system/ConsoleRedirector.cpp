@@ -4,19 +4,36 @@
 ConsoleRedirector::ConsoleRedirector(EditorUI* uiInstance) : ui_(uiInstance) {}
 
 std::streamsize ConsoleRedirector::xsputn(const char* s, std::streamsize n) {
-    std::string str(s, static_cast<size_t>(n));
-    if (str != "\n") {
-        ui_->AddConsoleOutput(str);
+    std::lock_guard<std::mutex> lock(bufferMutex_);
+    for (std::streamsize i = 0; i < n; ++i) {
+        const char ch = s[i];
+        if (ch == '\n') {
+            if (!pendingLine_.empty()) {
+                ui_->AddConsoleOutput(pendingLine_);
+                pendingLine_.clear();
+            }
+        } else {
+            pendingLine_.push_back(ch);
+        }
     }
     return n;
 }
 
 int ConsoleRedirector::overflow(int c) {
-    if (c != EOF) {
-        char ch = static_cast<char>(c);
-        if (ch != '\n') {
-            ui_->AddConsoleOutput(std::string(1, ch));
-        }
+    if (c == EOF) {
+        return c;
     }
+
+    const char ch = static_cast<char>(c);
+    std::lock_guard<std::mutex> lock(bufferMutex_);
+    if (ch == '\n') {
+        if (!pendingLine_.empty()) {
+            ui_->AddConsoleOutput(pendingLine_);
+            pendingLine_.clear();
+        }
+    } else {
+        pendingLine_.push_back(ch);
+    }
+
     return c;
 }
