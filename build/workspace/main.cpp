@@ -8,11 +8,14 @@ extern "C" void init(EngineContext* ctx) {
 
 extern "C" void update(EngineContext* ctx) {
     // Called every frame before renderFrame
+    printf("");
 }
 
 extern "C" void renderFrame(EngineContext* ctx) {
 
 }
+
+
 
 
 

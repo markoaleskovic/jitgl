@@ -11,7 +11,7 @@
 #include "jit/JitEngine.h"
 
 namespace {
-    constexpr double AUTOSAVE_DEBOUNCE_SECONDS = 0.5;
+    constexpr double AUTOSAVE_DEBOUNCE_SECONDS = 0.05;
     constexpr const char* GLSL_VERSION = "#version 330 core";
     constexpr std::size_t MAX_CONSOLE_LINES = 2000;
     constexpr std::size_t MAX_LOG_LINES = 2000;
@@ -148,6 +148,11 @@ void EditorUI::SetRendererTexture(unsigned int texture, int width, int height) {
     rendererTextureWidth_ = width;
     rendererTextureHeight_ = height;
 }
+void EditorUI::SetCompilationStatus(bool isCompiling, bool hasError, bool isStalled) {
+    isCompiling_ = isCompiling;
+    hasCompileError_ = hasError;
+    isStalled_ = isStalled;
+}
 
 void EditorUI::DrawMenuBar() {
     if (ImGui::BeginMainMenuBar()) {
@@ -163,6 +168,21 @@ void EditorUI::DrawMenuBar() {
         if (ImGui::BeginMenu("Edit")) { ImGui::EndMenu(); }
         if (ImGui::BeginMenu("View")) { ImGui::EndMenu(); }
         if (ImGui::BeginMenu("Help")) { ImGui::EndMenu(); }
+
+        // Compile Status Indicator
+        ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 150.0f);
+        if (isStalled_) {
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.0f, 1.0f), "STALLED?");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("JIT compilation is taking longer than expected.\nCheck Logs for details.");
+            }
+        } else if (isCompiling_) {
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "COMPILING...");
+        } else if (hasCompileError_) {
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "ERROR");
+        } else {
+            ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "READY");
+        }
 
         ImGui::EndMainMenuBar();
     }

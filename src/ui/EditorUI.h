@@ -36,6 +36,7 @@ public:
     void SetDocumentChangedCallback(std::function<void(const std::string&, const std::string&)> cb);
     void SetActiveDocumentChangedCallback(std::function<void(const std::string&, const std::string&)> cb);
     void SetRendererTexture(unsigned int texture, int width, int height);
+    void SetCompilationStatus(bool isCompiling, bool hasError, bool isStalled = false);
 
     void AddConsoleOutput(const std::string& text);
     void AddLogOutput(const std::string& text);
@@ -62,6 +63,10 @@ private:
     unsigned int rendererTexture_ = 0;
     int rendererTextureWidth_ = 0;
     int rendererTextureHeight_ = 0;
+
+    bool isCompiling_ = false;
+    bool hasCompileError_ = false;
+    bool isStalled_ = false;
 
     void SetupDockspace();
     void DrawMenuBar();

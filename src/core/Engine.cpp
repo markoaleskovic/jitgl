@@ -31,9 +31,11 @@ namespace {
     constexpr const char* WORKSPACE_DIR = JIT_PROJECT_BINARY_DIR "/workspace";
     constexpr const char* PREAMBLE_PATH = JIT_PROJECT_BINARY_DIR "/runtime/engine.hpp";
 
-    constexpr double COMPILE_DEBOUNCE_SECONDS = 0.15;
-    constexpr double WATCHER_IGNORE_SECONDS = 0.75;
-    constexpr double COMPILE_FAILURE_RETRY_SECONDS = 1.0;
+    constexpr double MIN_DEBOUNCE_SECONDS = 0.15;
+    constexpr double MAX_DEBOUNCE_SECONDS = 1.95;
+    constexpr double DEBOUNCE_STEP_SECONDS = 0.2;
+    constexpr double WATCHER_IGNORE_SECONDS = 1.0;
+    constexpr double ERROR_HISTORY_SECONDS = 5.0;
 }
 
 Engine::Engine() = default;
@@ -138,6 +140,39 @@ void Engine::DestroySceneRenderTarget() {
     }
 }
 
+unsigned int Engine::CreateShaderProgram(const char* vsSource, const char* fsSource) {
+    auto compile = [](unsigned int type, const char* source) -> unsigned int {
+        unsigned int s = glCreateShader(type);
+        glShaderSource(s, 1, &source, nullptr);
+        glCompileShader(s);
+        int success;
+        glGetShaderiv(s, GL_COMPILE_STATUS, &success);
+        if (!success) {
+            char info[512];
+            glGetShaderInfoLog(s, 512, nullptr, info);
+            std::cerr << "Shader compile error: " << info << "\n";
+        }
+        return s;
+    };
+
+    unsigned int vs = compile(GL_VERTEX_SHADER, vsSource);
+    unsigned int fs = compile(GL_FRAGMENT_SHADER, fsSource);
+    unsigned int p = glCreateProgram();
+    glAttachShader(p, vs);
+    glAttachShader(p, fs);
+    glLinkProgram(p);
+    int success;
+    glGetProgramiv(p, GL_LINK_STATUS, &success);
+    if (!success) {
+        char info[512];
+        glGetProgramInfoLog(p, 512, nullptr, info);
+        std::cerr << "Program link error: " << info << "\n";
+    }
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    return p;
+}
+
 bool Engine::InitGL() {
     if (!gladLoadGL(glfwGetProcAddress)) {
         std::cerr << "GLAD init failed\n";
@@ -163,6 +198,24 @@ bool Engine::InitGL() {
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
     glBindVertexArray(0);
 
+    // Provide a default shader so the user has something working out-of-the-box
+    const char* vs = R"(
+        #version 330 core
+        layout (location = 0) in vec2 aPos;
+        void main() {
+            gl_Position = vec4(aPos, 0.0, 1.0);
+        }
+    )";
+    const char* fs = R"(
+        #version 330 core
+        out vec4 FragColor;
+        uniform float time;
+        void main() {
+            FragColor = vec4(0.5 + 0.5*cos(time), 0.5 + 0.5*sin(time), 0.5, 1.0);
+        }
+    )";
+    ctx_.defaultShader = CreateShaderProgram(vs, fs);
+
     return EnsureSceneRenderTarget(w, h);
 }
 
@@ -183,7 +236,7 @@ bool Engine::InitUI() {
 }
 
 bool Engine::InitJIT() {
-    jit_ = std::make_unique<JitEngine>();
+    jit_ = std::make_shared<JitEngine>();
     jit_->SetOutputCallback([this](const std::string& msg) {
         ui_->AddLogOutput(msg);
     });
@@ -193,12 +246,39 @@ bool Engine::InitJIT() {
         return false;
     }
 
-    compileThreadRunning_.store(true);
-    compileThread_ = std::thread([this]() {
-        CompileThreadMain();
+    compileThreadRunning_ = std::make_shared<std::atomic<bool>>(true);
+    compileThread_ = std::thread([this, running = compileThreadRunning_]() {
+        CompileThreadMain(running);
     });
 
     return true;
+}
+
+void Engine::ResetJIT() {
+    ui_->AddLogOutput("[JIT] Compilation stalled for too long. Resetting JIT engine...");
+
+    // 1. Signal the current thread to stop
+    if (compileThreadRunning_) {
+        compileThreadRunning_->store(false);
+    }
+    compileCv_.notify_all();
+
+    // 2. Detach the thread since it's stalled and won't join quickly
+    if (compileThread_.joinable()) {
+        compileThread_.detach();
+    }
+
+    // 3. Reset internal compile state
+    {
+        std::lock_guard<std::mutex> lock(compileMutex_);
+        compileJobs_.clear();
+        compileResults_ = std::queue<CompileResult>{};
+        inFlightSourceHashes_.clear();
+        inFlightStartTime_ = 0.0;
+    }
+
+    // 4. Start a fresh JIT engine and thread
+    InitJIT();
 }
 
 bool Engine::InitWatcher() {
@@ -315,7 +395,18 @@ void Engine::QueueCompile(const std::string& filepath, const std::string& source
     }
 
     latestSources_[filepath] = source;
-    double requestedAt = immediate ? nowSeconds : (nowSeconds + COMPILE_DEBOUNCE_SECONDS);
+    double debounce = MIN_DEBOUNCE_SECONDS;
+    auto errorIt = recentErrors_.find(filepath);
+    if (errorIt != recentErrors_.end()) {
+        auto& history = errorIt->second;
+        while (!history.empty() && (nowSeconds - history.front() > ERROR_HISTORY_SECONDS)) {
+            history.pop_front();
+        }
+        debounce += history.size() * DEBOUNCE_STEP_SECONDS;
+        if (debounce > MAX_DEBOUNCE_SECONDS) debounce = MAX_DEBOUNCE_SECONDS;
+    }
+
+    double requestedAt = immediate ? nowSeconds : (nowSeconds + debounce);
     auto retryIt = compileRetryAfter_.find(filepath);
     if (retryIt != compileRetryAfter_.end() && requestedAt < retryIt->second) {
         requestedAt = retryIt->second;
@@ -332,11 +423,40 @@ void Engine::SubmitDueCompiles(double nowSeconds) {
     }
 
     if (duePaths.empty()) {
+        bool inFlight = false;
+        bool stalled = false;
+        {
+            std::lock_guard<std::mutex> lock(compileMutex_);
+            inFlight = !compileJobs_.empty() || !inFlightSourceHashes_.empty();
+            if (inFlight && inFlightStartTime_ > 0.0) {
+                if (nowSeconds - inFlightStartTime_ > 5.0) {
+                    stalled = true;
+                }
+                if (nowSeconds - inFlightStartTime_ > 10.0) {
+                    ResetJIT();
+                    return;
+                }
+            }
+        }
+        ui_->SetCompilationStatus(inFlight, !compileFailures_.empty(), stalled);
+        // If we ever want to show "STALLED" in UI, we'd need another flag or method.
+        // For now, at least we know internally.
         return;
     }
 
+    bool stalled = false;
     {
         std::lock_guard<std::mutex> lock(compileMutex_);
+        if (!inFlightSourceHashes_.empty() && inFlightStartTime_ > 0.0) {
+            if (nowSeconds - inFlightStartTime_ > 5.0) {
+                stalled = true;
+            }
+            if (nowSeconds - inFlightStartTime_ > 10.0) {
+                ResetJIT();
+                return;
+            }
+        }
+
         for (const auto& path : duePaths) {
             auto sourceIt = latestSources_.find(path);
             if (sourceIt == latestSources_.end()) {
@@ -369,33 +489,59 @@ void Engine::SubmitDueCompiles(double nowSeconds) {
     }
 
     compileCv_.notify_one();
+    ui_->SetCompilationStatus(true, !compileFailures_.empty(), stalled);
 }
 
-void Engine::CompileThreadMain() {
-    while (compileThreadRunning_.load()) {
+void Engine::CompileThreadMain(std::shared_ptr<std::atomic<bool>> running) {
+    auto currentJit = jit_;
+    while (running->load()) {
         CompileJob job;
         {
             std::unique_lock<std::mutex> lock(compileMutex_);
-            compileCv_.wait(lock, [this]() {
-                return !compileThreadRunning_.load() || !compileJobs_.empty();
+            compileCv_.wait(lock, [this, running]() {
+                return !running->load() || !compileJobs_.empty();
             });
 
-            if (!compileThreadRunning_.load()) {
+            if (!running->load()) {
                 break;
             }
 
             job = std::move(compileJobs_.front());
             compileJobs_.pop_front();
             inFlightSourceHashes_[job.filepath] = job.sourceHash;
+            inFlightStartTime_ = glfwGetTime();
         }
 
-        auto program = jit_->CompileSource(job.filepath, job.source);
+        auto program = currentJit->CompileSource(job.filepath, job.source);
         {
             std::lock_guard<std::mutex> lock(compileMutex_);
             inFlightSourceHashes_.erase(job.filepath);
+            inFlightStartTime_ = 0.0;
             compileResults_.push(CompileResult{ job.filepath, std::move(program), job.sourceHash });
         }
     }
+}
+
+void Engine::InitializeProgramIfNeeded(const std::shared_ptr<JitProgram>& program) {
+    if (!program || program->initialized) {
+        return;
+    }
+
+    if (program->functions.init) {
+        program->functions.init(&ctx_);
+    }
+    program->initialized = true;
+}
+
+void Engine::ShutdownProgramIfInitialized(const std::shared_ptr<JitProgram>& program) {
+    if (!program || !program->initialized) {
+        return;
+    }
+
+    if (program->functions.shutdown) {
+        program->functions.shutdown(&ctx_);
+    }
+    program->initialized = false;
 }
 
 bool Engine::ActivateProgramForPath(const std::string& filepath) {
@@ -404,10 +550,13 @@ bool Engine::ActivateProgramForPath(const std::string& filepath) {
         return false;
     }
 
-    activeProgram_ = it->second;
-    if (activeProgram_ && activeProgram_->functions.init) {
-        activeProgram_->functions.init(&ctx_);
+    const auto& nextProgram = it->second;
+    if (activeProgram_ && activeProgram_ != nextProgram) {
+        ShutdownProgramIfInitialized(activeProgram_);
     }
+
+    activeProgram_ = nextProgram;
+    InitializeProgramIfNeeded(activeProgram_);
 
     ui_->AddLogOutput("[Runtime] Active scene switched to " + filepath);
     return true;
@@ -424,6 +573,8 @@ void Engine::ProcessCompileResults() {
         CompileResult result = std::move(localResults.front());
         localResults.pop();
 
+        bool hasError = !compileFailures_.empty();
+
         if (!result.program) {
             ui_->AddLogOutput("[JIT] Compile failed for " + result.filepath + ". Keeping previous program.");
             auto sourceIt = latestSources_.find(result.filepath);
@@ -433,9 +584,24 @@ void Engine::ProcessCompileResults() {
                     compileFailures_[result.filepath] = CompileFailureState{ result.sourceHash, false };
                 }
             }
-            compileRetryAfter_[result.filepath] = glfwGetTime() + COMPILE_FAILURE_RETRY_SECONDS;
+
+            double now = glfwGetTime();
+            auto& history = recentErrors_[result.filepath];
+            history.push_back(now);
+            while (!history.empty() && (now - history.front() > ERROR_HISTORY_SECONDS)) {
+                history.pop_front();
+            }
+
+            double debounce = MIN_DEBOUNCE_SECONDS + history.size() * DEBOUNCE_STEP_SECONDS;
+            if (debounce > MAX_DEBOUNCE_SECONDS) debounce = MAX_DEBOUNCE_SECONDS;
+
+            compileRetryAfter_[result.filepath] = now + debounce;
+            ui_->SetCompilationStatus(false, true, false);
             continue;
         }
+
+        ui_->SetCompilationStatus(false, !compileFailures_.empty(), false);
+        recentErrors_.erase(result.filepath);
 
         auto failureIt = compileFailures_.find(result.filepath);
         if (failureIt != compileFailures_.end() && failureIt->second.sourceHash == result.sourceHash) {
@@ -443,12 +609,19 @@ void Engine::ProcessCompileResults() {
         }
         compileRetryAfter_.erase(result.filepath);
 
+        auto existingIt = compiledPrograms_.find(result.filepath);
+        if (existingIt != compiledPrograms_.end() && existingIt->second != result.program) {
+            ShutdownProgramIfInitialized(existingIt->second);
+        }
+
         compiledPrograms_[result.filepath] = result.program;
         if (result.filepath == activeFilePath_) {
-            activeProgram_ = result.program;
-            if (activeProgram_->functions.init) {
-                activeProgram_->functions.init(&ctx_);
+            if (activeProgram_ && activeProgram_ != result.program) {
+                ShutdownProgramIfInitialized(activeProgram_);
             }
+            activeProgram_ = result.program;
+            ctx_.reloadCount++;
+            InitializeProgramIfNeeded(activeProgram_);
         }
     }
 }
@@ -488,6 +661,7 @@ void Engine::Run() {
 
         ctx_.deltaTime = static_cast<float>(now - lastTime_);
         ctx_.time = static_cast<float>(now);
+        ctx_.frameCount++;
         lastTime_ = now;
 
         int windowW = 0;
@@ -522,15 +696,27 @@ void Engine::Shutdown() {
     }
     shutdown_ = true;
 
+    if (ui_) {
+        ui_->AddLogOutput("[Engine] Shutting down...");
+    }
+
     if (watcher_) {
         watcher_->Stop();
         watcher_.reset();
     }
 
-    compileThreadRunning_.store(false);
+    if (compileThreadRunning_) {
+        compileThreadRunning_->store(false);
+    }
     compileCv_.notify_all();
     if (compileThread_.joinable()) {
-        compileThread_.join();
+        // If we are stalling, don't wait forever
+        if (inFlightStartTime_ > 0.0 && (glfwGetTime() - inFlightStartTime_ > 5.0)) {
+            if (ui_) ui_->AddLogOutput("[Engine] Compile thread stalled during shutdown. Detaching.");
+            compileThread_.detach();
+        } else {
+            compileThread_.join();
+        }
     }
 
     {
@@ -540,8 +726,16 @@ void Engine::Shutdown() {
         inFlightSourceHashes_.clear();
     }
 
+    // Call shutdown on the active program before clearing resources
+    if (activeProgram_) {
+        ShutdownProgramIfInitialized(activeProgram_);
+    }
+
+    // IMPORTANT: Clear all JIT programs (and their interpreters) 
+    // BEFORE terminating the JIT engine (which shuts down LLVM).
     activeProgram_.reset();
     compiledPrograms_.clear();
+
     compileFailures_.clear();
     compileRetryAfter_.clear();
 
@@ -570,6 +764,15 @@ void Engine::Shutdown() {
         glDeleteBuffers(1, &ctx_.vbo);
         ctx_.vbo = 0;
     }
+
+    if (ctx_.defaultShader) {
+        glDeleteProgram(ctx_.defaultShader);
+        ctx_.defaultShader = 0;
+    }
+
+    // Note: userData is left to the user to manage via shutdown() if they allocated it,
+    // but we clear the pointer here for safety.
+    ctx_.userData = nullptr;
 
     if (ui_) {
         ui_->Shutdown();

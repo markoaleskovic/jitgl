@@ -12,6 +12,10 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <filesystem>
+#include <cstdlib>
+
+namespace fs = std::filesystem;
 
 // --- CMake-injected paths (defined via target_compile_definitions) ---
 #ifndef JIT_GLAD_INCLUDE_DIR
@@ -87,12 +91,17 @@ bool JitEngine::Init(const std::string& preamblePath) {
             pos = preamble_.find(pragmaOnce, pos);
         }
     }
-    argStorage_.emplace_back("-std=c++17");
+    argStorage_.emplace_back("-std=c++20");
     argStorage_.emplace_back("-xc++");
     argStorage_.emplace_back("-O0");
     argStorage_.emplace_back("-fPIC");
     argStorage_.emplace_back("-fno-rtti");
-    argStorage_.emplace_back("-ferror-limit=8");
+    argStorage_.emplace_back("-ferror-limit=100");
+    argStorage_.emplace_back("-fno-spell-checking");
+    argStorage_.emplace_back("-fno-caret-diagnostics");
+    argStorage_.emplace_back("-fno-show-column");
+    argStorage_.emplace_back("-fno-diagnostics-fixit-info");
+    argStorage_.emplace_back("-fno-crash-diagnostics");
 
     if (JIT_CLANG_RESOURCE_DIR[0] != '\0') {
         argStorage_.emplace_back("-resource-dir");
@@ -160,6 +169,7 @@ std::shared_ptr<JitProgram> JitEngine::CompileFile(const std::string& filepath) 
 }
 
 std::shared_ptr<JitProgram> JitEngine::CompileSource(const std::string& sourceName, const std::string& sourceCode) {
+    log("[JIT] Starting compilation for " + sourceName + "...");
     auto stagingInterpreter = createInterpreter();
     if (!stagingInterpreter) {
         return nullptr;
@@ -167,15 +177,22 @@ std::shared_ptr<JitProgram> JitEngine::CompileSource(const std::string& sourceNa
 
     const std::string fullSource = preamble_ + "\n" + sourceCode;
 
+    log("[JIT] Parsing source...");
     auto ptuOrErr = stagingInterpreter->Parse(fullSource);
     if (!ptuOrErr) {
         std::string msg;
         llvm::raw_string_ostream os(msg);
         llvm::logAllUnhandledErrors(ptuOrErr.takeError(), os);
-        log("[JIT Parse Error][" + sourceName + "]\n" + os.str());
+        
+        if (msg.size() > 10000) {
+            msg = msg.substr(0, 10000) + "\n[Error log truncated...]";
+        }
+        
+        log("[JIT Parse Error][" + sourceName + "]\n" + msg);
         return nullptr;
     }
 
+    log("[JIT] Executing PTU...");
     if (auto execErr = stagingInterpreter->Execute(*ptuOrErr)) {
         std::string msg;
         llvm::raw_string_ostream os(msg);
@@ -198,6 +215,7 @@ std::shared_ptr<JitProgram> JitEngine::CompileSource(const std::string& sourceNa
     if (functions.init) log("  -> init()");
     if (functions.update) log("  -> update()");
     if (functions.render) log("  -> renderFrame()");
+    if (functions.shutdown) log("  -> shutdown()");
 
     return program;
 }
@@ -222,10 +240,11 @@ bool JitEngine::lookupFunctions(clang::Interpreter& interpreter, JitFunctions* o
     outFunctions->init = reinterpret_cast<JitInitFn>(tryLookup("init"));
     outFunctions->update = reinterpret_cast<JitUpdateFn>(tryLookup("update"));
     outFunctions->render = reinterpret_cast<JitRenderFn>(tryLookup("renderFrame"));
+    outFunctions->shutdown = reinterpret_cast<JitShutdownFn>(tryLookup("shutdown"));
 
-    if (!outFunctions->init && !outFunctions->update && !outFunctions->render) {
+    if (!outFunctions->init && !outFunctions->update && !outFunctions->render && !outFunctions->shutdown) {
         log("[JIT] Warning: compiled successfully but found no entry points "
-            "(init / update / renderFrame). Did you forget extern \"C\"?");
+            "(init / update / renderFrame / shutdown). Did you forget extern \"C\"?");
         return false;
     }
 
@@ -248,5 +267,7 @@ void JitEngine::Terminate() {
     preamble_.clear();
     argStorage_.clear();
 
+    // llvm_shutdown() will clean up LLVM's global state.
+    // Ensure all shared_ptr<clang::Interpreter> are already destroyed before this call!
     llvm::llvm_shutdown();
 }

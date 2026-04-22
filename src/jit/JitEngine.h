@@ -3,6 +3,7 @@
 #include <functional>
 #include <memory>
 #include <vector>
+#include <unordered_map>
 
 struct EngineContext;
 
@@ -11,16 +12,19 @@ namespace clang { class Interpreter; }
 using JitInitFn   = void(*)(EngineContext*);
 using JitUpdateFn = void(*)(EngineContext*);
 using JitRenderFn = void(*)(EngineContext*);
+using JitShutdownFn = void(*)(EngineContext*);
 
 struct JitFunctions {
     JitInitFn    init     = nullptr;
     JitUpdateFn  update   = nullptr;
     JitRenderFn  render   = nullptr;
+    JitShutdownFn shutdown = nullptr;
 };
 
 struct JitProgram {
     std::shared_ptr<clang::Interpreter> interpreter;
     JitFunctions functions;
+    bool initialized = false;
     ~JitProgram();
 };
 

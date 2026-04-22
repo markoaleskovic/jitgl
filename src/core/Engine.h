@@ -34,7 +34,7 @@ private:
     GLFWwindow* window_ = nullptr;
     std::unique_ptr<EditorUI> ui_ = nullptr;
 
-    std::unique_ptr<JitEngine>   jit_;
+    std::shared_ptr<JitEngine>   jit_;
     std::unique_ptr<FileWatcher> watcher_;
 
     std::unique_ptr<ConsoleRedirectSession> consoleRedirect_;
@@ -83,11 +83,14 @@ private:
     std::deque<CompileJob> compileJobs_;
     std::queue<CompileResult> compileResults_;
     std::unordered_map<std::string, std::size_t> inFlightSourceHashes_;
+    double inFlightStartTime_ = 0.0;
     std::thread compileThread_;
-    std::atomic<bool> compileThreadRunning_{ false };
+    std::shared_ptr<std::atomic<bool>> compileThreadRunning_;
     std::unordered_map<std::string, CompileFailureState> compileFailures_;
     std::unordered_map<std::string, double> compileRetryAfter_;
+    std::unordered_map<std::string, std::deque<double>> recentErrors_;
 
+    void ResetJIT();
     void OnFileChanged(const std::string& filepath);
     void ProcessPendingReloads(double nowSeconds);
 
@@ -96,8 +99,10 @@ private:
     void QueueCompile(const std::string& filepath, const std::string& source, double nowSeconds, bool immediate);
     void SubmitDueCompiles(double nowSeconds);
     void ProcessCompileResults();
-    void CompileThreadMain();
+    void CompileThreadMain(std::shared_ptr<std::atomic<bool>> running);
     bool ActivateProgramForPath(const std::string& filepath);
+    void InitializeProgramIfNeeded(const std::shared_ptr<JitProgram>& program);
+    void ShutdownProgramIfInitialized(const std::shared_ptr<JitProgram>& program);
 
     bool EnsureSceneRenderTarget(int width, int height);
     void DestroySceneRenderTarget();
@@ -108,6 +113,8 @@ private:
     bool InitUI();
     bool InitJIT();
     bool InitWatcher();
+
+    unsigned int CreateShaderProgram(const char* vsSource, const char* fsSource);
 
     bool shutdown_ = false;
 };

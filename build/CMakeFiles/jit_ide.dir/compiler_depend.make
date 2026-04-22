@@ -1120,6 +1120,10 @@ CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.o: /home/malesko/dev/jitgl/src/jit/
   /usr/include/c++/15.2.1/bits/exception_defines.h \
   /usr/include/c++/15.2.1/bits/exception_ptr.h \
   /usr/include/c++/15.2.1/bits/formatfwd.h \
+  /usr/include/c++/15.2.1/bits/fs_dir.h \
+  /usr/include/c++/15.2.1/bits/fs_fwd.h \
+  /usr/include/c++/15.2.1/bits/fs_ops.h \
+  /usr/include/c++/15.2.1/bits/fs_path.h \
   /usr/include/c++/15.2.1/bits/fstream.tcc \
   /usr/include/c++/15.2.1/bits/functexcept.h \
   /usr/include/c++/15.2.1/bits/functional_hash.h \
@@ -1221,6 +1225,7 @@ CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.o: /home/malesko/dev/jitgl/src/jit/
   /usr/include/c++/15.2.1/chrono \
   /usr/include/c++/15.2.1/climits \
   /usr/include/c++/15.2.1/clocale \
+  /usr/include/c++/15.2.1/codecvt \
   /usr/include/c++/15.2.1/compare \
   /usr/include/c++/15.2.1/concepts \
   /usr/include/c++/15.2.1/condition_variable \
@@ -1243,6 +1248,7 @@ CMakeFiles/jit_ide.dir/src/jit/JitEngine.cpp.o: /home/malesko/dev/jitgl/src/jit/
   /usr/include/c++/15.2.1/ext/numeric_traits.h \
   /usr/include/c++/15.2.1/ext/string_conversions.h \
   /usr/include/c++/15.2.1/ext/type_traits.h \
+  /usr/include/c++/15.2.1/filesystem \
   /usr/include/c++/15.2.1/format \
   /usr/include/c++/15.2.1/fstream \
   /usr/include/c++/15.2.1/functional \
@@ -1909,7 +1915,6 @@ CMakeFiles/jit_ide.dir/src/main.cpp.o: /home/malesko/dev/jitgl/src/main.cpp \
   /usr/include/c++/15.2.1/bits/stl_pair.h \
   /usr/include/c++/15.2.1/bits/stl_queue.h \
   /usr/include/c++/15.2.1/bits/stl_raw_storage_iter.h \
-  /usr/include/c++/15.2.1/bits/stl_relops.h \
   /usr/include/c++/15.2.1/bits/stl_stack.h \
   /usr/include/c++/15.2.1/bits/stl_tempbuf.h \
   /usr/include/c++/15.2.1/bits/stl_tree.h \
@@ -1990,7 +1995,6 @@ CMakeFiles/jit_ide.dir/src/main.cpp.o: /home/malesko/dev/jitgl/src/main.cpp \
   /usr/include/c++/15.2.1/typeinfo \
   /usr/include/c++/15.2.1/unordered_map \
   /usr/include/c++/15.2.1/unordered_set \
-  /usr/include/c++/15.2.1/utility \
   /usr/include/c++/15.2.1/vector \
   /usr/include/c++/15.2.1/x86_64-pc-linux-gnu/bits/atomic_word.h \
   /usr/include/c++/15.2.1/x86_64-pc-linux-gnu/bits/c++allocator.h \
@@ -2251,7 +2255,6 @@ CMakeFiles/jit_ide.dir/src/system/ConsoleRedirectSession.cpp.o: /home/malesko/de
   /usr/include/c++/15.2.1/bits/stl_multimap.h \
   /usr/include/c++/15.2.1/bits/stl_pair.h \
   /usr/include/c++/15.2.1/bits/stl_raw_storage_iter.h \
-  /usr/include/c++/15.2.1/bits/stl_relops.h \
   /usr/include/c++/15.2.1/bits/stl_stack.h \
   /usr/include/c++/15.2.1/bits/stl_tempbuf.h \
   /usr/include/c++/15.2.1/bits/stl_tree.h \
@@ -2331,7 +2334,6 @@ CMakeFiles/jit_ide.dir/src/system/ConsoleRedirectSession.cpp.o: /home/malesko/de
   /usr/include/c++/15.2.1/typeinfo \
   /usr/include/c++/15.2.1/unordered_map \
   /usr/include/c++/15.2.1/unordered_set \
-  /usr/include/c++/15.2.1/utility \
   /usr/include/c++/15.2.1/vector \
   /usr/include/c++/15.2.1/x86_64-pc-linux-gnu/bits/atomic_word.h \
   /usr/include/c++/15.2.1/x86_64-pc-linux-gnu/bits/c++allocator.h \
@@ -2588,7 +2590,6 @@ CMakeFiles/jit_ide.dir/src/system/ConsoleRedirector.cpp.o: /home/malesko/dev/jit
   /usr/include/c++/15.2.1/bits/stl_multimap.h \
   /usr/include/c++/15.2.1/bits/stl_pair.h \
   /usr/include/c++/15.2.1/bits/stl_raw_storage_iter.h \
-  /usr/include/c++/15.2.1/bits/stl_relops.h \
   /usr/include/c++/15.2.1/bits/stl_stack.h \
   /usr/include/c++/15.2.1/bits/stl_tempbuf.h \
   /usr/include/c++/15.2.1/bits/stl_tree.h \
@@ -2663,7 +2664,6 @@ CMakeFiles/jit_ide.dir/src/system/ConsoleRedirector.cpp.o: /home/malesko/dev/jit
   /usr/include/c++/15.2.1/typeinfo \
   /usr/include/c++/15.2.1/unordered_map \
   /usr/include/c++/15.2.1/unordered_set \
-  /usr/include/c++/15.2.1/utility \
   /usr/include/c++/15.2.1/vector \
   /usr/include/c++/15.2.1/x86_64-pc-linux-gnu/bits/atomic_word.h \
   /usr/include/c++/15.2.1/x86_64-pc-linux-gnu/bits/c++allocator.h \
@@ -2729,6 +2729,7 @@ CMakeFiles/jit_ide.dir/src/ui/EditorUI.cpp.o: /home/malesko/dev/jitgl/src/ui/Edi
   _deps/imgui-src/imgui_internal.h \
   _deps/text_editor-src/TextEditor.h \
   gladsources/glad_gl_core_33/include/KHR/khrplatform.h \
+  /home/malesko/dev/jitgl/src/jit/JitEngine.h \
   /home/malesko/dev/jitgl/src/ui/EditorUI.h \
   /usr/include/GL/gl.h \
   /usr/include/GL/glext.h \
@@ -2861,10 +2862,6 @@ CMakeFiles/jit_ide.dir/src/ui/EditorUI.cpp.o: /home/malesko/dev/jitgl/src/ui/Edi
   /usr/include/c++/15.2.1/bits/exception.h \
   /usr/include/c++/15.2.1/bits/exception_defines.h \
   /usr/include/c++/15.2.1/bits/exception_ptr.h \
-  /usr/include/c++/15.2.1/bits/fs_dir.h \
-  /usr/include/c++/15.2.1/bits/fs_fwd.h \
-  /usr/include/c++/15.2.1/bits/fs_ops.h \
-  /usr/include/c++/15.2.1/bits/fs_path.h \
   /usr/include/c++/15.2.1/bits/functexcept.h \
   /usr/include/c++/15.2.1/bits/functional_hash.h \
   /usr/include/c++/15.2.1/bits/hash_bytes.h \
@@ -2896,7 +2893,6 @@ CMakeFiles/jit_ide.dir/src/ui/EditorUI.cpp.o: /home/malesko/dev/jitgl/src/ui/Edi
   /usr/include/c++/15.2.1/bits/postypes.h \
   /usr/include/c++/15.2.1/bits/predefined_ops.h \
   /usr/include/c++/15.2.1/bits/ptr_traits.h \
-  /usr/include/c++/15.2.1/bits/quoted_string.h \
   /usr/include/c++/15.2.1/bits/range_access.h \
   /usr/include/c++/15.2.1/bits/ranges_algo.h \
   /usr/include/c++/15.2.1/bits/ranges_algobase.h \
@@ -2940,7 +2936,6 @@ CMakeFiles/jit_ide.dir/src/ui/EditorUI.cpp.o: /home/malesko/dev/jitgl/src/ui/Edi
   /usr/include/c++/15.2.1/bits/stl_multimap.h \
   /usr/include/c++/15.2.1/bits/stl_pair.h \
   /usr/include/c++/15.2.1/bits/stl_raw_storage_iter.h \
-  /usr/include/c++/15.2.1/bits/stl_relops.h \
   /usr/include/c++/15.2.1/bits/stl_stack.h \
   /usr/include/c++/15.2.1/bits/stl_tempbuf.h \
   /usr/include/c++/15.2.1/bits/stl_tree.h \
@@ -2966,14 +2961,12 @@ CMakeFiles/jit_ide.dir/src/ui/EditorUI.cpp.o: /home/malesko/dev/jitgl/src/ui/Edi
   /usr/include/c++/15.2.1/climits \
   /usr/include/c++/15.2.1/clocale \
   /usr/include/c++/15.2.1/cmath \
-  /usr/include/c++/15.2.1/codecvt \
   /usr/include/c++/15.2.1/compare \
   /usr/include/c++/15.2.1/concepts \
   /usr/include/c++/15.2.1/cstddef \
   /usr/include/c++/15.2.1/cstdint \
   /usr/include/c++/15.2.1/cstdio \
   /usr/include/c++/15.2.1/cstdlib \
-  /usr/include/c++/15.2.1/cstring \
   /usr/include/c++/15.2.1/ctime \
   /usr/include/c++/15.2.1/cwchar \
   /usr/include/c++/15.2.1/cwctype \
@@ -2988,10 +2981,8 @@ CMakeFiles/jit_ide.dir/src/ui/EditorUI.cpp.o: /home/malesko/dev/jitgl/src/ui/Edi
   /usr/include/c++/15.2.1/ext/numeric_traits.h \
   /usr/include/c++/15.2.1/ext/string_conversions.h \
   /usr/include/c++/15.2.1/ext/type_traits.h \
-  /usr/include/c++/15.2.1/filesystem \
   /usr/include/c++/15.2.1/functional \
   /usr/include/c++/15.2.1/initializer_list \
-  /usr/include/c++/15.2.1/iomanip \
   /usr/include/c++/15.2.1/ios \
   /usr/include/c++/15.2.1/iosfwd \
   /usr/include/c++/15.2.1/istream \
@@ -3035,7 +3026,6 @@ CMakeFiles/jit_ide.dir/src/ui/EditorUI.cpp.o: /home/malesko/dev/jitgl/src/ui/Edi
   /usr/include/c++/15.2.1/typeinfo \
   /usr/include/c++/15.2.1/unordered_map \
   /usr/include/c++/15.2.1/unordered_set \
-  /usr/include/c++/15.2.1/utility \
   /usr/include/c++/15.2.1/vector \
   /usr/include/c++/15.2.1/x86_64-pc-linux-gnu/bits/atomic_word.h \
   /usr/include/c++/15.2.1/x86_64-pc-linux-gnu/bits/c++allocator.h \

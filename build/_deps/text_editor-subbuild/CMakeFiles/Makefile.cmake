@@ -10,10 +10,8 @@ set(CMAKE_MAKEFILE_DEPENDS
   "CMakeFiles/4.3.1/CMakeSystem.cmake"
   "CMakeLists.txt"
   "text_editor-populate-prefix/tmp/text_editor-populate-mkdirs.cmake"
-  "/usr/share/cmake/Modules/CMakeDetermineSystem.cmake"
   "/usr/share/cmake/Modules/CMakeGenericSystem.cmake"
   "/usr/share/cmake/Modules/CMakeInitializeConfigs.cmake"
-  "/usr/share/cmake/Modules/CMakeSystem.cmake.in"
   "/usr/share/cmake/Modules/CMakeSystemSpecificInformation.cmake"
   "/usr/share/cmake/Modules/CMakeSystemSpecificInitialize.cmake"
   "/usr/share/cmake/Modules/ExternalProject.cmake"
@@ -38,7 +36,6 @@ set(CMAKE_MAKEFILE_OUTPUTS
 
 # Byproducts of CMake generate step:
 set(CMAKE_MAKEFILE_PRODUCTS
-  "CMakeFiles/4.3.1/CMakeSystem.cmake"
   "text_editor-populate-prefix/tmp/text_editor-populate-mkdirs.cmake"
   "text_editor-populate-prefix/src/text_editor-populate-stamp/download-text_editor-populate.cmake"
   "text_editor-populate-prefix/src/text_editor-populate-stamp/verify-text_editor-populate.cmake"
