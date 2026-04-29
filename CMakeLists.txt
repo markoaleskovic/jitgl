@@ -153,3 +153,9 @@ if(UNIX AND NOT APPLE)
     target_link_libraries(jit_ide PRIVATE dl pthread)
     target_link_options(jit_ide PRIVATE -rdynamic)
 endif()
+
+add_custom_command(TARGET jit_ide POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    "${CMAKE_SOURCE_DIR}/assets"
+    "${CMAKE_CURRENT_BINARY_DIR}/assets"
+)

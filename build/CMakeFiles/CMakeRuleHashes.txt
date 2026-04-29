@@ -1,0 +1,22 @@
+# Hashes of file build rules.
+9e65c316b2feab216a03c83d017ff397 _deps/glfw-build/CMakeFiles/uninstall
+325e2e7ba3bcb9c7c5940c243f1ffec1 _deps/glfw-build/src/CMakeFiles/update_mappings
+516ea32d2c01bc6d3214b667cd8c7e49 _deps/glfw-build/src/fractional-scale-v1-client-protocol-code.h
+b7fb966ddaa2225a83dd6efb825b89d6 _deps/glfw-build/src/fractional-scale-v1-client-protocol.h
+594fd8b3ca37bf11f6f1df95c2fd8bbf _deps/glfw-build/src/idle-inhibit-unstable-v1-client-protocol-code.h
+485a930b87bdf10091b291fb605006e3 _deps/glfw-build/src/idle-inhibit-unstable-v1-client-protocol.h
+9fcefd5ccba034fd70a93203b0106037 _deps/glfw-build/src/pointer-constraints-unstable-v1-client-protocol-code.h
+e779627f7bbafd6043edbd6dd5d77ee9 _deps/glfw-build/src/pointer-constraints-unstable-v1-client-protocol.h
+ac0fd7bc008874b827f552904afaf520 _deps/glfw-build/src/relative-pointer-unstable-v1-client-protocol-code.h
+b4d15839a0cf060cc2b7268bc549c539 _deps/glfw-build/src/relative-pointer-unstable-v1-client-protocol.h
+3259adb0e1e95d441973dbcb4e3c1898 _deps/glfw-build/src/viewporter-client-protocol-code.h
+9ee64fbcae97cd0fff45b300ec1dc092 _deps/glfw-build/src/viewporter-client-protocol.h
+63c16cd1bc381c4e61ba89e24ce1fdbb _deps/glfw-build/src/wayland-client-protocol-code.h
+acbfda77e16605659540597a47278dcd _deps/glfw-build/src/wayland-client-protocol.h
+85e5b9ffd2f6a787578512dcad03e500 _deps/glfw-build/src/xdg-activation-v1-client-protocol-code.h
+eed6c02eb90bf9f258d4118d483968c6 _deps/glfw-build/src/xdg-activation-v1-client-protocol.h
+8b90a0f5dcafceb36b60d6525b0ba3d0 _deps/glfw-build/src/xdg-decoration-unstable-v1-client-protocol-code.h
+68c37516edf5dffc8739e1123608dc68 _deps/glfw-build/src/xdg-decoration-unstable-v1-client-protocol.h
+e7831eec89a15e2cf78c98e08701d8b1 _deps/glfw-build/src/xdg-shell-client-protocol-code.h
+7c216b0349d1650bc3ca7e081e868647 _deps/glfw-build/src/xdg-shell-client-protocol.h
+049eefb66ee69b4e04dee893f1301e53 gladsources/glad_gl_core_33/include/KHR/khrplatform.h

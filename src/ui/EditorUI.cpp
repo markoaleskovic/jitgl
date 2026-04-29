@@ -15,6 +15,94 @@ namespace {
     constexpr std::size_t MAX_LOG_LINES = 2000;
 }
 
+// style start
+
+void EditorUI::SetupDarkTheme() {
+    ImGuiStyle& style = ImGui::GetStyle();
+    ImVec4* colors = style.Colors;
+
+    // Flat UI, minimal rounding
+    style.WindowRounding    = 2.0f;
+    style.ChildRounding     = 2.0f;
+    style.FrameRounding     = 2.0f;
+    style.PopupRounding     = 2.0f;
+    style.ScrollbarRounding = 2.0f;
+    style.TabRounding       = 2.0f;
+
+    // Subtle borders
+    style.WindowBorderSize  = 1.0f;
+    style.FrameBorderSize   = 0.0f;
+    style.PopupBorderSize   = 1.0f;
+    
+    // Padding
+    style.FramePadding      = ImVec2(4.0f, 4.0f);
+    style.WindowPadding     = ImVec2(8.0f, 8.0f);
+    style.ItemSpacing       = ImVec2(8.0f, 4.0f);
+
+    // Color Palette (VS Code / Dark+ inspired)
+    const ImVec4 bgColor         = ImVec4(0.12f, 0.12f, 0.12f, 1.00f); // #1E1E1E
+    const ImVec4 panelBgColor    = ImVec4(0.14f, 0.14f, 0.14f, 1.00f); // #252526
+    const ImVec4 borderColor     = ImVec4(0.20f, 0.20f, 0.20f, 1.00f); // #333333
+    const ImVec4 highlightColor  = ImVec4(0.00f, 0.47f, 0.83f, 1.00f); // #007ACC (Blue accent)
+    const ImVec4 textColor       = ImVec4(0.80f, 0.80f, 0.80f, 1.00f); // #CCCCCC
+    
+    colors[ImGuiCol_Text]                   = textColor;
+    colors[ImGuiCol_TextDisabled]           = ImVec4(0.50f, 0.50f, 0.50f, 1.00f);
+    
+    colors[ImGuiCol_WindowBg]               = bgColor;
+    colors[ImGuiCol_ChildBg]                = bgColor;
+    colors[ImGuiCol_PopupBg]                = panelBgColor;
+    
+    colors[ImGuiCol_Border]                 = borderColor;
+    colors[ImGuiCol_BorderShadow]           = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+    
+    colors[ImGuiCol_FrameBg]                = panelBgColor;
+    colors[ImGuiCol_FrameBgHovered]         = ImVec4(0.20f, 0.20f, 0.20f, 1.00f);
+    colors[ImGuiCol_FrameBgActive]          = ImVec4(0.28f, 0.28f, 0.28f, 1.00f);
+    
+    colors[ImGuiCol_TitleBg]                = panelBgColor;
+    colors[ImGuiCol_TitleBgActive]          = panelBgColor;
+    colors[ImGuiCol_TitleBgCollapsed]       = panelBgColor;
+    
+    colors[ImGuiCol_MenuBarBg]              = panelBgColor;
+    
+    colors[ImGuiCol_ScrollbarBg]            = bgColor;
+    colors[ImGuiCol_ScrollbarGrab]          = ImVec4(0.26f, 0.26f, 0.26f, 1.00f);
+    colors[ImGuiCol_ScrollbarGrabHovered]   = ImVec4(0.35f, 0.35f, 0.35f, 1.00f);
+    colors[ImGuiCol_ScrollbarGrabActive]    = ImVec4(0.45f, 0.45f, 0.45f, 1.00f);
+    
+    colors[ImGuiCol_CheckMark]              = highlightColor;
+    colors[ImGuiCol_SliderGrab]             = highlightColor;
+    colors[ImGuiCol_SliderGrabActive]       = highlightColor;
+    
+    colors[ImGuiCol_Button]                 = panelBgColor;
+    colors[ImGuiCol_ButtonHovered]          = ImVec4(0.20f, 0.20f, 0.20f, 1.00f);
+    colors[ImGuiCol_ButtonActive]           = highlightColor;
+    
+    colors[ImGuiCol_Header]                 = panelBgColor;
+    colors[ImGuiCol_HeaderHovered]          = ImVec4(0.20f, 0.20f, 0.20f, 1.00f);
+    colors[ImGuiCol_HeaderActive]           = highlightColor;
+    
+    colors[ImGuiCol_Separator]              = borderColor;
+    colors[ImGuiCol_SeparatorHovered]       = borderColor;
+    colors[ImGuiCol_SeparatorActive]        = borderColor;
+    
+    colors[ImGuiCol_ResizeGrip]             = ImVec4(1.00f, 1.00f, 1.00f, 0.05f);
+    colors[ImGuiCol_ResizeGripHovered]      = ImVec4(1.00f, 1.00f, 1.00f, 0.10f);
+    colors[ImGuiCol_ResizeGripActive]       = highlightColor;
+    
+    colors[ImGuiCol_Tab]                    = panelBgColor;
+    colors[ImGuiCol_TabHovered]             = ImVec4(0.20f, 0.20f, 0.20f, 1.00f);
+    colors[ImGuiCol_TabActive]              = bgColor; // Active tab merges into background
+    colors[ImGuiCol_TabUnfocused]           = panelBgColor;
+    colors[ImGuiCol_TabUnfocusedActive]     = bgColor;
+    
+    colors[ImGuiCol_DockingPreview]         = ImVec4(highlightColor.x, highlightColor.y, highlightColor.z, 0.40f);
+    colors[ImGuiCol_DockingEmptyBg]         = bgColor;
+}
+
+// style end
+
 EditorUI::EditorUI() : window(nullptr) {}
 
 EditorUI::~EditorUI() {
@@ -31,14 +119,23 @@ void EditorUI::Init(GLFWwindow *win) {
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
 
-    ImGui::StyleColorsDark();
+
+    io.Fonts->AddFontFromFileTTF("assets/JetBrainsMono-Regular.ttf", 16.0f);
+
+    SetupDarkTheme();
+
+    // When viewports are enabled we tweak WindowRounding/WindowBg so platform windows can look identical to regular ones.
+    ImGuiStyle& style = ImGui::GetStyle();
+    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+        style.WindowRounding = 0.0f;
+        style.Colors[ImGuiCol_WindowBg].w = 1.0f;
+    }
 
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init(GLSL_VERSION);
 
     initialized_ = true;
     shutdown_ = false;
-
 }
 
 void EditorUI::NewFrame() {
@@ -105,6 +202,9 @@ void EditorUI::AddDocument(const std::string& filename, const std::string& filep
     doc.filename = filename;
     doc.filepath = filepath;
     doc.editor.SetLanguageDefinition(TextEditor::LanguageDefinition::CPlusPlus());
+    auto palette = TextEditor::GetDarkPalette();
+    palette[(int)TextEditor::PaletteIndex::Background] = 0xff1e1e1e; // Matches your bgColor (#1e1e1e) in ImVec4(0.12, 0.12, 0.12)
+    doc.editor.SetPalette(palette);
     doc.editor.SetText(content);
     doc.lastKnownText = content;
     doc.isDirty = false;
@@ -152,6 +252,19 @@ void EditorUI::SetCompilationStatus(bool isCompiling, bool hasError, bool isStal
     isStalled_ = isStalled;
 }
 
+void EditorUI::SetDpiScale(float newScale) {
+    // Clamp the scale to prevent the UI from becoming unreadably small or impossibly large
+    if (newScale < 0.5f) newScale = 0.5f;
+    if (newScale > 3.0f) newScale = 3.0f;
+
+    float ratio = newScale / currentDpiScale_;
+    
+    ImGui::GetStyle().ScaleAllSizes(ratio);
+    ImGui::GetIO().FontGlobalScale = newScale;
+
+    currentDpiScale_ = newScale;
+}
+
 void EditorUI::DrawMenuBar() {
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
@@ -164,7 +277,22 @@ void EditorUI::DrawMenuBar() {
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Edit")) { ImGui::EndMenu(); }
-        if (ImGui::BeginMenu("View")) { ImGui::EndMenu(); }
+        
+        // --- Updated View Menu ---
+        if (ImGui::BeginMenu("View")) { 
+            if (ImGui::MenuItem("Increase DPI", "Ctrl++")) {
+                SetDpiScale(currentDpiScale_ + 0.1f);
+            }
+            if (ImGui::MenuItem("Decrease DPI", "Ctrl+-")) {
+                SetDpiScale(currentDpiScale_ - 0.1f);
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Reset DPI")) {
+                SetDpiScale(1.0f);
+            }
+            ImGui::EndMenu(); 
+        }
+        
         if (ImGui::BeginMenu("Help")) { ImGui::EndMenu(); }
 
         // Compile Status Indicator

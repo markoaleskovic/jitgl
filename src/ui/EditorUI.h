@@ -37,6 +37,7 @@ public:
     void SetActiveDocumentChangedCallback(std::function<void(const std::string&, const std::string&)> cb);
     void SetRendererTexture(unsigned int texture, int width, int height);
     void SetCompilationStatus(bool isCompiling, bool hasError, bool isStalled = false);
+    void SetupDarkTheme();
 
     void AddConsoleOutput(const std::string& text);
     void AddLogOutput(const std::string& text);
@@ -72,6 +73,9 @@ private:
     void DrawMenuBar();
     void DrawConsolePane();
     void DrawTextEditorPane();
+
+    float currentDpiScale_ = 1.0f;
+    void SetDpiScale(float newScale);
 
     bool shutdown_ = false;
     bool initialized_ = false;
