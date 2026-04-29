@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/home/mlesko/dev/jitgl/build/_deps/text_editor-subbuild/cmake_install.cmake"
-	],
-	"Parallel" : false
-}
