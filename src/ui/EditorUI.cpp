@@ -475,8 +475,12 @@ void EditorUI::DrawMenuBar() {
             currentWorkspace = activeWorkspaceName_;
         }
         if (!currentWorkspace.empty()) {
-            ImGui::SameLine();
-            ImGui::TextDisabled("Workspace: %s", currentWorkspace.c_str());
+            const std::string workspaceLabel = "Workspace: " + currentWorkspace;
+            const float centeredX = (ImGui::GetWindowWidth() - ImGui::CalcTextSize(workspaceLabel.c_str()).x) * 0.5f;
+            if (centeredX > 0.0f) {
+                ImGui::SetCursorPosX(centeredX);
+            }
+            ImGui::TextColored(ImVec4(0.82f, 0.82f, 0.82f, 1.0f), "%s", workspaceLabel.c_str());
         }
 
         // Compile Status Indicator
@@ -502,6 +506,23 @@ void EditorUI::DrawTextEditorPane() {
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar;
     ImGui::Begin("Code Editor", nullptr, flags);
 
+    constexpr float workspaceSidebarWidth = 165.0f;
+    ImGui::BeginChild("WorkspaceSidebar", ImVec2(workspaceSidebarWidth, 0.0f), true);
+    ImGui::TextUnformatted("Workspaces");
+    ImGui::Separator();
+    for (const auto& workspaceName : workspaceNames_) {
+        const bool selected = (workspaceName == activeWorkspaceName_);
+        if (ImGui::Selectable(workspaceName.c_str(), selected)) {
+            SetActiveWorkspace(workspaceName);
+            if (onWorkspaceSwitched_) {
+                onWorkspaceSwitched_(workspaceName);
+            }
+        }
+    }
+    ImGui::EndChild();
+
+    ImGui::SameLine();
+    ImGui::BeginChild("WorkspaceEditorArea", ImVec2(0.0f, 0.0f), false);
     if (ImGui::BeginTabBar("EditorTabs", ImGuiTabBarFlags_Reorderable | ImGuiTabBarFlags_AutoSelectNewTabs)) {
         double currentTime = ImGui::GetTime();
         bool drewAnyDocument = false;
@@ -560,6 +581,7 @@ void EditorUI::DrawTextEditorPane() {
         }
         ImGui::EndTabBar();
     }
+    ImGui::EndChild();
     ImGui::End();
 }
 void EditorUI::AddConsoleOutput(const std::string &text) {
