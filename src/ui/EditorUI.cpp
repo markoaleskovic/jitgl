@@ -578,6 +578,7 @@ void EditorUI::DrawWelcomePopup() {
 
             drawShortcutRow("Ctrl+Tab", "Switch active editor file (scene.cpp <-> shader.glsl)");
             drawShortcutRow("Ctrl+`", "Cycle to next workspace");
+            drawShortcutRow("Ctrl+N", "Open Create Workspace dialog");
             drawShortcutRow("Ctrl+1..9", "Jump directly to workspace 1..9");
             drawShortcutRow("Ctrl+0", "Jump directly to workspace 10");
             drawShortcutRow("Ctrl++ / Ctrl+-", "Increase / decrease UI DPI scale");
@@ -729,6 +730,7 @@ void EditorUI::HandleGlobalShortcuts() {
     const bool ctrlHeld = IsKeyDown(window, GLFW_KEY_LEFT_CONTROL) || IsKeyDown(window, GLFW_KEY_RIGHT_CONTROL);
     const bool superHeld = IsKeyDown(window, GLFW_KEY_LEFT_SUPER) || IsKeyDown(window, GLFW_KEY_RIGHT_SUPER);
     const bool canUseCtrlShortcuts = ctrlHeld && !superHeld;
+    const bool newWorkspaceHeld = IsKeyDown(window, GLFW_KEY_N);
     const bool tabHeld = IsKeyDown(window, GLFW_KEY_TAB);
     const bool plusHeld = IsKeyDown(window, GLFW_KEY_EQUAL) || IsKeyDown(window, GLFW_KEY_KP_ADD);
     const bool minusHeld = IsKeyDown(window, GLFW_KEY_MINUS) || IsKeyDown(window, GLFW_KEY_KP_SUBTRACT);
@@ -783,6 +785,12 @@ void EditorUI::HandleGlobalShortcuts() {
         SetDpiScale(currentDpiScale_ - 0.1f);
     }
     ctrlMinusChordHeld_ = ctrlMinusHeld;
+
+    const bool ctrlNewWorkspaceHeld = canUseCtrlShortcuts && newWorkspaceHeld;
+    if (ctrlNewWorkspaceHeld && !ctrlNewWorkspaceChordHeld_) {
+        openCreateWorkspacePopup_ = true;
+    }
+    ctrlNewWorkspaceChordHeld_ = ctrlNewWorkspaceHeld;
 }
 
 void EditorUI::ToggleActiveWorkspaceDocument() {
@@ -878,7 +886,7 @@ void EditorUI::DrawMenuBar() {
         std::string pendingWorkspaceDelete;
 
         if (ImGui::BeginMenu("File")) {
-            if (ImGui::MenuItem("New Workspace...")) {
+            if (ImGui::MenuItem("New Workspace...", "Ctrl+N")) {
                 openCreateWorkspacePopup_ = true;
             }
             if (ImGui::BeginMenu("Delete Workspace")) {
@@ -946,31 +954,60 @@ void EditorUI::DrawMenuBar() {
         if (openCreateWorkspacePopup_) {
             openCreateWorkspacePopup_ = false;
             newWorkspaceNameBuffer_[0] = '\0';
+            focusCreateWorkspaceNameInput_ = true;
             ImGui::OpenPopup("Create Workspace");
         }
 
-        if (ImGui::BeginPopupModal("Create Workspace", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::InputText("Name", newWorkspaceNameBuffer_, IM_ARRAYSIZE(newWorkspaceNameBuffer_));
-            const bool canCreate = newWorkspaceNameBuffer_[0] != '\0';
-
-            if (!canCreate) {
-                ImGui::BeginDisabled();
-            }
-            if (ImGui::Button("Create")) {
-                if (onCreateWorkspace_) {
-                    onCreateWorkspace_(newWorkspaceNameBuffer_);
+        const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowViewport(mainViewport->ID);
+        ImGui::SetNextWindowPos(mainViewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+        const ImGuiWindowFlags createWorkspacePopupFlags = ImGuiWindowFlags_AlwaysAutoResize |
+                                                           ImGuiWindowFlags_NoTitleBar |
+                                                           ImGuiWindowFlags_NoResize |
+                                                           ImGuiWindowFlags_NoMove;
+        if (ImGui::BeginPopupModal("Create Workspace", nullptr, createWorkspacePopupFlags)) {
+            const bool escapePressed = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+            if (escapePressed) {
+                newWorkspaceNameBuffer_[0] = '\0';
+                focusCreateWorkspaceNameInput_ = false;
+                ImGui::CloseCurrentPopup();
+            } else {
+                if (focusCreateWorkspaceNameInput_) {
+                    ImGui::SetKeyboardFocusHere();
                 }
-                newWorkspaceNameBuffer_[0] = '\0';
-                ImGui::CloseCurrentPopup();
-            }
-            if (!canCreate) {
-                ImGui::EndDisabled();
-            }
+                const bool submitFromEnter = ImGui::InputText(
+                    "Name",
+                    newWorkspaceNameBuffer_,
+                    IM_ARRAYSIZE(newWorkspaceNameBuffer_),
+                    ImGuiInputTextFlags_EnterReturnsTrue);
+                focusCreateWorkspaceNameInput_ = false;
+                const bool canCreate = newWorkspaceNameBuffer_[0] != '\0';
+                bool createRequested = canCreate && submitFromEnter;
 
-            ImGui::SameLine();
-            if (ImGui::Button("Cancel")) {
-                newWorkspaceNameBuffer_[0] = '\0';
-                ImGui::CloseCurrentPopup();
+                if (!canCreate) {
+                    ImGui::BeginDisabled();
+                }
+                if (ImGui::Button("Create")) {
+                    createRequested = true;
+                }
+                if (!canCreate) {
+                    ImGui::EndDisabled();
+                }
+                if (createRequested) {
+                    if (onCreateWorkspace_) {
+                        onCreateWorkspace_(newWorkspaceNameBuffer_);
+                    }
+                    newWorkspaceNameBuffer_[0] = '\0';
+                    focusCreateWorkspaceNameInput_ = false;
+                    ImGui::CloseCurrentPopup();
+                }
+
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel")) {
+                    newWorkspaceNameBuffer_[0] = '\0';
+                    focusCreateWorkspaceNameInput_ = false;
+                    ImGui::CloseCurrentPopup();
+                }
             }
             ImGui::EndPopup();
         }

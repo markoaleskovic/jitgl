@@ -4,7 +4,7 @@
 // Plain data, owned by Engine, passed into every JIT callback.
 // Never delete or store this pointer -- the host manages its lifetime.
 struct EngineContext {
-    float    time        = 0.0f;  // seconds since start
+    float    time        = 0.0f;  // active seconds for current workspace (paused while inactive)
     float    deltaTime   = 0.0f;  // seconds since last frame
     uint64_t frameCount  = 0;     // total frames rendered
     uint32_t reloadCount = 0;     // total hot-swaps performed

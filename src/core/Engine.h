@@ -58,6 +58,8 @@ private:
         std::array<uint32_t, 64> stateI{};
         std::array<float, 64> stateF{};
         void* userData = nullptr;
+        double accumulatedActiveSeconds = 0.0;
+        double activeClockStartSeconds = -1.0;
     };
 
     std::unordered_map<std::string, WorkspaceState> workspaces_;

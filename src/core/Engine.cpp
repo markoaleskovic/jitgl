@@ -685,7 +685,18 @@ void Engine::SwitchToWorkspace(const std::string& workspaceName, bool focusCppDo
         return;
     }
 
+    const double nowSeconds = glfwGetTime();
     if (activeWorkspaceName_ != workspaceName) {
+        auto previousWorkspaceIt = workspaces_.find(activeWorkspaceName_);
+        if (previousWorkspaceIt != workspaces_.end()) {
+            auto& previousWorkspace = previousWorkspaceIt->second;
+            if (previousWorkspace.activeClockStartSeconds >= 0.0) {
+                const double elapsed = std::max(0.0, nowSeconds - previousWorkspace.activeClockStartSeconds);
+                previousWorkspace.accumulatedActiveSeconds += elapsed;
+                previousWorkspace.activeClockStartSeconds = -1.0;
+            }
+        }
+
         if (activeProgram_) {
             ShutdownProgramIfInitialized(activeProgram_);
         }
@@ -693,7 +704,15 @@ void Engine::SwitchToWorkspace(const std::string& workspaceName, bool focusCppDo
         activeProgram_.reset();
         activeWorkspaceName_ = workspaceName;
         LoadWorkspaceRuntimeState(workspaceName);
+        workspaceIt = workspaces_.find(workspaceName);
+        if (workspaceIt == workspaces_.end()) {
+            return;
+        }
         ui_->SetActiveWorkspace(workspaceName);
+    }
+
+    if (workspaceIt->second.activeClockStartSeconds < 0.0) {
+        workspaceIt->second.activeClockStartSeconds = nowSeconds;
     }
 
     if (focusCppDocument) {
@@ -1194,7 +1213,16 @@ void Engine::Run() {
         ProcessCompileResults();
 
         ctx_.deltaTime = static_cast<float>(now - lastTime_);
-        ctx_.time = static_cast<float>(now);
+        ctx_.time = 0.0f;
+        auto activeWorkspaceIt = workspaces_.find(activeWorkspaceName_);
+        if (activeWorkspaceIt != workspaces_.end()) {
+            auto& activeWorkspace = activeWorkspaceIt->second;
+            if (activeWorkspace.activeClockStartSeconds < 0.0) {
+                activeWorkspace.activeClockStartSeconds = now;
+            }
+            const double elapsed = std::max(0.0, now - activeWorkspace.activeClockStartSeconds);
+            ctx_.time = static_cast<float>(activeWorkspace.accumulatedActiveSeconds + elapsed);
+        }
         ctx_.frameCount++;
         lastTime_ = now;
 

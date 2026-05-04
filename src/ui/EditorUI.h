@@ -119,12 +119,14 @@ private:
     bool ctrlTabChordHeld_ = false;
     bool ctrlPlusChordHeld_ = false;
     bool ctrlMinusChordHeld_ = false;
+    bool ctrlNewWorkspaceChordHeld_ = false;
     bool showWelcomeOnStartup_ = true;
     bool welcomePopupOpenedThisSession_ = false;
     bool openWelcomePopupRequested_ = false;
     bool doNotShowWelcomeAgain_ = false;
     bool openRuntimeGuidePopupRequested_ = false;
     bool runtimeGuidePopupOpenedThisSession_ = false;
+    bool focusCreateWorkspaceNameInput_ = false;
 
     bool shutdown_ = false;
     bool initialized_ = false;
