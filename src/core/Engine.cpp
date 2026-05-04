@@ -236,39 +236,60 @@ bool Engine::InitUI() {
 }
 
 bool Engine::InitJIT() {
-    jit_ = std::make_shared<JitEngine>();
-    jit_->SetOutputCallback([this](const std::string& msg) {
+    auto nextJit = std::make_shared<JitEngine>();
+    nextJit->SetOutputCallback([this](const std::string& msg) {
         ui_->AddLogOutput(msg);
     });
 
-    if (!jit_->Init(PREAMBLE_PATH)) {
+    if (!nextJit->Init(PREAMBLE_PATH)) {
         ui_->AddLogOutput("[Engine] JIT engine failed to initialize.");
         return false;
     }
 
+    jit_ = std::move(nextJit);
     compileThreadRunning_ = std::make_shared<std::atomic<bool>>(true);
-    compileThread_ = std::thread([this, running = compileThreadRunning_]() {
+    compileThreadExited_ = std::make_shared<std::atomic<bool>>(false);
+    compileThread_ = std::thread([this, running = compileThreadRunning_, exited = compileThreadExited_]() {
         CompileThreadMain(running);
+        exited->store(true);
     });
 
     return true;
 }
 
 void Engine::ResetJIT() {
-    ui_->AddLogOutput("[JIT] Compilation stalled for too long. Resetting JIT engine...");
+    if (resetRequested_) {
+        return;
+    }
 
-    // 1. Signal the current thread to stop
+    resetRequested_ = true;
+    resetWaitLogged_ = false;
+    ui_->AddLogOutput("[JIT] Compilation stalled for too long. Restart requested.");
+
     if (compileThreadRunning_) {
         compileThreadRunning_->store(false);
     }
     compileCv_.notify_all();
+}
 
-    // 2. Detach the thread since it's stalled and won't join quickly
-    if (compileThread_.joinable()) {
-        compileThread_.detach();
+void Engine::CompletePendingJITReset() {
+    if (!resetRequested_) {
+        return;
     }
 
-    // 3. Reset internal compile state
+    if (!compileThreadExited_ || !compileThreadExited_->load()) {
+        if (!resetWaitLogged_) {
+            ui_->AddLogOutput("[JIT] Waiting for compile thread to finish before restart.");
+            resetWaitLogged_ = true;
+        }
+        ui_->SetCompilationStatus(true, !compileFailures_.empty(), true);
+        return;
+    }
+
+    if (compileThread_.joinable()) {
+        compileThread_.join();
+    }
+
     {
         std::lock_guard<std::mutex> lock(compileMutex_);
         compileJobs_.clear();
@@ -277,8 +298,15 @@ void Engine::ResetJIT() {
         inFlightStartTime_ = 0.0;
     }
 
-    // 4. Start a fresh JIT engine and thread
-    InitJIT();
+    resetRequested_ = false;
+    resetWaitLogged_ = false;
+
+    if (!InitJIT()) {
+        ui_->AddLogOutput("[Engine] Failed to restart JIT engine after stall.");
+        return;
+    }
+
+    ui_->AddLogOutput("[JIT] JIT engine restarted.");
 }
 
 bool Engine::InitWatcher() {
@@ -415,6 +443,11 @@ void Engine::QueueCompile(const std::string& filepath, const std::string& source
 }
 
 void Engine::SubmitDueCompiles(double nowSeconds) {
+    if (resetRequested_) {
+        ui_->SetCompilationStatus(true, !compileFailures_.empty(), true);
+        return;
+    }
+
     std::vector<std::string> duePaths;
     for (const auto& pending : pendingCompilesAt_) {
         if (pending.second <= nowSeconds) {
@@ -425,65 +458,78 @@ void Engine::SubmitDueCompiles(double nowSeconds) {
     if (duePaths.empty()) {
         bool inFlight = false;
         bool stalled = false;
+        bool shouldReset = false;
         {
             std::lock_guard<std::mutex> lock(compileMutex_);
             inFlight = !compileJobs_.empty() || !inFlightSourceHashes_.empty();
             if (inFlight && inFlightStartTime_ > 0.0) {
-                if (nowSeconds - inFlightStartTime_ > 5.0) {
+                const double inFlightSeconds = nowSeconds - inFlightStartTime_;
+                if (inFlightSeconds > 5.0) {
                     stalled = true;
                 }
-                if (nowSeconds - inFlightStartTime_ > 10.0) {
-                    ResetJIT();
-                    return;
-                }
+                shouldReset = (inFlightSeconds > 10.0);
             }
         }
+
+        if (shouldReset) {
+            ResetJIT();
+            ui_->SetCompilationStatus(true, !compileFailures_.empty(), true);
+            return;
+        }
+
         ui_->SetCompilationStatus(inFlight, !compileFailures_.empty(), stalled);
         return;
     }
 
     bool stalled = false;
+    bool shouldReset = false;
     {
         std::lock_guard<std::mutex> lock(compileMutex_);
         if (!inFlightSourceHashes_.empty() && inFlightStartTime_ > 0.0) {
-            if (nowSeconds - inFlightStartTime_ > 5.0) {
+            const double inFlightSeconds = nowSeconds - inFlightStartTime_;
+            if (inFlightSeconds > 5.0) {
                 stalled = true;
             }
-            if (nowSeconds - inFlightStartTime_ > 10.0) {
-                ResetJIT();
-                return;
-            }
+            shouldReset = (inFlightSeconds > 10.0);
         }
 
-        for (const auto& path : duePaths) {
-            auto sourceIt = latestSources_.find(path);
-            if (sourceIt == latestSources_.end()) {
-                continue;
-            }
-            const std::size_t sourceHash = std::hash<std::string>{}(sourceIt->second);
+        if (!shouldReset) {
+            for (const auto& path : duePaths) {
+                auto sourceIt = latestSources_.find(path);
+                if (sourceIt == latestSources_.end()) {
+                    continue;
+                }
+                const std::size_t sourceHash = std::hash<std::string>{}(sourceIt->second);
 
-            auto inFlightIt = inFlightSourceHashes_.find(path);
-            if (inFlightIt != inFlightSourceHashes_.end() && inFlightIt->second == sourceHash) {
+                auto inFlightIt = inFlightSourceHashes_.find(path);
+                if (inFlightIt != inFlightSourceHashes_.end() && inFlightIt->second == sourceHash) {
+                    pendingCompilesAt_.erase(path);
+                    continue;
+                }
+
+                const bool alreadyQueued = std::any_of(compileJobs_.begin(), compileJobs_.end(), [&](const CompileJob& job) {
+                    return job.filepath == path && job.sourceHash == sourceHash;
+                });
+                if (alreadyQueued) {
+                    pendingCompilesAt_.erase(path);
+                    continue;
+                }
+
+                compileJobs_.erase(std::remove_if(compileJobs_.begin(), compileJobs_.end(),
+                                                  [&](const CompileJob& job) {
+                                                      return job.filepath == path;
+                                                  }),
+                                   compileJobs_.end());
+                compileJobs_.push_back(CompileJob{ path, sourceIt->second, sourceHash });
                 pendingCompilesAt_.erase(path);
-                continue;
             }
-
-            const bool alreadyQueued = std::any_of(compileJobs_.begin(), compileJobs_.end(), [&](const CompileJob& job) {
-                return job.filepath == path && job.sourceHash == sourceHash;
-            });
-            if (alreadyQueued) {
-                pendingCompilesAt_.erase(path);
-                continue;
-            }
-
-            compileJobs_.erase(std::remove_if(compileJobs_.begin(), compileJobs_.end(),
-                                              [&](const CompileJob& job) {
-                                                  return job.filepath == path;
-                                              }),
-                               compileJobs_.end());
-            compileJobs_.push_back(CompileJob{ path, sourceIt->second, sourceHash });
-            pendingCompilesAt_.erase(path);
         }
+    }
+
+    if (shouldReset) {
+        ResetJIT();
+        ui_->SetCompilationStatus(true, !compileFailures_.empty(), true);
+        return;
     }
 
     compileCv_.notify_one();
@@ -654,6 +700,7 @@ void Engine::Run() {
 
         const double now = glfwGetTime();
         ProcessPendingReloads(now);
+        CompletePendingJITReset();
         SubmitDueCompiles(now);
         ProcessCompileResults();
 
@@ -703,6 +750,7 @@ void Engine::Shutdown() {
         watcher_.reset();
     }
 
+    bool detachedCompileThread = false;
     if (compileThreadRunning_) {
         compileThreadRunning_->store(false);
     }
@@ -712,6 +760,7 @@ void Engine::Shutdown() {
         if (inFlightStartTime_ > 0.0 && (glfwGetTime() - inFlightStartTime_ > 5.0)) {
             if (ui_) ui_->AddLogOutput("[Engine] Compile thread stalled during shutdown. Detaching.");
             compileThread_.detach();
+            detachedCompileThread = true;
         } else {
             compileThread_.join();
         }
@@ -738,7 +787,11 @@ void Engine::Shutdown() {
     compileRetryAfter_.clear();
 
     if (jit_) {
-        jit_->Terminate();
+        if (!detachedCompileThread) {
+            jit_->Terminate();
+        } else {
+            jit_->SetOutputCallback(nullptr);
+        }
         jit_.reset();
     }
 

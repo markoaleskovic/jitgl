@@ -86,11 +86,15 @@ private:
     double inFlightStartTime_ = 0.0;
     std::thread compileThread_;
     std::shared_ptr<std::atomic<bool>> compileThreadRunning_;
+    std::shared_ptr<std::atomic<bool>> compileThreadExited_;
     std::unordered_map<std::string, CompileFailureState> compileFailures_;
     std::unordered_map<std::string, double> compileRetryAfter_;
     std::unordered_map<std::string, std::deque<double>> recentErrors_;
+    bool resetRequested_ = false;
+    bool resetWaitLogged_ = false;
 
     void ResetJIT();
+    void CompletePendingJITReset();
     void OnFileChanged(const std::string& filepath);
     void ProcessPendingReloads(double nowSeconds);
 

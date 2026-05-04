@@ -45,6 +45,9 @@ private:
     std::vector<std::string> argStorage_;
 
     std::unique_ptr<clang::Interpreter> createInterpreter() const;
+    bool RunPreflightSyntaxCheck(const std::string& sourceName,
+                                 const std::string& fullSource,
+                                 std::string* diagnostics) const;
     bool lookupFunctions(clang::Interpreter& interpreter, JitFunctions* outFunctions);
     void log(const std::string& msg);
     bool terminated_ = false;
