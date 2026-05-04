@@ -22,6 +22,14 @@ namespace {
     const ImVec4 kPanelBgColor = ImVec4(0.14f, 0.14f, 0.14f, 1.00f);
     const ImVec4 kUtilityPaneBgColor = ImVec4(0.09f, 0.09f, 0.09f, 1.00f);
     const ImVec4 kUtilityPaneChildBgColor = ImVec4(0.10f, 0.10f, 0.10f, 1.00f);
+
+    bool IsKeyDown(GLFWwindow* window, int key) {
+        return window != nullptr && glfwGetKey(window, key) == GLFW_PRESS;
+    }
+
+    std::string BuildWorkspaceDisplayLabel(const std::string& workspaceName, std::size_t index) {
+        return std::to_string(index + 1) + ": " + workspaceName;
+    }
 }
 
 // style start
@@ -159,6 +167,13 @@ void EditorUI::Init(GLFWwindow *win) {
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
 
+    // Disable Dear ImGui's default Ctrl+Tab/Super+Tab window switcher so Ctrl+Tab can switch editor files.
+    ImGuiContext* context = ImGui::GetCurrentContext();
+    if (context != nullptr) {
+        context->ConfigNavWindowingKeyNext = ImGuiKey_None;
+        context->ConfigNavWindowingKeyPrev = ImGuiKey_None;
+    }
+
     ReloadFontAtlas(currentDpiScale_, false);
 
     SetupDarkTheme();
@@ -196,6 +211,7 @@ void EditorUI::NewFrame() {
 }
 
 void EditorUI::Draw() {
+    HandleGlobalShortcuts();
     DrawMenuBar();
     SetupDockspace();
     DrawTextEditorPane();
@@ -287,6 +303,7 @@ void EditorUI::UpdateDocumentContent(const std::string& filepath, const std::str
 
 void EditorUI::SetActiveDocument(const std::string& filepath) {
     activeDocumentPath_ = filepath;
+    pendingDocumentSelectionPath_ = filepath;
 }
 
 void EditorUI::SetSaveCallback(std::function<bool(const std::string&, const std::string&)> cb) {
@@ -372,6 +389,7 @@ void EditorUI::SetActiveWorkspace(const std::string& workspaceName) {
         });
         if (firstWorkspaceDoc != openDocuments.end()) {
             activeDocumentPath_ = firstWorkspaceDoc->filepath;
+            pendingDocumentSelectionPath_ = activeDocumentPath_;
         }
     }
 
@@ -429,6 +447,151 @@ void EditorUI::SetDpiScale(float newScale) {
     pendingDpiScale_ = newScale;
 }
 
+void EditorUI::HandleGlobalShortcuts() {
+    const bool ctrlHeld = IsKeyDown(window, GLFW_KEY_LEFT_CONTROL) || IsKeyDown(window, GLFW_KEY_RIGHT_CONTROL);
+    const bool superHeld = IsKeyDown(window, GLFW_KEY_LEFT_SUPER) || IsKeyDown(window, GLFW_KEY_RIGHT_SUPER);
+    const bool canUseCtrlShortcuts = ctrlHeld && !superHeld;
+    const bool tabHeld = IsKeyDown(window, GLFW_KEY_TAB);
+    const bool plusHeld = IsKeyDown(window, GLFW_KEY_EQUAL) || IsKeyDown(window, GLFW_KEY_KP_ADD);
+    const bool minusHeld = IsKeyDown(window, GLFW_KEY_MINUS) || IsKeyDown(window, GLFW_KEY_KP_SUBTRACT);
+    const bool workspaceCycleHeld = IsKeyDown(window, GLFW_KEY_GRAVE_ACCENT);
+
+    const bool ctrlWorkspaceCycleHeld = canUseCtrlShortcuts && workspaceCycleHeld;
+    if (ctrlWorkspaceCycleHeld && !ctrlWorkspaceCycleChordHeld_) {
+        CycleWorkspace(1);
+    }
+    ctrlWorkspaceCycleChordHeld_ = ctrlWorkspaceCycleHeld;
+
+    auto numberShortcutHeld = [this, canUseCtrlShortcuts](std::size_t index) {
+        if (!canUseCtrlShortcuts) {
+            return false;
+        }
+        switch (index) {
+            case 0: return IsKeyDown(window, GLFW_KEY_1) || IsKeyDown(window, GLFW_KEY_KP_1);
+            case 1: return IsKeyDown(window, GLFW_KEY_2) || IsKeyDown(window, GLFW_KEY_KP_2);
+            case 2: return IsKeyDown(window, GLFW_KEY_3) || IsKeyDown(window, GLFW_KEY_KP_3);
+            case 3: return IsKeyDown(window, GLFW_KEY_4) || IsKeyDown(window, GLFW_KEY_KP_4);
+            case 4: return IsKeyDown(window, GLFW_KEY_5) || IsKeyDown(window, GLFW_KEY_KP_5);
+            case 5: return IsKeyDown(window, GLFW_KEY_6) || IsKeyDown(window, GLFW_KEY_KP_6);
+            case 6: return IsKeyDown(window, GLFW_KEY_7) || IsKeyDown(window, GLFW_KEY_KP_7);
+            case 7: return IsKeyDown(window, GLFW_KEY_8) || IsKeyDown(window, GLFW_KEY_KP_8);
+            case 8: return IsKeyDown(window, GLFW_KEY_9) || IsKeyDown(window, GLFW_KEY_KP_9);
+            case 9: return IsKeyDown(window, GLFW_KEY_0) || IsKeyDown(window, GLFW_KEY_KP_0);
+            default: return false;
+        }
+    };
+    for (std::size_t i = 0; i < ctrlWorkspaceIndexChordHeld_.size(); ++i) {
+        const bool held = numberShortcutHeld(i);
+        if (held && !ctrlWorkspaceIndexChordHeld_[i]) {
+            ActivateWorkspaceByIndex(i);
+        }
+        ctrlWorkspaceIndexChordHeld_[i] = held;
+    }
+
+    const bool ctrlTabHeld = canUseCtrlShortcuts && tabHeld;
+    if (ctrlTabHeld && !ctrlTabChordHeld_) {
+        ToggleActiveWorkspaceDocument();
+    }
+    ctrlTabChordHeld_ = ctrlTabHeld;
+
+    const bool ctrlPlusHeld = canUseCtrlShortcuts && plusHeld;
+    if (ctrlPlusHeld && !ctrlPlusChordHeld_) {
+        SetDpiScale(currentDpiScale_ + 0.1f);
+    }
+    ctrlPlusChordHeld_ = ctrlPlusHeld;
+
+    const bool ctrlMinusHeld = canUseCtrlShortcuts && minusHeld;
+    if (ctrlMinusHeld && !ctrlMinusChordHeld_) {
+        SetDpiScale(currentDpiScale_ - 0.1f);
+    }
+    ctrlMinusChordHeld_ = ctrlMinusHeld;
+}
+
+void EditorUI::ToggleActiveWorkspaceDocument() {
+    if (activeWorkspaceName_.empty()) {
+        return;
+    }
+
+    std::vector<std::size_t> activeWorkspaceDocIndices;
+    activeWorkspaceDocIndices.reserve(openDocuments.size());
+    for (std::size_t i = 0; i < openDocuments.size(); ++i) {
+        const Document& doc = openDocuments[i];
+        if (!doc.isOpen || doc.workspaceName != activeWorkspaceName_) {
+            continue;
+        }
+        activeWorkspaceDocIndices.push_back(i);
+    }
+
+    if (activeWorkspaceDocIndices.empty()) {
+        return;
+    }
+
+    std::size_t targetDocListIndex = 0;
+    auto activeDocIt = std::find_if(activeWorkspaceDocIndices.begin(),
+                                    activeWorkspaceDocIndices.end(),
+                                    [&](std::size_t docIndex) {
+                                        return openDocuments[docIndex].filepath == activeDocumentPath_;
+                                    });
+    if (activeDocIt != activeWorkspaceDocIndices.end()) {
+        const std::size_t currentPosition = static_cast<std::size_t>(
+            std::distance(activeWorkspaceDocIndices.begin(), activeDocIt));
+        targetDocListIndex = (currentPosition + 1) % activeWorkspaceDocIndices.size();
+    }
+
+    const Document& targetDocument = openDocuments[activeWorkspaceDocIndices[targetDocListIndex]];
+    if (targetDocument.filepath == activeDocumentPath_) {
+        return;
+    }
+
+    activeDocumentPath_ = targetDocument.filepath;
+    pendingDocumentSelectionPath_ = targetDocument.filepath;
+    if (onActiveDocumentChanged_) {
+        onActiveDocumentChanged_(targetDocument.filepath, targetDocument.lastKnownText);
+    }
+}
+
+void EditorUI::CycleWorkspace(int direction) {
+    if (workspaceNames_.empty()) {
+        return;
+    }
+
+    auto activeIt = std::find(workspaceNames_.begin(), workspaceNames_.end(), activeWorkspaceName_);
+    std::size_t activeIndex = 0;
+    if (activeIt != workspaceNames_.end()) {
+        activeIndex = static_cast<std::size_t>(std::distance(workspaceNames_.begin(), activeIt));
+    }
+
+    const int workspaceCount = static_cast<int>(workspaceNames_.size());
+    int nextIndex = static_cast<int>(activeIndex);
+    nextIndex = (nextIndex + direction) % workspaceCount;
+    if (nextIndex < 0) {
+        nextIndex += workspaceCount;
+    }
+
+    const std::size_t nextWorkspaceIndex = static_cast<std::size_t>(nextIndex);
+    if (workspaceNames_[nextWorkspaceIndex] == activeWorkspaceName_) {
+        return;
+    }
+
+    ActivateWorkspaceByIndex(nextWorkspaceIndex);
+}
+
+void EditorUI::ActivateWorkspaceByIndex(std::size_t index) {
+    if (index >= workspaceNames_.size()) {
+        return;
+    }
+
+    const std::string& workspaceName = workspaceNames_[index];
+    if (workspaceName == activeWorkspaceName_) {
+        return;
+    }
+
+    SetActiveWorkspace(workspaceName);
+    if (onWorkspaceSwitched_) {
+        onWorkspaceSwitched_(workspaceName);
+    }
+}
+
 void EditorUI::DrawMenuBar() {
     if (ImGui::BeginMainMenuBar()) {
         const std::vector<std::string> workspaceNamesSnapshot = workspaceNames_;
@@ -444,8 +607,10 @@ void EditorUI::DrawMenuBar() {
                 if (!canDeleteAnyWorkspace) {
                     ImGui::BeginDisabled();
                 }
-                for (const auto& workspaceName : workspaceNamesSnapshot) {
-                    if (ImGui::MenuItem(workspaceName.c_str())) {
+                for (std::size_t i = 0; i < workspaceNamesSnapshot.size(); ++i) {
+                    const std::string& workspaceName = workspaceNamesSnapshot[i];
+                    const std::string workspaceLabel = BuildWorkspaceDisplayLabel(workspaceName, i);
+                    if (ImGui::MenuItem(workspaceLabel.c_str())) {
                         pendingWorkspaceDelete = workspaceName;
                     }
                 }
@@ -463,9 +628,11 @@ void EditorUI::DrawMenuBar() {
         }
 
         if (ImGui::BeginMenu("Workspace")) {
-            for (const auto& workspaceName : workspaceNamesSnapshot) {
+            for (std::size_t i = 0; i < workspaceNamesSnapshot.size(); ++i) {
+                const std::string& workspaceName = workspaceNamesSnapshot[i];
+                const std::string workspaceLabel = BuildWorkspaceDisplayLabel(workspaceName, i);
                 const bool selected = (workspaceName == activeWorkspaceName_);
-                if (ImGui::MenuItem(workspaceName.c_str(), nullptr, selected)) {
+                if (ImGui::MenuItem(workspaceLabel.c_str(), nullptr, selected)) {
                     pendingWorkspaceSwitch = workspaceName;
                 }
             }
@@ -526,7 +693,15 @@ void EditorUI::DrawMenuBar() {
             currentWorkspace = activeWorkspaceName_;
         }
         if (!currentWorkspace.empty()) {
-            const std::string workspaceLabel = "Workspace: " + currentWorkspace;
+            std::string workspaceLabel = "Workspace: " + currentWorkspace;
+            auto activeWorkspaceIt = std::find(workspaceNamesSnapshot.begin(),
+                                               workspaceNamesSnapshot.end(),
+                                               currentWorkspace);
+            if (activeWorkspaceIt != workspaceNamesSnapshot.end()) {
+                const std::size_t activeWorkspaceIndex = static_cast<std::size_t>(
+                    std::distance(workspaceNamesSnapshot.begin(), activeWorkspaceIt));
+                workspaceLabel = "Workspace " + std::to_string(activeWorkspaceIndex + 1) + ": " + currentWorkspace;
+            }
             const float centeredX = (ImGui::GetWindowWidth() - ImGui::CalcTextSize(workspaceLabel.c_str()).x) * 0.5f;
             if (centeredX > 0.0f) {
                 ImGui::SetCursorPosX(centeredX);
@@ -575,14 +750,16 @@ void EditorUI::DrawTextEditorPane() {
     const bool canDeleteAnyWorkspace = workspaceNamesSnapshot.size() > 1;
     std::string pendingWorkspaceSwitch;
     std::string pendingWorkspaceDelete;
-    for (const auto& workspaceName : workspaceNamesSnapshot) {
+    for (std::size_t i = 0; i < workspaceNamesSnapshot.size(); ++i) {
+        const std::string& workspaceName = workspaceNamesSnapshot[i];
+        const std::string workspaceLabel = BuildWorkspaceDisplayLabel(workspaceName, i);
         ImGui::PushID(workspaceName.c_str());
         const bool selected = (workspaceName == activeWorkspaceName_);
         const float rowWidth = ImGui::GetContentRegionAvail().x;
         const float deleteButtonWidth = canDeleteAnyWorkspace ? (ImGui::GetFrameHeight() - 2.0f) : 0.0f;
         const float selectableWidth = canDeleteAnyWorkspace ? std::max(1.0f, rowWidth - deleteButtonWidth - 6.0f)
                                                             : rowWidth;
-        if (ImGui::Selectable(workspaceName.c_str(), selected, 0, ImVec2(selectableWidth, 0.0f))) {
+        if (ImGui::Selectable(workspaceLabel.c_str(), selected, 0, ImVec2(selectableWidth, 0.0f))) {
             pendingWorkspaceSwitch = workspaceName;
         }
 
@@ -625,6 +802,8 @@ void EditorUI::DrawTextEditorPane() {
     if (ImGui::BeginTabBar("EditorTabs", ImGuiTabBarFlags_Reorderable | ImGuiTabBarFlags_AutoSelectNewTabs)) {
         double currentTime = ImGui::GetTime();
         bool drewAnyDocument = false;
+        bool pendingSelectionVisible = false;
+        bool pendingSelectionConsumed = false;
 
         for (auto &doc: openDocuments) {
             if (!doc.isOpen) continue;
@@ -632,8 +811,17 @@ void EditorUI::DrawTextEditorPane() {
             drewAnyDocument = true;
 
             ImGuiTabItemFlags tabFlags = doc.isDirty ? ImGuiTabItemFlags_UnsavedDocument : ImGuiTabItemFlags_None;
+            if (!pendingDocumentSelectionPath_.empty() &&
+                doc.filepath == pendingDocumentSelectionPath_) {
+                pendingSelectionVisible = true;
+                tabFlags |= ImGuiTabItemFlags_SetSelected;
+            }
 
             if (ImGui::BeginTabItem(doc.filename.c_str(), &doc.isOpen, tabFlags)) {
+                if (!pendingDocumentSelectionPath_.empty() &&
+                    doc.filepath == pendingDocumentSelectionPath_) {
+                    pendingSelectionConsumed = true;
+                }
                 if (activeDocumentPath_ != doc.filepath) {
                     activeDocumentPath_ = doc.filepath;
                     if (onActiveDocumentChanged_) {
@@ -654,6 +842,11 @@ void EditorUI::DrawTextEditorPane() {
                 }
                 ImGui::EndTabItem();
             }
+        }
+
+        if (!pendingDocumentSelectionPath_.empty() &&
+            (pendingSelectionConsumed || !pendingSelectionVisible)) {
+            pendingDocumentSelectionPath_.clear();
         }
 
         for (auto& doc : openDocuments) {

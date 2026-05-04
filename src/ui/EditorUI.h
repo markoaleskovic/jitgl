@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <array>
 #include <mutex>
 #include <functional>
 #include <unordered_map>
@@ -83,6 +84,7 @@ private:
     std::function<void(const std::string&, const std::string&, bool)> onWorkspaceLineAppended_;
 
     std::string activeDocumentPath_;
+    std::string pendingDocumentSelectionPath_;
     unsigned int rendererTexture_ = 0;
     int rendererTextureWidth_ = 0;
     int rendererTextureHeight_ = 0;
@@ -103,6 +105,15 @@ private:
     void ReloadFontAtlas(float dpiScale, bool recreateTexture);
     void ApplyPendingDpiScale();
     void SetDpiScale(float newScale);
+    void HandleGlobalShortcuts();
+    void ToggleActiveWorkspaceDocument();
+    void CycleWorkspace(int direction);
+    void ActivateWorkspaceByIndex(std::size_t index);
+    bool ctrlWorkspaceCycleChordHeld_ = false;
+    std::array<bool, 10> ctrlWorkspaceIndexChordHeld_{};
+    bool ctrlTabChordHeld_ = false;
+    bool ctrlPlusChordHeld_ = false;
+    bool ctrlMinusChordHeld_ = false;
 
     bool shutdown_ = false;
     bool initialized_ = false;
