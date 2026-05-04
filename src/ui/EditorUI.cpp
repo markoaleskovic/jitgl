@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cmath>
+#include <fstream>
 
 namespace {
     constexpr double AUTOSAVE_DEBOUNCE_SECONDS = 0.05;
@@ -17,6 +18,7 @@ namespace {
     constexpr const char* FONT_PATH = "assets/JetBrainsMono-Regular.ttf";
     constexpr float BASE_FONT_SIZE = 16.0f;
     constexpr const char* FALLBACK_WORKSPACE_NAME = "default";
+    constexpr const char* WELCOME_PREFS_FILE = ".jitgl_welcome_prefs";
 
     const ImVec4 kEditorPaneBgColor = ImVec4(0.12f, 0.12f, 0.12f, 1.00f);
     const ImVec4 kPanelBgColor = ImVec4(0.14f, 0.14f, 0.14f, 1.00f);
@@ -126,6 +128,30 @@ EditorUI::~EditorUI() {
     Shutdown();
 }
 
+void EditorUI::LoadWelcomePreference() {
+    showWelcomeOnStartup_ = true;
+
+    std::ifstream inFile(WELCOME_PREFS_FILE, std::ios::binary);
+    if (!inFile.is_open()) {
+        return;
+    }
+
+    std::string value;
+    std::getline(inFile, value);
+    if (value == "hide=1") {
+        showWelcomeOnStartup_ = false;
+    }
+}
+
+void EditorUI::SaveWelcomePreference() const {
+    std::ofstream outFile(WELCOME_PREFS_FILE, std::ios::trunc | std::ios::binary);
+    if (!outFile.is_open()) {
+        return;
+    }
+
+    outFile << (showWelcomeOnStartup_ ? "hide=0\n" : "hide=1\n");
+}
+
 void EditorUI::ReloadFontAtlas(float dpiScale, bool recreateTexture) {
     ImGuiIO& io = ImGui::GetIO();
 
@@ -188,6 +214,11 @@ void EditorUI::Init(GLFWwindow *win) {
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init(GLSL_VERSION);
 
+    LoadWelcomePreference();
+    openWelcomePopupRequested_ = showWelcomeOnStartup_;
+    welcomePopupOpenedThisSession_ = false;
+    doNotShowWelcomeAgain_ = false;
+
     initialized_ = true;
     shutdown_ = false;
 }
@@ -216,6 +247,8 @@ void EditorUI::Draw() {
     SetupDockspace();
     DrawTextEditorPane();
     DrawConsolePane();
+    DrawWelcomePopup();
+    DrawRuntimeGuidePopup();
 }
 
 void EditorUI::SetupDockspace() {
@@ -447,6 +480,223 @@ void EditorUI::SetDpiScale(float newScale) {
     pendingDpiScale_ = newScale;
 }
 
+void EditorUI::DrawWelcomePopup() {
+    if (openWelcomePopupRequested_ && !welcomePopupOpenedThisSession_) {
+        doNotShowWelcomeAgain_ = !showWelcomeOnStartup_;
+        ImGui::OpenPopup("Welcome to JITGL");
+        welcomePopupOpenedThisSession_ = true;
+    }
+
+    if (welcomePopupOpenedThisSession_ && !ImGui::IsPopupOpen("Welcome to JITGL")) {
+        openWelcomePopupRequested_ = false;
+        welcomePopupOpenedThisSession_ = false;
+        return;
+    }
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowViewport(viewport->ID);
+    ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(860.0f, 680.0f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(720.0f, 520.0f),
+                                        ImVec2(viewport->WorkSize.x * 0.96f, viewport->WorkSize.y * 0.96f));
+
+    const ImGuiWindowFlags popupFlags =
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking;
+    if (!ImGui::BeginPopupModal("Welcome to JITGL", nullptr, popupFlags)) {
+        return;
+    }
+
+    const ImVec4 titleColor = ImVec4(0.38f, 0.78f, 1.0f, 1.0f);
+    const ImVec4 sectionColor = ImVec4(0.94f, 0.75f, 0.37f, 1.0f);
+    const ImVec4 keyColor = ImVec4(0.62f, 0.89f, 1.0f, 1.0f);
+    const ImVec4 noteColor = ImVec4(0.73f, 0.86f, 0.73f, 1.0f);
+
+    const float footerReserve = ImGui::GetFrameHeightWithSpacing() * 2.5f;
+    if (ImGui::BeginChild("WelcomeScrollableContent", ImVec2(0.0f, -footerReserve), false,
+                          ImGuiWindowFlags_AlwaysVerticalScrollbar)) {
+        auto bulletWrapped = [] (const char* text) {
+            ImGui::Bullet();
+            ImGui::SameLine();
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextUnformatted(text);
+            ImGui::PopTextWrapPos();
+        };
+
+        ImGui::TextColored(titleColor, "JITGL");
+        ImGui::TextWrapped("Live C++ + GLSL playground with per-workspace runtime state.");
+        ImGui::Separator();
+
+        ImGui::TextColored(sectionColor, "How It Works");
+        bulletWrapped("Each workspace has two files: scene.cpp and shader.glsl.");
+        bulletWrapped("scene.cpp is JIT-compiled C++ and drives frame updates/rendering.");
+        bulletWrapped("shader.glsl contains your GPU shaders and is hot-swapped with scene.cpp.");
+        bulletWrapped("Edits auto-save and hot-reload while preserving workspace-specific state arrays.");
+        ImGui::Separator();
+
+        ImGui::TextColored(sectionColor, "Shortcuts");
+        if (ImGui::BeginTable("WelcomeShortcuts", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp)) {
+            ImGui::TableSetupColumn("Shortcut", ImGuiTableColumnFlags_WidthFixed, 180.0f);
+            ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthStretch);
+
+            auto drawShortcutRow = [&](const char* combo, const char* action) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextColored(keyColor, "%s", combo);
+                ImGui::TableSetColumnIndex(1);
+                ImGui::PushTextWrapPos(0.0f);
+                ImGui::TextUnformatted(action);
+                ImGui::PopTextWrapPos();
+            };
+
+            drawShortcutRow("Ctrl+Tab", "Switch active editor file (scene.cpp <-> shader.glsl)");
+            drawShortcutRow("Ctrl+`", "Cycle to next workspace");
+            drawShortcutRow("Ctrl+1..9", "Jump directly to workspace 1..9");
+            drawShortcutRow("Ctrl+0", "Jump directly to workspace 10");
+            drawShortcutRow("Ctrl++ / Ctrl+-", "Increase / decrease UI DPI scale");
+            ImGui::EndTable();
+        }
+        ImGui::Separator();
+
+        ImGui::TextColored(sectionColor, "scene.cpp Compile Requirements");
+        bulletWrapped("Compiled as C++20 with engine/OpenGL helpers pre-injected.");
+        bulletWrapped("Define at least one entry point with extern \"C\": init, update, renderFrame, shutdown.");
+        bulletWrapped("Use EngineContext* ctx signature for those entry points.");
+        bulletWrapped("Shader access macros are injected: JIT_WORKSPACE_VERTEX_SHADER, JIT_WORKSPACE_FRAGMENT_SHADER, JIT_WORKSPACE_SHADER_HASH.");
+
+        ImGui::TextColored(sectionColor, "shader.glsl Compile Requirements");
+        bulletWrapped("Must include both sections: #type vertex and #type fragment.");
+        bulletWrapped("Each section must compile as GLSL (default templates use #version 330 core).");
+        bulletWrapped("Keep uniforms and usage aligned with scene.cpp logic.");
+
+        ImGui::Spacing();
+        ImGui::TextColored(noteColor, "Tip: workspace labels are indexed (1:, 2:, ...), matching Ctrl+number switching.");
+        ImGui::TextColored(noteColor, "Need deeper runtime details? Open Help -> Runtime State Guide.");
+    }
+    ImGui::EndChild();
+
+    ImGui::Separator();
+    ImGui::Checkbox("Do not show this again", &doNotShowWelcomeAgain_);
+
+    const float startButtonWidth = 90.0f;
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - startButtonWidth);
+    if (ImGui::Button("Start", ImVec2(startButtonWidth, 0.0f))) {
+        showWelcomeOnStartup_ = !doNotShowWelcomeAgain_;
+        SaveWelcomePreference();
+        openWelcomePopupRequested_ = false;
+        welcomePopupOpenedThisSession_ = false;
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
+}
+
+void EditorUI::DrawRuntimeGuidePopup() {
+    if (openRuntimeGuidePopupRequested_ && !runtimeGuidePopupOpenedThisSession_) {
+        ImGui::OpenPopup("Runtime State Guide");
+        runtimeGuidePopupOpenedThisSession_ = true;
+    }
+
+    if (runtimeGuidePopupOpenedThisSession_ && !ImGui::IsPopupOpen("Runtime State Guide")) {
+        openRuntimeGuidePopupRequested_ = false;
+        runtimeGuidePopupOpenedThisSession_ = false;
+        return;
+    }
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowViewport(viewport->ID);
+    ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(900.0f, 720.0f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(760.0f, 560.0f),
+                                        ImVec2(viewport->WorkSize.x * 0.96f, viewport->WorkSize.y * 0.96f));
+
+    const ImGuiWindowFlags popupFlags =
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking;
+    if (!ImGui::BeginPopupModal("Runtime State Guide", nullptr, popupFlags)) {
+        return;
+    }
+
+    const ImVec4 titleColor = ImVec4(0.54f, 0.86f, 1.0f, 1.0f);
+    const ImVec4 sectionColor = ImVec4(0.94f, 0.75f, 0.37f, 1.0f);
+    const ImVec4 noteColor = ImVec4(0.73f, 0.86f, 0.73f, 1.0f);
+
+    const float footerReserve = ImGui::GetFrameHeightWithSpacing() * 2.1f;
+    if (ImGui::BeginChild("RuntimeGuideScrollableContent", ImVec2(0.0f, -footerReserve), false,
+                          ImGuiWindowFlags_AlwaysVerticalScrollbar)) {
+        auto bulletWrapped = [] (const char* text) {
+            ImGui::Bullet();
+            ImGui::SameLine();
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextUnformatted(text);
+            ImGui::PopTextWrapPos();
+        };
+
+        auto codeBlock = [] (const char* id, const char* code) {
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.09f, 0.10f, 0.12f, 1.0f));
+            ImGui::BeginChild(id, ImVec2(0.0f, 78.0f), true, ImGuiWindowFlags_NoScrollbar);
+            ImGui::TextUnformatted(code);
+            ImGui::EndChild();
+            ImGui::PopStyleColor();
+        };
+
+        ImGui::TextColored(titleColor, "Runtime State Guide");
+        ImGui::TextWrapped("This explains why the default workspace code caches program handles, uniform locations, and shader hashes in STATE_I().");
+        ImGui::Separator();
+
+        ImGui::TextColored(sectionColor, "Why STATE_I Exists");
+        bulletWrapped("Your JIT code is recompiled/reloaded often, but EngineContext state arrays persist across reloads and workspace switches.");
+        bulletWrapped("STATE_I(index) and STATE_F(index) are stable per-workspace storage for values your code needs between frames.");
+        bulletWrapped("Without this storage, expensive setup work (shader compile/link, uniform lookups) would repeat unnecessarily.");
+        ImGui::Separator();
+
+        ImGui::TextColored(sectionColor, "What These Lines Do");
+        codeBlock("RuntimeGuideCodeStore",
+                  "STATE_I(0) = (uint32_t)program;\n"
+                  "STATE_I(1) = (uint32_t)glGetUniformLocation(program, \"uTime\");\n"
+                  "STATE_I(3) = JIT_WORKSPACE_SHADER_HASH;");
+        bulletWrapped("STATE_I(0): stores the linked OpenGL program handle for reuse.");
+        bulletWrapped("STATE_I(1): stores the uTime uniform location so you do not query it every frame.");
+        bulletWrapped("STATE_I(3): stores the shader hash that was used to build the cached program.");
+        ImGui::Separator();
+
+        ImGui::TextColored(sectionColor, "Why init() Reads These Values");
+        codeBlock("RuntimeGuideCodeLoad",
+                  "GLuint currentProgram = (GLuint)STATE_I(0);\n"
+                  "const uint32_t cachedShaderHash = STATE_I(3);");
+        bulletWrapped("currentProgram tells you whether a valid program already exists.");
+        bulletWrapped("cachedShaderHash tells you whether shader.glsl changed since the cached program was built.");
+        bulletWrapped("If hash changed (or no program exists), you rebuild once in init(); otherwise you reuse the existing program.");
+        ImGui::Separator();
+
+        ImGui::TextColored(sectionColor, "Why This Pattern Is Needed");
+        bulletWrapped("JIT compilation is frequent; GPU program creation is relatively expensive.");
+        bulletWrapped("Hash-based caching avoids unnecessary recompiles while still hot-reloading correctly when shader source changes.");
+        bulletWrapped("Persistent per-workspace state gives smooth iteration and keeps runtime behavior deterministic.");
+        ImGui::Separator();
+
+        ImGui::TextColored(sectionColor, "Other Useful Details");
+        bulletWrapped("Export entry points with extern \"C\" so symbol lookup can find init/update/renderFrame/shutdown.");
+        bulletWrapped("Use a documented index map in your scene.cpp comments to avoid collisions (e.g. 0=program, 1=uTime, 3=hash).");
+        bulletWrapped("Use STATE_F for persistent float values (timers, parameters, interpolation state).");
+        bulletWrapped("If glGetUniformLocation returns -1, the uniform may be optimized out or misnamed.");
+        bulletWrapped("Auto-injected shader macros are JIT_WORKSPACE_VERTEX_SHADER, JIT_WORKSPACE_FRAGMENT_SHADER, JIT_WORKSPACE_SHADER_HASH.");
+
+        ImGui::Spacing();
+        ImGui::TextColored(noteColor, "Open this anytime from Help -> Runtime State Guide.");
+    }
+    ImGui::EndChild();
+
+    ImGui::Separator();
+    const float closeButtonWidth = 90.0f;
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - closeButtonWidth);
+    if (ImGui::Button("Close", ImVec2(closeButtonWidth, 0.0f))) {
+        openRuntimeGuidePopupRequested_ = false;
+        runtimeGuidePopupOpenedThisSession_ = false;
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
+}
+
 void EditorUI::HandleGlobalShortcuts() {
     const bool ctrlHeld = IsKeyDown(window, GLFW_KEY_LEFT_CONTROL) || IsKeyDown(window, GLFW_KEY_RIGHT_CONTROL);
     const bool superHeld = IsKeyDown(window, GLFW_KEY_LEFT_SUPER) || IsKeyDown(window, GLFW_KEY_RIGHT_SUPER);
@@ -653,7 +903,17 @@ void EditorUI::DrawMenuBar() {
             ImGui::EndMenu(); 
         }
         
-        if (ImGui::BeginMenu("Help")) { ImGui::EndMenu(); }
+        if (ImGui::BeginMenu("Help")) {
+            if (ImGui::MenuItem("Getting Started")) {
+                openWelcomePopupRequested_ = true;
+                welcomePopupOpenedThisSession_ = false;
+            }
+            if (ImGui::MenuItem("Runtime State Guide")) {
+                openRuntimeGuidePopupRequested_ = true;
+                runtimeGuidePopupOpenedThisSession_ = false;
+            }
+            ImGui::EndMenu();
+        }
 
         if (openCreateWorkspacePopup_) {
             openCreateWorkspacePopup_ = false;

@@ -99,6 +99,10 @@ private:
     void DrawMenuBar();
     void DrawConsolePane();
     void DrawTextEditorPane();
+    void DrawWelcomePopup();
+    void DrawRuntimeGuidePopup();
+    void LoadWelcomePreference();
+    void SaveWelcomePreference() const;
 
     float currentDpiScale_ = 1.0f;
     float pendingDpiScale_ = 1.0f;
@@ -114,6 +118,12 @@ private:
     bool ctrlTabChordHeld_ = false;
     bool ctrlPlusChordHeld_ = false;
     bool ctrlMinusChordHeld_ = false;
+    bool showWelcomeOnStartup_ = true;
+    bool welcomePopupOpenedThisSession_ = false;
+    bool openWelcomePopupRequested_ = false;
+    bool doNotShowWelcomeAgain_ = false;
+    bool openRuntimeGuidePopupRequested_ = false;
+    bool runtimeGuidePopupOpenedThisSession_ = false;
 
     bool shutdown_ = false;
     bool initialized_ = false;
