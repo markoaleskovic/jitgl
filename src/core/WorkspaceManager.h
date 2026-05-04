@@ -33,6 +33,7 @@ public:
     std::vector<WorkspaceDescriptor> ListWorkspaces() const;
     std::optional<WorkspaceDescriptor> GetWorkspace(const std::string& workspaceName) const;
     std::optional<WorkspaceDescriptor> CreateWorkspace(const std::string& workspaceName) const;
+    bool DeleteWorkspace(const std::string& workspaceName) const;
 
     std::vector<std::string> LoadWorkspaceConsoleLog(const std::string& workspaceName) const;
     std::vector<std::string> LoadWorkspaceEngineLog(const std::string& workspaceName) const;

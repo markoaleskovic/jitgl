@@ -119,6 +119,7 @@ private:
     bool RegisterWorkspace(const WorkspaceDescriptor& descriptor);
     void SyncWorkspaceUiState();
     bool CreateWorkspaceFromUI(const std::string& workspaceName);
+    bool DeleteWorkspaceFromUI(const std::string& workspaceName);
     void SwitchToWorkspace(const std::string& workspaceName, bool focusCppDocument);
     std::string BuildCompileSourceForWorkspace(const std::string& workspaceName) const;
     void QueueCompileForWorkspace(const std::string& workspaceName, double nowSeconds, bool immediate);

@@ -305,6 +305,10 @@ void EditorUI::SetCreateWorkspaceCallback(std::function<void(const std::string&)
     onCreateWorkspace_ = std::move(cb);
 }
 
+void EditorUI::SetDeleteWorkspaceCallback(std::function<void(const std::string&)> cb) {
+    onDeleteWorkspace_ = std::move(cb);
+}
+
 void EditorUI::SetWorkspaceSwitchedCallback(std::function<void(const std::string&)> cb) {
     onWorkspaceSwitched_ = std::move(cb);
 }
@@ -315,6 +319,37 @@ void EditorUI::SetWorkspaceLineAppendedCallback(std::function<void(const std::st
 
 void EditorUI::SetWorkspaces(const std::vector<std::string>& workspaceNames, const std::string& activeWorkspace) {
     workspaceNames_ = workspaceNames;
+
+    openDocuments.erase(std::remove_if(openDocuments.begin(),
+                                       openDocuments.end(),
+                                       [&](const Document& doc) {
+                                           return std::find(workspaceNames_.begin(),
+                                                            workspaceNames_.end(),
+                                                            doc.workspaceName) == workspaceNames_.end();
+                                       }),
+                        openDocuments.end());
+
+    {
+        std::lock_guard<std::mutex> lock(consoleMutex);
+        for (auto it = workspaceConsoleLines_.begin(); it != workspaceConsoleLines_.end();) {
+            if (std::find(workspaceNames_.begin(), workspaceNames_.end(), it->first) == workspaceNames_.end()) {
+                it = workspaceConsoleLines_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(logMutex);
+        for (auto it = workspaceLogLines_.begin(); it != workspaceLogLines_.end();) {
+            if (std::find(workspaceNames_.begin(), workspaceNames_.end(), it->first) == workspaceNames_.end()) {
+                it = workspaceLogLines_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
     SetActiveWorkspace(activeWorkspace);
 }
 
@@ -396,9 +431,28 @@ void EditorUI::SetDpiScale(float newScale) {
 
 void EditorUI::DrawMenuBar() {
     if (ImGui::BeginMainMenuBar()) {
+        const std::vector<std::string> workspaceNamesSnapshot = workspaceNames_;
+        const bool canDeleteAnyWorkspace = workspaceNamesSnapshot.size() > 1;
+        std::string pendingWorkspaceSwitch;
+        std::string pendingWorkspaceDelete;
+
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("New Workspace...")) {
                 openCreateWorkspacePopup_ = true;
+            }
+            if (ImGui::BeginMenu("Delete Workspace")) {
+                if (!canDeleteAnyWorkspace) {
+                    ImGui::BeginDisabled();
+                }
+                for (const auto& workspaceName : workspaceNamesSnapshot) {
+                    if (ImGui::MenuItem(workspaceName.c_str())) {
+                        pendingWorkspaceDelete = workspaceName;
+                    }
+                }
+                if (!canDeleteAnyWorkspace) {
+                    ImGui::EndDisabled();
+                }
+                ImGui::EndMenu();
             }
             if (ImGui::MenuItem("Save", "Ctrl+S")) {}
             ImGui::Separator();
@@ -409,13 +463,10 @@ void EditorUI::DrawMenuBar() {
         }
 
         if (ImGui::BeginMenu("Workspace")) {
-            for (const auto& workspaceName : workspaceNames_) {
+            for (const auto& workspaceName : workspaceNamesSnapshot) {
                 const bool selected = (workspaceName == activeWorkspaceName_);
                 if (ImGui::MenuItem(workspaceName.c_str(), nullptr, selected)) {
-                    SetActiveWorkspace(workspaceName);
-                    if (onWorkspaceSwitched_) {
-                        onWorkspaceSwitched_(workspaceName);
-                    }
+                    pendingWorkspaceSwitch = workspaceName;
                 }
             }
             ImGui::EndMenu();
@@ -483,6 +534,15 @@ void EditorUI::DrawMenuBar() {
             ImGui::TextColored(ImVec4(0.82f, 0.82f, 0.82f, 1.0f), "%s", workspaceLabel.c_str());
         }
 
+        if (!pendingWorkspaceDelete.empty() && onDeleteWorkspace_) {
+            onDeleteWorkspace_(pendingWorkspaceDelete);
+        } else if (!pendingWorkspaceSwitch.empty()) {
+            SetActiveWorkspace(pendingWorkspaceSwitch);
+            if (onWorkspaceSwitched_) {
+                onWorkspaceSwitched_(pendingWorkspaceSwitch);
+            }
+        }
+
         // Compile Status Indicator
         ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 170.0f);
         if (isStalled_) {
@@ -510,13 +570,52 @@ void EditorUI::DrawTextEditorPane() {
     ImGui::BeginChild("WorkspaceSidebar", ImVec2(workspaceSidebarWidth, 0.0f), true);
     ImGui::TextUnformatted("Workspaces");
     ImGui::Separator();
-    for (const auto& workspaceName : workspaceNames_) {
+
+    const std::vector<std::string> workspaceNamesSnapshot = workspaceNames_;
+    const bool canDeleteAnyWorkspace = workspaceNamesSnapshot.size() > 1;
+    std::string pendingWorkspaceSwitch;
+    std::string pendingWorkspaceDelete;
+    for (const auto& workspaceName : workspaceNamesSnapshot) {
+        ImGui::PushID(workspaceName.c_str());
         const bool selected = (workspaceName == activeWorkspaceName_);
-        if (ImGui::Selectable(workspaceName.c_str(), selected)) {
-            SetActiveWorkspace(workspaceName);
-            if (onWorkspaceSwitched_) {
-                onWorkspaceSwitched_(workspaceName);
+        const float rowWidth = ImGui::GetContentRegionAvail().x;
+        const float deleteButtonWidth = canDeleteAnyWorkspace ? (ImGui::GetFrameHeight() - 2.0f) : 0.0f;
+        const float selectableWidth = canDeleteAnyWorkspace ? std::max(1.0f, rowWidth - deleteButtonWidth - 6.0f)
+                                                            : rowWidth;
+        if (ImGui::Selectable(workspaceName.c_str(), selected, 0, ImVec2(selectableWidth, 0.0f))) {
+            pendingWorkspaceSwitch = workspaceName;
+        }
+
+        if (ImGui::BeginPopupContextItem("WorkspaceSidebarContext")) {
+            if (canDeleteAnyWorkspace) {
+                if (ImGui::MenuItem("Delete Workspace")) {
+                    pendingWorkspaceDelete = workspaceName;
+                }
+            } else {
+                ImGui::TextDisabled("Cannot delete last workspace");
             }
+            ImGui::EndPopup();
+        }
+
+        if (canDeleteAnyWorkspace) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton("x")) {
+                pendingWorkspaceDelete = workspaceName;
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Delete workspace");
+            }
+        }
+
+        ImGui::PopID();
+    }
+
+    if (!pendingWorkspaceDelete.empty() && onDeleteWorkspace_) {
+        onDeleteWorkspace_(pendingWorkspaceDelete);
+    } else if (!pendingWorkspaceSwitch.empty()) {
+        SetActiveWorkspace(pendingWorkspaceSwitch);
+        if (onWorkspaceSwitched_) {
+            onWorkspaceSwitched_(pendingWorkspaceSwitch);
         }
     }
     ImGui::EndChild();

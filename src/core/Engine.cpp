@@ -563,6 +563,122 @@ bool Engine::CreateWorkspaceFromUI(const std::string& workspaceName) {
     return true;
 }
 
+bool Engine::DeleteWorkspaceFromUI(const std::string& workspaceName) {
+    if (!workspaceManager_) {
+        return false;
+    }
+    if (workspaceOrder_.size() <= 1) {
+        ui_->AddLogOutput("[Workspace Error] Cannot delete the last workspace.");
+        return false;
+    }
+
+    auto workspaceIt = workspaces_.find(workspaceName);
+    if (workspaceIt == workspaces_.end()) {
+        ui_->AddLogOutput("[Workspace Error] Workspace '" + workspaceName + "' is not loaded.");
+        return false;
+    }
+
+    const WorkspaceState workspace = workspaceIt->second;
+    const bool deletingActiveWorkspace = (workspaceName == activeWorkspaceName_);
+
+    std::string nextWorkspaceName;
+    for (const auto& name : workspaceOrder_) {
+        if (name != workspaceName) {
+            nextWorkspaceName = name;
+            break;
+        }
+    }
+
+    if (nextWorkspaceName.empty()) {
+        ui_->AddLogOutput("[Workspace Error] Failed to determine replacement workspace.");
+        return false;
+    }
+
+    if (!workspaceManager_->DeleteWorkspace(workspaceName)) {
+        ui_->AddLogOutput("[Workspace Error] Failed to delete workspace '" + workspaceName + "'.");
+        return false;
+    }
+
+    auto compiledIt = compiledPrograms_.find(workspaceName);
+    if (compiledIt != compiledPrograms_.end()) {
+        if (compiledIt->second && compiledIt->second != activeProgram_) {
+            ShutdownProgramIfInitialized(compiledIt->second);
+        }
+        compiledPrograms_.erase(compiledIt);
+    }
+
+    if (deletingActiveWorkspace) {
+        if (activeProgram_) {
+            ShutdownProgramIfInitialized(activeProgram_);
+        }
+        activeProgram_.reset();
+    }
+
+    workspaces_.erase(workspaceName);
+    workspaceDirty_.erase(workspaceName);
+    fileToWorkspace_.erase(workspace.cppPath);
+    fileToWorkspace_.erase(workspace.shaderPath);
+    latestSources_.erase(workspaceName);
+    pendingCompilesAt_.erase(workspaceName);
+    compileFailures_.erase(workspaceName);
+    compileRetryAfter_.erase(workspaceName);
+    recentErrors_.erase(workspaceName);
+
+    ignoreWatcherUntil_.erase(workspace.cppPath);
+    ignoreWatcherUntil_.erase(workspace.shaderPath);
+
+    workspaceOrder_.erase(std::remove(workspaceOrder_.begin(), workspaceOrder_.end(), workspaceName), workspaceOrder_.end());
+
+    {
+        std::lock_guard<std::mutex> lock(pendingMutex_);
+        std::queue<std::string> filteredReloads;
+        while (!pendingReloads_.empty()) {
+            std::string path = std::move(pendingReloads_.front());
+            pendingReloads_.pop();
+            if (path == workspace.cppPath || path == workspace.shaderPath) {
+                continue;
+            }
+            filteredReloads.push(std::move(path));
+        }
+        pendingReloads_.swap(filteredReloads);
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(compileMutex_);
+
+        compileJobs_.erase(std::remove_if(compileJobs_.begin(),
+                                          compileJobs_.end(),
+                                          [&](const CompileJob& job) {
+                                              return job.workspaceName == workspaceName;
+                                          }),
+                           compileJobs_.end());
+
+        std::queue<CompileResult> filteredResults;
+        while (!compileResults_.empty()) {
+            CompileResult result = std::move(compileResults_.front());
+            compileResults_.pop();
+            if (result.workspaceName != workspaceName) {
+                filteredResults.push(std::move(result));
+            }
+        }
+        compileResults_.swap(filteredResults);
+    }
+
+    if (deletingActiveWorkspace) {
+        activeWorkspaceName_.clear();
+        activeFilePath_.clear();
+    }
+
+    SyncWorkspaceUiState();
+
+    if (deletingActiveWorkspace) {
+        SwitchToWorkspace(nextWorkspaceName, true);
+    }
+
+    ui_->AddLogOutput("[Workspace] Deleted workspace '" + workspaceName + "'.");
+    return true;
+}
+
 void Engine::SwitchToWorkspace(const std::string& workspaceName, bool focusCppDocument) {
     auto workspaceIt = workspaces_.find(workspaceName);
     if (workspaceIt == workspaces_.end()) {
@@ -622,6 +738,10 @@ bool Engine::InitWatcher() {
 
     ui_->SetCreateWorkspaceCallback([this](const std::string& workspaceName) {
         CreateWorkspaceFromUI(workspaceName);
+    });
+
+    ui_->SetDeleteWorkspaceCallback([this](const std::string& workspaceName) {
+        DeleteWorkspaceFromUI(workspaceName);
     });
 
     ui_->SetWorkspaceSwitchedCallback([this](const std::string& workspaceName) {
@@ -973,6 +1093,10 @@ void Engine::ProcessCompileResults() {
     while (!localResults.empty()) {
         CompileResult result = std::move(localResults.front());
         localResults.pop();
+
+        if (workspaces_.find(result.workspaceName) == workspaces_.end()) {
+            continue;
+        }
 
         if (!result.program) {
             ui_->AddLogOutput("[JIT] Compile failed for workspace '" + result.workspaceName +

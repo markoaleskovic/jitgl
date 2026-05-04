@@ -197,6 +197,21 @@ std::optional<WorkspaceDescriptor> WorkspaceManager::CreateWorkspace(const std::
     return descriptor;
 }
 
+bool WorkspaceManager::DeleteWorkspace(const std::string& workspaceName) const {
+    auto descriptor = BuildDescriptor(workspaceName);
+    if (!descriptor.has_value()) {
+        return false;
+    }
+
+    std::error_code ec;
+    if (!fs::exists(descriptor->directory, ec) || ec) {
+        return false;
+    }
+
+    fs::remove_all(descriptor->directory, ec);
+    return !ec;
+}
+
 std::vector<std::string> WorkspaceManager::LoadWorkspaceConsoleLog(const std::string& workspaceName) const {
     auto descriptor = GetWorkspace(workspaceName);
     if (!descriptor.has_value()) {

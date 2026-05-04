@@ -42,6 +42,7 @@ public:
     void SetDocumentChangedCallback(std::function<void(const std::string&, const std::string&)> cb);
     void SetActiveDocumentChangedCallback(std::function<void(const std::string&, const std::string&)> cb);
     void SetCreateWorkspaceCallback(std::function<void(const std::string&)> cb);
+    void SetDeleteWorkspaceCallback(std::function<void(const std::string&)> cb);
     void SetWorkspaceSwitchedCallback(std::function<void(const std::string&)> cb);
     void SetWorkspaceLineAppendedCallback(std::function<void(const std::string&, const std::string&, bool)> cb);
     void SetWorkspaces(const std::vector<std::string>& workspaceNames, const std::string& activeWorkspace);
@@ -77,6 +78,7 @@ private:
     std::function<void(const std::string&, const std::string&)> onDocumentChanged_;
     std::function<void(const std::string&, const std::string&)> onActiveDocumentChanged_;
     std::function<void(const std::string&)> onCreateWorkspace_;
+    std::function<void(const std::string&)> onDeleteWorkspace_;
     std::function<void(const std::string&)> onWorkspaceSwitched_;
     std::function<void(const std::string&, const std::string&, bool)> onWorkspaceLineAppended_;
 
