@@ -2,10 +2,11 @@
 #ifndef ENGINE_HPP_JIT_PREAMBLE
 #define ENGINE_HPP_JIT_PREAMBLE
 
-#include <stdio.h>
-#include <stdint.h>
-#include <math.h>
-#include <string.h>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <glad/gl.h>
 #include "runtime/EngineContext.h"
 
@@ -18,14 +19,14 @@
 // but we can provide a small helper for checking errors.
 inline GLuint jit_compile_shader(GLenum type, const char* source) {
     GLuint s = glCreateShader(type);
-    glShaderSource(s, 1, &source, NULL);
+    glShaderSource(s, 1, &source, nullptr);
     glCompileShader(s);
     GLint success;
     glGetShaderiv(s, GL_COMPILE_STATUS, &success);
     if (!success) {
-        char info[512];
-        glGetShaderInfoLog(s, 512, NULL, info);
-        printf("[JIT Shader Error] %s\n", info);
+        std::array<char, 512> info{};
+        glGetShaderInfoLog(s, static_cast<GLsizei>(info.size()), nullptr, info.data());
+        std::printf("[JIT Shader Error] %s\n", info.data());
     }
     return s;
 }
@@ -38,9 +39,9 @@ inline GLuint jit_link_program(GLuint vs, GLuint fs) {
     GLint success;
     glGetProgramiv(p, GL_LINK_STATUS, &success);
     if (!success) {
-        char info[512];
-        glGetProgramInfoLog(p, 512, NULL, info);
-        printf("[JIT Program Link Error] %s\n", info);
+        std::array<char, 512> info{};
+        glGetProgramInfoLog(p, static_cast<GLsizei>(info.size()), nullptr, info.data());
+        std::printf("[JIT Program Link Error] %s\n", info.data());
     }
     return p;
 }

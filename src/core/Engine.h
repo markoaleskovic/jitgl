@@ -102,6 +102,11 @@ private:
         std::size_t sourceHash = 0;
         bool suppressionLogged = false;
     };
+    struct InFlightStatus {
+        bool inFlight = false;
+        bool stalled = false;
+        bool shouldReset = false;
+    };
 
     std::mutex compileMutex_;
     std::condition_variable compileCv_;
@@ -109,7 +114,7 @@ private:
     std::queue<CompileResult> compileResults_;
     std::unordered_map<std::string, std::size_t> inFlightSourceHashes_;
     double inFlightStartTime_ = 0.0;
-    std::thread compileThread_;
+    std::jthread compileThread_;
     std::shared_ptr<std::atomic<bool>> compileThreadRunning_;
     std::shared_ptr<std::atomic<bool>> compileThreadExited_;
     std::unordered_map<std::string, CompileFailureState> compileFailures_;
@@ -141,7 +146,12 @@ private:
     void HandleDocumentEdited(const std::string& filepath, const std::string& content);
     void HandleActiveDocumentChanged(const std::string& filepath, const std::string& content);
     void QueueCompile(const std::string& workspaceName, const std::string& source, double nowSeconds, bool immediate);
+    std::vector<std::string> CollectDueCompiles(double nowSeconds) const;
+    InFlightStatus EvaluateInFlightStatus(double nowSeconds, bool includeQueuedJobs);
+    void EnqueueDueCompiles(const std::vector<std::string>& duePaths);
     void SubmitDueCompiles(double nowSeconds);
+    void HandleCompileFailure(const CompileResult& result);
+    void HandleCompileSuccess(const CompileResult& result);
     void ProcessCompileResults();
     void CompileThreadMain(std::shared_ptr<std::atomic<bool>> running);
     bool ActivateProgramForWorkspace(const std::string& workspaceName);

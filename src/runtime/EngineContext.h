@@ -1,5 +1,7 @@
 #pragma once
 #include <glad/gl.h>
+#include <array>
+#include <cstdint>
 
 // Plain data, owned by Engine, passed into every JIT callback.
 // Never delete or store this pointer -- the host manages its lifetime.
@@ -17,7 +19,7 @@ struct EngineContext {
     // Persistent state that survives JIT hot-swaps.
     // Use these to store OpenGL resource IDs (textures, buffers, etc.)
     // or any other state you want to keep across code edits.
-    uint32_t state_i[64] = {0};   // Increased to 64
-    float    state_f[64] = {0.0f}; // Increased to 64
+    std::array<uint32_t, 64> state_i{}; // Increased to 64
+    std::array<float, 64> state_f{};    // Increased to 64
     void*    userData    = nullptr;
 };

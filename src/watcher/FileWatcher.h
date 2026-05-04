@@ -19,10 +19,13 @@ public:
     void Stop();
 
 private:
+    void SeedInitialTimestamps();
+    void PollLoop(std::stop_token stopToken);
+
     std::string watchDir_;
     Callback    callback_;
     std::unordered_map<std::string, std::filesystem::file_time_type> lastWriteTimes_;
-    std::thread watchThread_;
+    std::jthread watchThread_;
     std::atomic<bool> running_{ false };
     std::mutex callbackMutex_;
 };

@@ -10,10 +10,12 @@
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <ranges>
 #include <sstream>
 #include <utility>
 #include <vector>
@@ -72,9 +74,7 @@ namespace {
             const std::size_t lineLength = (lineEnd == std::string::npos) ? (shaderSource.size() - cursor)
                                                                            : (lineEnd - cursor);
             const std::string line = shaderSource.substr(cursor, lineLength);
-            const std::string trimmedLine = trim(line);
-
-            if (trimmedLine.rfind("#type", 0) == 0) {
+            if (const std::string trimmedLine = trim(line); trimmedLine.rfind("#type", 0) == 0) {
                 if (trimmedLine.find("vertex") != std::string::npos) {
                     currentSection = Section::Vertex;
                 } else if (trimmedLine.find("fragment") != std::string::npos) {
@@ -221,16 +221,16 @@ void Engine::DestroySceneRenderTarget() {
 }
 
 unsigned int Engine::CreateShaderProgram(const char* vsSource, const char* fsSource) {
-    auto compile = [](unsigned int type, const char* source) -> unsigned int {
+    auto compile = [](unsigned int type, const char* source) {
         unsigned int s = glCreateShader(type);
         glShaderSource(s, 1, &source, nullptr);
         glCompileShader(s);
         int success;
         glGetShaderiv(s, GL_COMPILE_STATUS, &success);
         if (!success) {
-            char info[512];
-            glGetShaderInfoLog(s, 512, nullptr, info);
-            std::cerr << "Shader compile error: " << info << "\n";
+            std::array<char, 512> info{};
+            glGetShaderInfoLog(s, static_cast<GLsizei>(info.size()), nullptr, info.data());
+            std::cerr << "Shader compile error: " << info.data() << "\n";
         }
         return s;
     };
@@ -244,9 +244,9 @@ unsigned int Engine::CreateShaderProgram(const char* vsSource, const char* fsSou
     int success;
     glGetProgramiv(p, GL_LINK_STATUS, &success);
     if (!success) {
-        char info[512];
-        glGetProgramInfoLog(p, 512, nullptr, info);
-        std::cerr << "Program link error: " << info << "\n";
+        std::array<char, 512> info{};
+        glGetProgramInfoLog(p, static_cast<GLsizei>(info.size()), nullptr, info.data());
+        std::cerr << "Program link error: " << info.data() << "\n";
     }
     glDeleteShader(vs);
     glDeleteShader(fs);
@@ -265,7 +265,7 @@ bool Engine::InitGL() {
     ctx_.width = w;
     ctx_.height = h;
 
-    const float quadVerts[] = {
+    const std::array<float, 12> quadVerts = {
         -1.f, -1.f, 1.f, -1.f, 1.f, 1.f,
         -1.f, -1.f, 1.f, 1.f, -1.f, 1.f,
     };
@@ -273,7 +273,7 @@ bool Engine::InitGL() {
     glGenBuffers(1, &ctx_.vbo);
     glBindVertexArray(ctx_.vao);
     glBindBuffer(GL_ARRAY_BUFFER, ctx_.vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(quadVerts), quadVerts, GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(sizeof(quadVerts)), quadVerts.data(), GL_STATIC_DRAW);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
     glBindVertexArray(0);
@@ -329,7 +329,7 @@ bool Engine::InitJIT() {
     jit_ = std::move(nextJit);
     compileThreadRunning_ = std::make_shared<std::atomic<bool>>(true);
     compileThreadExited_ = std::make_shared<std::atomic<bool>>(false);
-    compileThread_ = std::thread([this, running = compileThreadRunning_, exited = compileThreadExited_]() {
+    compileThread_ = std::jthread([this, running = compileThreadRunning_, exited = compileThreadExited_](std::stop_token) {
         CompileThreadMain(running);
         exited->store(true);
     });
@@ -371,7 +371,7 @@ void Engine::CompletePendingJITReset() {
     }
 
     {
-        std::lock_guard<std::mutex> lock(compileMutex_);
+        std::scoped_lock lock(compileMutex_);
         compileJobs_.clear();
         compileResults_ = std::queue<CompileResult>{};
         inFlightSourceHashes_.clear();
@@ -390,18 +390,17 @@ void Engine::CompletePendingJITReset() {
 }
 
 std::string Engine::WorkspaceForPath(const std::string& filepath) const {
-    auto it = fileToWorkspace_.find(filepath);
-    if (it == fileToWorkspace_.end()) {
-        return {};
+    if (const auto it = fileToWorkspace_.find(filepath); it != fileToWorkspace_.end()) {
+        return it->second;
     }
-    return it->second;
+    return {};
 }
 
 bool Engine::ActiveWorkspaceHasCompileError() const {
     if (activeWorkspaceName_.empty()) {
         return false;
     }
-    return compileFailures_.find(activeWorkspaceName_) != compileFailures_.end();
+    return compileFailures_.contains(activeWorkspaceName_);
 }
 
 void Engine::SaveActiveWorkspaceRuntimeState() {
@@ -415,8 +414,8 @@ void Engine::SaveActiveWorkspaceRuntimeState() {
     }
 
     auto& workspace = workspaceIt->second;
-    std::copy(std::begin(ctx_.state_i), std::end(ctx_.state_i), workspace.stateI.begin());
-    std::copy(std::begin(ctx_.state_f), std::end(ctx_.state_f), workspace.stateF.begin());
+    std::ranges::copy(ctx_.state_i, workspace.stateI.begin());
+    std::ranges::copy(ctx_.state_f, workspace.stateF.begin());
     workspace.userData = ctx_.userData;
 }
 
@@ -427,8 +426,8 @@ void Engine::LoadWorkspaceRuntimeState(const std::string& workspaceName) {
     }
 
     const auto& workspace = workspaceIt->second;
-    std::copy(workspace.stateI.begin(), workspace.stateI.end(), std::begin(ctx_.state_i));
-    std::copy(workspace.stateF.begin(), workspace.stateF.end(), std::begin(ctx_.state_f));
+    std::ranges::copy(workspace.stateI, std::begin(ctx_.state_i));
+    std::ranges::copy(workspace.stateF, std::begin(ctx_.state_f));
     ctx_.userData = workspace.userData;
 }
 
@@ -520,9 +519,9 @@ bool Engine::RegisterWorkspace(const WorkspaceDescriptor& descriptor) {
     fileToWorkspace_[workspace.shaderPath] = workspace.name;
     workspaceDirty_[workspace.name] = false;
 
-    if (std::find(workspaceOrder_.begin(), workspaceOrder_.end(), workspace.name) == workspaceOrder_.end()) {
-        workspaceOrder_.push_back(workspace.name);
-        std::sort(workspaceOrder_.begin(), workspaceOrder_.end());
+    if (std::ranges::find(workspaceOrder_, workspace.name) == workspaceOrder_.end()) {
+        workspaceOrder_.emplace_back(workspace.name);
+        std::ranges::sort(workspaceOrder_);
     }
 
     ui_->AddDocument(workspace.name, "scene.cpp", workspace.cppPath, workspace.cppSource);
@@ -599,8 +598,8 @@ bool Engine::DeleteWorkspaceFromUI(const std::string& workspaceName) {
         return false;
     }
 
-    auto compiledIt = compiledPrograms_.find(workspaceName);
-    if (compiledIt != compiledPrograms_.end()) {
+    if (auto compiledIt = compiledPrograms_.find(workspaceName);
+        compiledIt != compiledPrograms_.end()) {
         if (compiledIt->second && compiledIt->second != activeProgram_) {
             ShutdownProgramIfInitialized(compiledIt->second);
         }
@@ -627,10 +626,10 @@ bool Engine::DeleteWorkspaceFromUI(const std::string& workspaceName) {
     ignoreWatcherUntil_.erase(workspace.cppPath);
     ignoreWatcherUntil_.erase(workspace.shaderPath);
 
-    workspaceOrder_.erase(std::remove(workspaceOrder_.begin(), workspaceOrder_.end(), workspaceName), workspaceOrder_.end());
+    std::erase(workspaceOrder_, workspaceName);
 
     {
-        std::lock_guard<std::mutex> lock(pendingMutex_);
+        std::scoped_lock lock(pendingMutex_);
         std::queue<std::string> filteredReloads;
         while (!pendingReloads_.empty()) {
             std::string path = std::move(pendingReloads_.front());
@@ -644,14 +643,12 @@ bool Engine::DeleteWorkspaceFromUI(const std::string& workspaceName) {
     }
 
     {
-        std::lock_guard<std::mutex> lock(compileMutex_);
+        std::scoped_lock lock(compileMutex_);
 
-        compileJobs_.erase(std::remove_if(compileJobs_.begin(),
-                                          compileJobs_.end(),
-                                          [&](const CompileJob& job) {
-                                              return job.workspaceName == workspaceName;
-                                          }),
-                           compileJobs_.end());
+        std::erase_if(compileJobs_,
+                      [&](const CompileJob& job) {
+                          return job.workspaceName == workspaceName;
+                      });
 
         std::queue<CompileResult> filteredResults;
         while (!compileResults_.empty()) {
@@ -687,8 +684,8 @@ void Engine::SwitchToWorkspace(const std::string& workspaceName, bool focusCppDo
 
     const double nowSeconds = glfwGetTime();
     if (activeWorkspaceName_ != workspaceName) {
-        auto previousWorkspaceIt = workspaces_.find(activeWorkspaceName_);
-        if (previousWorkspaceIt != workspaces_.end()) {
+        if (auto previousWorkspaceIt = workspaces_.find(activeWorkspaceName_);
+            previousWorkspaceIt != workspaces_.end()) {
             auto& previousWorkspace = previousWorkspaceIt->second;
             if (previousWorkspace.activeClockStartSeconds >= 0.0) {
                 const double elapsed = std::max(0.0, nowSeconds - previousWorkspace.activeClockStartSeconds);
@@ -720,8 +717,7 @@ void Engine::SwitchToWorkspace(const std::string& workspaceName, bool focusCppDo
         ui_->SetActiveDocument(activeFilePath_);
     }
 
-    const bool requiresRecompile = workspaceDirty_[workspaceName];
-    if (requiresRecompile) {
+    if (const bool requiresRecompile = workspaceDirty_[workspaceName]; requiresRecompile) {
         ActivateProgramForWorkspace(workspaceName);
         QueueCompileForWorkspace(workspaceName, glfwGetTime(), true);
         SaveActiveWorkspaceRuntimeState();
@@ -804,19 +800,19 @@ bool Engine::InitWatcher() {
 }
 
 void Engine::OnFileChanged(const std::string& filepath) {
-    const auto extension = std::filesystem::path(filepath).extension().string();
-    if (extension != ".cpp" && extension != ".glsl") {
+    if (const auto extension = std::filesystem::path(filepath).extension().string();
+        extension != ".cpp" && extension != ".glsl") {
         return;
     }
 
-    std::lock_guard<std::mutex> lock(pendingMutex_);
+    std::scoped_lock lock(pendingMutex_);
     pendingReloads_.push(filepath);
 }
 
 void Engine::ProcessPendingReloads(double nowSeconds) {
     std::vector<std::string> filesToProcess;
     {
-        std::lock_guard<std::mutex> lock(pendingMutex_);
+        std::scoped_lock lock(pendingMutex_);
         while (!pendingReloads_.empty()) {
             filesToProcess.push_back(std::move(pendingReloads_.front()));
             pendingReloads_.pop();
@@ -846,9 +842,9 @@ void Engine::ProcessPendingReloads(double nowSeconds) {
         }
 
         const bool isCpp = (filepath == workspaceIt->second.cppPath);
-        const bool unchanged = isCpp ? (workspaceIt->second.cppSource == *content)
-                                     : (workspaceIt->second.shaderSource == *content);
-        if (unchanged) {
+        if (const bool unchanged = isCpp ? (workspaceIt->second.cppSource == *content)
+                                         : (workspaceIt->second.shaderSource == *content);
+            unchanged) {
             continue;
         }
 
@@ -915,7 +911,7 @@ void Engine::QueueCompile(const std::string& workspaceName, const std::string& s
         while (!history.empty() && (nowSeconds - history.front() > ERROR_HISTORY_SECONDS)) {
             history.pop_front();
         }
-        debounce += history.size() * DEBOUNCE_STEP_SECONDS;
+        debounce += static_cast<double>(history.size()) * DEBOUNCE_STEP_SECONDS;
         if (debounce > MAX_DEBOUNCE_SECONDS) debounce = MAX_DEBOUNCE_SECONDS;
     }
 
@@ -927,109 +923,109 @@ void Engine::QueueCompile(const std::string& workspaceName, const std::string& s
     pendingCompilesAt_[workspaceName] = requestedAt;
 }
 
+std::vector<std::string> Engine::CollectDueCompiles(double nowSeconds) const {
+    std::vector<std::string> duePaths;
+    for (const auto& pending : pendingCompilesAt_) {
+        if (pending.second <= nowSeconds) {
+            duePaths.emplace_back(pending.first);
+        }
+    }
+    return duePaths;
+}
+
+Engine::InFlightStatus Engine::EvaluateInFlightStatus(double nowSeconds, bool includeQueuedJobs) {
+    InFlightStatus status{};
+    {
+        std::scoped_lock lock(compileMutex_);
+        status.inFlight = !inFlightSourceHashes_.empty();
+        if (includeQueuedJobs) {
+            status.inFlight = status.inFlight || !compileJobs_.empty();
+        }
+        if (status.inFlight && inFlightStartTime_ > 0.0) {
+            const double inFlightSeconds = nowSeconds - inFlightStartTime_;
+            status.stalled = (inFlightSeconds > 5.0);
+            status.shouldReset = (inFlightSeconds > 10.0);
+        }
+    }
+    return status;
+}
+
+void Engine::EnqueueDueCompiles(const std::vector<std::string>& duePaths) {
+    std::scoped_lock lock(compileMutex_);
+    for (const auto& workspaceName : duePaths) {
+        auto sourceIt = latestSources_.find(workspaceName);
+        if (sourceIt == latestSources_.end()) {
+            continue;
+        }
+
+        const std::size_t sourceHash = std::hash<std::string>{}(sourceIt->second);
+        if (auto inFlightIt = inFlightSourceHashes_.find(workspaceName);
+            inFlightIt != inFlightSourceHashes_.end() && inFlightIt->second == sourceHash) {
+            pendingCompilesAt_.erase(workspaceName);
+            continue;
+        }
+
+        const bool alreadyQueued = std::any_of(compileJobs_.begin(),
+                                               compileJobs_.end(),
+                                               [&](const CompileJob& job) {
+                                                   return job.workspaceName == workspaceName &&
+                                                          job.sourceHash == sourceHash;
+                                               });
+        if (alreadyQueued) {
+            pendingCompilesAt_.erase(workspaceName);
+            continue;
+        }
+
+        auto workspaceIt = workspaces_.find(workspaceName);
+        if (workspaceIt == workspaces_.end()) {
+            pendingCompilesAt_.erase(workspaceName);
+            continue;
+        }
+
+        std::erase_if(compileJobs_,
+                      [&](const CompileJob& job) {
+                          return job.workspaceName == workspaceName;
+                      });
+        compileJobs_.emplace_back(CompileJob{
+            workspaceName,
+            workspaceIt->second.cppPath,
+            sourceIt->second,
+            sourceHash
+        });
+        pendingCompilesAt_.erase(workspaceName);
+    }
+}
+
 void Engine::SubmitDueCompiles(double nowSeconds) {
     if (resetRequested_) {
         ui_->SetCompilationStatus(true, ActiveWorkspaceHasCompileError(), true);
         return;
     }
 
-    std::vector<std::string> duePaths;
-    for (const auto& pending : pendingCompilesAt_) {
-        if (pending.second <= nowSeconds) {
-            duePaths.push_back(pending.first);
-        }
-    }
+    const std::vector<std::string> duePaths = CollectDueCompiles(nowSeconds);
 
     if (duePaths.empty()) {
-        bool inFlight = false;
-        bool stalled = false;
-        bool shouldReset = false;
-        {
-            std::lock_guard<std::mutex> lock(compileMutex_);
-            inFlight = !compileJobs_.empty() || !inFlightSourceHashes_.empty();
-            if (inFlight && inFlightStartTime_ > 0.0) {
-                const double inFlightSeconds = nowSeconds - inFlightStartTime_;
-                if (inFlightSeconds > 5.0) {
-                    stalled = true;
-                }
-                shouldReset = (inFlightSeconds > 10.0);
-            }
-        }
-
-        if (shouldReset) {
+        const InFlightStatus status = EvaluateInFlightStatus(nowSeconds, true);
+        if (status.shouldReset) {
             ResetJIT();
             ui_->SetCompilationStatus(true, ActiveWorkspaceHasCompileError(), true);
             return;
         }
 
-        ui_->SetCompilationStatus(inFlight, ActiveWorkspaceHasCompileError(), stalled);
+        ui_->SetCompilationStatus(status.inFlight, ActiveWorkspaceHasCompileError(), status.stalled);
         return;
     }
 
-    bool stalled = false;
-    bool shouldReset = false;
-    {
-        std::lock_guard<std::mutex> lock(compileMutex_);
-        if (!inFlightSourceHashes_.empty() && inFlightStartTime_ > 0.0) {
-            const double inFlightSeconds = nowSeconds - inFlightStartTime_;
-            if (inFlightSeconds > 5.0) {
-                stalled = true;
-            }
-            shouldReset = (inFlightSeconds > 10.0);
-        }
-
-        if (!shouldReset) {
-            for (const auto& workspaceName : duePaths) {
-                auto sourceIt = latestSources_.find(workspaceName);
-                if (sourceIt == latestSources_.end()) {
-                    continue;
-                }
-                const std::size_t sourceHash = std::hash<std::string>{}(sourceIt->second);
-
-                auto inFlightIt = inFlightSourceHashes_.find(workspaceName);
-                if (inFlightIt != inFlightSourceHashes_.end() && inFlightIt->second == sourceHash) {
-                    pendingCompilesAt_.erase(workspaceName);
-                    continue;
-                }
-
-                const bool alreadyQueued = std::any_of(compileJobs_.begin(), compileJobs_.end(), [&](const CompileJob& job) {
-                    return job.workspaceName == workspaceName && job.sourceHash == sourceHash;
-                });
-                if (alreadyQueued) {
-                    pendingCompilesAt_.erase(workspaceName);
-                    continue;
-                }
-
-                auto workspaceIt = workspaces_.find(workspaceName);
-                if (workspaceIt == workspaces_.end()) {
-                    pendingCompilesAt_.erase(workspaceName);
-                    continue;
-                }
-
-                compileJobs_.erase(std::remove_if(compileJobs_.begin(), compileJobs_.end(),
-                                                  [&](const CompileJob& job) {
-                                                      return job.workspaceName == workspaceName;
-                                                  }),
-                                   compileJobs_.end());
-                compileJobs_.push_back(CompileJob{
-                    workspaceName,
-                    workspaceIt->second.cppPath,
-                    sourceIt->second,
-                    sourceHash
-                });
-                pendingCompilesAt_.erase(workspaceName);
-            }
-        }
-    }
-
-    if (shouldReset) {
+    const InFlightStatus status = EvaluateInFlightStatus(nowSeconds, false);
+    if (status.shouldReset) {
         ResetJIT();
         ui_->SetCompilationStatus(true, ActiveWorkspaceHasCompileError(), true);
         return;
     }
 
+    EnqueueDueCompiles(duePaths);
     compileCv_.notify_one();
-    ui_->SetCompilationStatus(true, ActiveWorkspaceHasCompileError(), stalled);
+    ui_->SetCompilationStatus(true, ActiveWorkspaceHasCompileError(), status.stalled);
 }
 
 void Engine::CompileThreadMain(std::shared_ptr<std::atomic<bool>> running) {
@@ -1054,7 +1050,7 @@ void Engine::CompileThreadMain(std::shared_ptr<std::atomic<bool>> running) {
 
         auto program = currentJit->CompileSource(job.sourceName, job.source);
         {
-            std::lock_guard<std::mutex> lock(compileMutex_);
+            std::scoped_lock lock(compileMutex_);
             inFlightSourceHashes_.erase(job.workspaceName);
             inFlightStartTime_ = 0.0;
             compileResults_.push(CompileResult{ job.workspaceName, std::move(program), job.sourceHash });
@@ -1102,10 +1098,74 @@ bool Engine::ActivateProgramForWorkspace(const std::string& workspaceName) {
     return true;
 }
 
+void Engine::HandleCompileFailure(const CompileResult& result) {
+    ui_->AddLogOutput("[JIT] Compile failed for workspace '" + result.workspaceName +
+                      "'. Keeping previous program.");
+    if (auto sourceIt = latestSources_.find(result.workspaceName);
+        sourceIt != latestSources_.end()) {
+        const std::size_t currentHash = std::hash<std::string>{}(sourceIt->second);
+        if (currentHash == result.sourceHash) {
+            compileFailures_[result.workspaceName] = CompileFailureState{ result.sourceHash, false };
+        }
+    }
+
+    const double now = glfwGetTime();
+    auto& history = recentErrors_[result.workspaceName];
+    history.push_back(now);
+    while (!history.empty() && (now - history.front() > ERROR_HISTORY_SECONDS)) {
+        history.pop_front();
+    }
+
+    double debounce = MIN_DEBOUNCE_SECONDS + static_cast<double>(history.size()) * DEBOUNCE_STEP_SECONDS;
+    if (debounce > MAX_DEBOUNCE_SECONDS) {
+        debounce = MAX_DEBOUNCE_SECONDS;
+    }
+
+    compileRetryAfter_[result.workspaceName] = now + debounce;
+    ui_->SetCompilationStatus(false, true, false);
+}
+
+void Engine::HandleCompileSuccess(const CompileResult& result) {
+    ui_->SetCompilationStatus(false, ActiveWorkspaceHasCompileError(), false);
+    recentErrors_.erase(result.workspaceName);
+
+    if (auto latestIt = latestSources_.find(result.workspaceName);
+        latestIt != latestSources_.end()) {
+        const std::size_t latestHash = std::hash<std::string>{}(latestIt->second);
+        if (latestHash == result.sourceHash) {
+            workspaceDirty_[result.workspaceName] = false;
+        }
+    }
+
+    if (auto failureIt = compileFailures_.find(result.workspaceName);
+        failureIt != compileFailures_.end() && failureIt->second.sourceHash == result.sourceHash) {
+        compileFailures_.erase(failureIt);
+    }
+    compileRetryAfter_.erase(result.workspaceName);
+
+    if (auto existingIt = compiledPrograms_.find(result.workspaceName);
+        existingIt != compiledPrograms_.end() && existingIt->second != result.program) {
+        ShutdownProgramIfInitialized(existingIt->second);
+    }
+
+    compiledPrograms_[result.workspaceName] = result.program;
+    if (result.workspaceName != activeWorkspaceName_) {
+        return;
+    }
+
+    if (activeProgram_ && activeProgram_ != result.program) {
+        ShutdownProgramIfInitialized(activeProgram_);
+    }
+    activeProgram_ = result.program;
+    ctx_.reloadCount++;
+    InitializeProgramIfNeeded(activeProgram_);
+    SaveActiveWorkspaceRuntimeState();
+}
+
 void Engine::ProcessCompileResults() {
     std::queue<CompileResult> localResults;
     {
-        std::lock_guard<std::mutex> lock(compileMutex_);
+        std::scoped_lock lock(compileMutex_);
         std::swap(localResults, compileResults_);
     }
 
@@ -1113,68 +1173,15 @@ void Engine::ProcessCompileResults() {
         CompileResult result = std::move(localResults.front());
         localResults.pop();
 
-        if (workspaces_.find(result.workspaceName) == workspaces_.end()) {
+        if (!workspaces_.contains(result.workspaceName)) {
             continue;
         }
-
         if (!result.program) {
-            ui_->AddLogOutput("[JIT] Compile failed for workspace '" + result.workspaceName +
-                              "'. Keeping previous program.");
-            auto sourceIt = latestSources_.find(result.workspaceName);
-            if (sourceIt != latestSources_.end()) {
-                const std::size_t currentHash = std::hash<std::string>{}(sourceIt->second);
-                if (currentHash == result.sourceHash) {
-                    compileFailures_[result.workspaceName] = CompileFailureState{ result.sourceHash, false };
-                }
-            }
-
-            double now = glfwGetTime();
-            auto& history = recentErrors_[result.workspaceName];
-            history.push_back(now);
-            while (!history.empty() && (now - history.front() > ERROR_HISTORY_SECONDS)) {
-                history.pop_front();
-            }
-
-            double debounce = MIN_DEBOUNCE_SECONDS + history.size() * DEBOUNCE_STEP_SECONDS;
-            if (debounce > MAX_DEBOUNCE_SECONDS) debounce = MAX_DEBOUNCE_SECONDS;
-
-            compileRetryAfter_[result.workspaceName] = now + debounce;
-            ui_->SetCompilationStatus(false, true, false);
+            HandleCompileFailure(result);
             continue;
         }
 
-        ui_->SetCompilationStatus(false, ActiveWorkspaceHasCompileError(), false);
-        recentErrors_.erase(result.workspaceName);
-
-        auto latestIt = latestSources_.find(result.workspaceName);
-        if (latestIt != latestSources_.end()) {
-            const std::size_t latestHash = std::hash<std::string>{}(latestIt->second);
-            if (latestHash == result.sourceHash) {
-                workspaceDirty_[result.workspaceName] = false;
-            }
-        }
-
-        auto failureIt = compileFailures_.find(result.workspaceName);
-        if (failureIt != compileFailures_.end() && failureIt->second.sourceHash == result.sourceHash) {
-            compileFailures_.erase(failureIt);
-        }
-        compileRetryAfter_.erase(result.workspaceName);
-
-        auto existingIt = compiledPrograms_.find(result.workspaceName);
-        if (existingIt != compiledPrograms_.end() && existingIt->second != result.program) {
-            ShutdownProgramIfInitialized(existingIt->second);
-        }
-
-        compiledPrograms_[result.workspaceName] = result.program;
-        if (result.workspaceName == activeWorkspaceName_) {
-            if (activeProgram_ && activeProgram_ != result.program) {
-                ShutdownProgramIfInitialized(activeProgram_);
-            }
-            activeProgram_ = result.program;
-            ctx_.reloadCount++;
-            InitializeProgramIfNeeded(activeProgram_);
-            SaveActiveWorkspaceRuntimeState();
-        }
+        HandleCompileSuccess(result);
     }
 }
 
@@ -1214,8 +1221,8 @@ void Engine::Run() {
 
         ctx_.deltaTime = static_cast<float>(now - lastTime_);
         ctx_.time = 0.0f;
-        auto activeWorkspaceIt = workspaces_.find(activeWorkspaceName_);
-        if (activeWorkspaceIt != workspaces_.end()) {
+        if (auto activeWorkspaceIt = workspaces_.find(activeWorkspaceName_);
+            activeWorkspaceIt != workspaces_.end()) {
             auto& activeWorkspace = activeWorkspaceIt->second;
             if (activeWorkspace.activeClockStartSeconds < 0.0) {
                 activeWorkspace.activeClockStartSeconds = now;
@@ -1284,14 +1291,15 @@ void Engine::Shutdown() {
     }
 
     {
-        std::lock_guard<std::mutex> lock(compileMutex_);
+        std::scoped_lock lock(compileMutex_);
         compileJobs_.clear();
         compileResults_ = std::queue<CompileResult>{};
         inFlightSourceHashes_.clear();
     }
 
-    for (auto& entry : compiledPrograms_) {
-        ShutdownProgramIfInitialized(entry.second);
+    for (const auto& [workspaceName, program] : compiledPrograms_) {
+        (void)workspaceName;
+        ShutdownProgramIfInitialized(program);
     }
     ShutdownProgramIfInitialized(activeProgram_);
 

@@ -6,6 +6,7 @@
 #define JIT_IDE_CONSOLEREDIRECTSESSION_H
 
 #include <atomic>
+#include <span>
 #include <string>
 #include <thread>
 
@@ -27,11 +28,11 @@ private:
     void FlushPendingLine();
 
     bool WaitForPipeData();
-    bool ReadAvailableData(char* buffer, std::size_t bufferSize);
-    void ConsumeBuffer(const char* buffer, ssize_t count);
+    bool ReadAvailableData(std::span<char> buffer);
+    void ConsumeBuffer(std::span<const char> buffer);
 
     EditorUI* ui_ = nullptr;
-    std::thread readerThread_;
+    std::jthread readerThread_;
     std::atomic<bool> readerRunning_{ false };
     int oldStdoutFd_ = -1;
     int oldStderrFd_ = -1;

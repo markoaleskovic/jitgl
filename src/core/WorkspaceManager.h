@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 #include <optional>
+#include <filesystem>
 
 struct WorkspaceFile {
     std::string filename;
@@ -29,7 +30,7 @@ public:
     explicit WorkspaceManager(std::string directory);
     ~WorkspaceManager() = default;
 
-    void Initialize();
+    void Initialize() const;
     std::vector<WorkspaceDescriptor> ListWorkspaces() const;
     std::optional<WorkspaceDescriptor> GetWorkspace(const std::string& workspaceName) const;
     std::optional<WorkspaceDescriptor> CreateWorkspace(const std::string& workspaceName) const;
@@ -43,7 +44,7 @@ public:
     std::vector<WorkspaceFile> LoadAllFiles() const;
     bool SaveFile(const std::string& filepath, const std::string& content) const;
     std::optional<std::string> ReadFile(const std::string& filepath) const;
-    bool IsPathInsideWorkspace(const std::string& filepath) const;
+    bool IsPathInsideWorkspace(const std::filesystem::path& filepath) const;
     const std::string& Directory() const { return directory_; }
 
 private:

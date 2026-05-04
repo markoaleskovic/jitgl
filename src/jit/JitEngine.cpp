@@ -12,7 +12,10 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <array>
+#include <bit>
 #include <filesystem>
+#include <format>
 #include <chrono>
 #include <thread>
 #include <system_error>
@@ -39,34 +42,113 @@ namespace fs = std::filesystem;
 
 namespace {
     constexpr int PRECHECK_TIMEOUT_MS = 3000;
-    constexpr rlim_t PRECHECK_MEMORY_LIMIT_BYTES = 1024ull * 1024ull * 1024ull;
+    constexpr rlim_t PRECHECK_MEMORY_LIMIT_BYTES = 1024ULL * 1024ULL * 1024ULL;
     constexpr std::size_t DIAGNOSTIC_LIMIT_BYTES = 10000;
 
     std::string truncateDiagnostics(const std::string& diagnostics) {
         if (diagnostics.size() <= DIAGNOSTIC_LIMIT_BYTES) {
             return diagnostics;
         }
-        return diagnostics.substr(0, DIAGNOSTIC_LIMIT_BYTES) + "\n[Error log truncated...]";
+        return std::format("{}\n[Error log truncated...]", diagnostics.substr(0, DIAGNOSTIC_LIMIT_BYTES));
     }
 
-    std::string buildPreflightTempPath() {
+    fs::path buildPreflightTempPath() {
         const auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
-        return (fs::temp_directory_path() /
-                ("jitgl-preflight-" + std::to_string(getpid()) + "-" + std::to_string(timestamp) + ".cpp"))
-            .string();
+        return fs::temp_directory_path() /
+               std::format("jitgl-preflight-{}-{}.cpp", getpid(), timestamp);
     }
 
     std::string readFdToString(int fd) {
         std::string out;
-        char buffer[4096];
+        std::array<char, 4096> buffer{};
         while (true) {
-            const ssize_t bytesRead = read(fd, buffer, sizeof(buffer));
+            const ssize_t bytesRead = read(fd, buffer.data(), buffer.size());
             if (bytesRead <= 0) {
                 break;
             }
-            out.append(buffer, static_cast<std::size_t>(bytesRead));
+            out.append(buffer.data(), static_cast<std::size_t>(bytesRead));
         }
         return out;
+    }
+
+    void SetPreflightDiagnostics(std::string* diagnostics, const std::string& message) {
+        if (diagnostics) {
+            *diagnostics = message;
+        }
+    }
+
+    void RemoveFileIfPresent(const fs::path& path) {
+        std::error_code removeError;
+        fs::remove(path, removeError);
+    }
+
+    struct PreflightWaitResult {
+        int status = 0;
+        bool timedOut = false;
+    };
+
+    PreflightWaitResult WaitForPreflightProcess(pid_t pid, std::chrono::milliseconds timeout) {
+        PreflightWaitResult result{};
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (true) {
+            const pid_t waitResult = waitpid(pid, &result.status, WNOHANG);
+            if (waitResult == pid) {
+                break;
+            }
+            if (waitResult < 0) {
+                result.status = -1;
+                break;
+            }
+            if (std::chrono::steady_clock::now() >= deadline) {
+                result.timedOut = true;
+                kill(pid, SIGKILL);
+                waitpid(pid, &result.status, 0);
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        return result;
+    }
+
+    [[noreturn]] void RunPreflightChildProcess(const fs::path& tempSourcePath,
+                                               const std::vector<std::string>& argStorage,
+                                               const std::array<int, 2>& outputPipe) {
+        dup2(outputPipe[1], STDOUT_FILENO);
+        dup2(outputPipe[1], STDERR_FILENO);
+        close(outputPipe[0]);
+        close(outputPipe[1]);
+
+        struct rlimit memoryLimit {};
+        memoryLimit.rlim_cur = PRECHECK_MEMORY_LIMIT_BYTES;
+        memoryLimit.rlim_max = PRECHECK_MEMORY_LIMIT_BYTES;
+        setrlimit(RLIMIT_AS, &memoryLimit);
+
+        struct rlimit cpuLimit {};
+        cpuLimit.rlim_cur = 4;
+        cpuLimit.rlim_max = 4;
+        setrlimit(RLIMIT_CPU, &cpuLimit);
+
+        std::vector<std::string> args;
+        args.reserve(argStorage.size() + 4);
+        args.emplace_back("clang++");
+        args.emplace_back("-fsyntax-only");
+        args.emplace_back("-fno-color-diagnostics");
+        for (const auto& arg : argStorage) {
+            if (arg != "-xc++") {
+                args.emplace_back(arg);
+            }
+        }
+        args.emplace_back(tempSourcePath.string());
+
+        std::vector<char*> argv;
+        argv.reserve(args.size() + 1);
+        for (auto& arg : args) {
+            argv.push_back(arg.data());
+        }
+        argv.push_back(nullptr);
+
+        execvp("clang++", argv.data());
+        _exit(127);
     }
 
     void ShutdownInterpreter(const std::shared_ptr<clang::Interpreter>& interpreter) {
@@ -84,6 +166,13 @@ namespace {
         if (auto err = executor.cleanUp()) {
             llvm::consumeError(std::move(err));
         }
+    }
+
+    template <typename Fn>
+    Fn AddressToFunction(std::uintptr_t address) {
+        static_assert(sizeof(Fn) == sizeof(std::uintptr_t),
+                      "Function pointer size must match address size");
+        return std::bit_cast<Fn>(address);
     }
 }
 
@@ -117,7 +206,7 @@ bool JitEngine::Init(const std::string& preamblePath) {
 
     preamble_ = readFile(preamblePath);
     if (preamble_.empty()) {
-        log("[JIT] Warning: preamble file not found or empty: " + preamblePath);
+        log(std::format("[JIT] Warning: preamble file not found or empty: {}", preamblePath));
     }
 
     // clang-repl incremental mode does not honour #pragma once across Parse()
@@ -154,13 +243,15 @@ bool JitEngine::Init(const std::string& preamblePath) {
     while (!gladIncludes.empty()) {
         size_t sep = gladIncludes.find('|');
         std::string part = (sep == std::string::npos) ? gladIncludes : gladIncludes.substr(0, sep);
-        if (!part.empty()) argStorage_.push_back("-I" + part);
+        if (!part.empty()) {
+            argStorage_.emplace_back("-I" + part);
+        }
         if (sep == std::string::npos) break;
         gladIncludes.erase(0, sep + 1);
     }
 
-    if (std::string(JIT_PROJECT_SOURCE_DIR).size() > 0) {
-        argStorage_.push_back(std::string("-I") + JIT_PROJECT_SOURCE_DIR + "/src");
+    if (!std::string(JIT_PROJECT_SOURCE_DIR).empty()) {
+        argStorage_.emplace_back(std::string("-I") + JIT_PROJECT_SOURCE_DIR + "/src");
     }
 
     log("[JIT] Initialization arguments configured.");
@@ -205,25 +296,23 @@ bool JitEngine::RunPreflightSyntaxCheck(const std::string& sourceName,
         diagnostics->clear();
     }
 
-    const std::string tempSourcePath = buildPreflightTempPath();
+    const fs::path tempSourcePath = buildPreflightTempPath();
     {
         std::ofstream out(tempSourcePath, std::ios::binary);
         if (!out.is_open()) {
-            if (diagnostics) {
-                *diagnostics = "[JIT Preflight Error][" + sourceName + "] Failed to create temporary source file.";
-            }
+            SetPreflightDiagnostics(diagnostics,
+                                    std::format("[JIT Preflight Error][{}] Failed to create temporary source file.",
+                                                sourceName));
             return false;
         }
         out << fullSource;
     }
 
-    int outputPipe[2] = { -1, -1 };
-    if (pipe(outputPipe) != 0) {
-        std::error_code removeError;
-        fs::remove(tempSourcePath, removeError);
-        if (diagnostics) {
-            *diagnostics = "[JIT Preflight Error][" + sourceName + "] Failed to create output pipe.";
-        }
+    std::array<int, 2> outputPipe{ -1, -1 };
+    if (pipe(outputPipe.data()) != 0) {
+        RemoveFileIfPresent(tempSourcePath);
+        SetPreflightDiagnostics(diagnostics,
+                                std::format("[JIT Preflight Error][{}] Failed to create output pipe.", sourceName));
         return false;
     }
 
@@ -231,116 +320,59 @@ bool JitEngine::RunPreflightSyntaxCheck(const std::string& sourceName,
     if (pid < 0) {
         close(outputPipe[0]);
         close(outputPipe[1]);
-        std::error_code removeError;
-        fs::remove(tempSourcePath, removeError);
-        if (diagnostics) {
-            *diagnostics = "[JIT Preflight Error][" + sourceName + "] Failed to fork preflight process.";
-        }
+        RemoveFileIfPresent(tempSourcePath);
+        SetPreflightDiagnostics(diagnostics,
+                                std::format("[JIT Preflight Error][{}] Failed to fork preflight process.", sourceName));
         return false;
     }
 
     if (pid == 0) {
-        dup2(outputPipe[1], STDOUT_FILENO);
-        dup2(outputPipe[1], STDERR_FILENO);
-        close(outputPipe[0]);
-        close(outputPipe[1]);
-
-        struct rlimit memoryLimit {};
-        memoryLimit.rlim_cur = PRECHECK_MEMORY_LIMIT_BYTES;
-        memoryLimit.rlim_max = PRECHECK_MEMORY_LIMIT_BYTES;
-        setrlimit(RLIMIT_AS, &memoryLimit);
-
-        struct rlimit cpuLimit {};
-        cpuLimit.rlim_cur = 4;
-        cpuLimit.rlim_max = 4;
-        setrlimit(RLIMIT_CPU, &cpuLimit);
-
-        std::vector<std::string> args;
-        args.reserve(argStorage_.size() + 4);
-        args.emplace_back("clang++");
-        args.emplace_back("-fsyntax-only");
-        args.emplace_back("-fno-color-diagnostics");
-        for (const auto& arg : argStorage_) {
-            if (arg == "-xc++") {
-                continue;
-            }
-            args.push_back(arg);
-        }
-        args.push_back(tempSourcePath);
-
-        std::vector<char*> argv;
-        argv.reserve(args.size() + 1);
-        for (auto& arg : args) {
-            argv.push_back(const_cast<char*>(arg.c_str()));
-        }
-        argv.push_back(nullptr);
-
-        execvp("clang++", argv.data());
-        _exit(127);
+        RunPreflightChildProcess(tempSourcePath, argStorage_, outputPipe);
     }
 
     close(outputPipe[1]);
 
-    bool timedOut = false;
-    int status = 0;
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(PRECHECK_TIMEOUT_MS);
-    while (true) {
-        const pid_t waitResult = waitpid(pid, &status, WNOHANG);
-        if (waitResult == pid) {
-            break;
-        }
-        if (waitResult < 0) {
-            status = -1;
-            break;
-        }
-        if (std::chrono::steady_clock::now() >= deadline) {
-            timedOut = true;
-            kill(pid, SIGKILL);
-            waitpid(pid, &status, 0);
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-
+    const PreflightWaitResult waitResult = WaitForPreflightProcess(pid, std::chrono::milliseconds(PRECHECK_TIMEOUT_MS));
     std::string preflightOutput = readFdToString(outputPipe[0]);
     close(outputPipe[0]);
 
-    std::error_code removeError;
-    fs::remove(tempSourcePath, removeError);
+    RemoveFileIfPresent(tempSourcePath);
 
-    if (timedOut) {
-        if (diagnostics) {
-            *diagnostics = "[JIT Preflight Error][" + sourceName + "] Syntax preflight timed out after " +
-                           std::to_string(PRECHECK_TIMEOUT_MS) + "ms.\n" + truncateDiagnostics(preflightOutput);
-        }
+    if (waitResult.timedOut) {
+        SetPreflightDiagnostics(diagnostics,
+                                std::format("[JIT Preflight Error][{}] Syntax preflight timed out after {}ms.\n{}",
+                                            sourceName,
+                                            PRECHECK_TIMEOUT_MS,
+                                            truncateDiagnostics(preflightOutput)));
         return false;
     }
 
-    if (status == -1) {
-        if (diagnostics) {
-            *diagnostics = "[JIT Preflight Error][" + sourceName + "] waitpid failed.";
-        }
+    if (waitResult.status == -1) {
+        SetPreflightDiagnostics(diagnostics,
+                                std::format("[JIT Preflight Error][{}] waitpid failed.", sourceName));
         return false;
     }
 
-    if (!WIFEXITED(status)) {
-        if (diagnostics) {
-            *diagnostics = "[JIT Preflight Error][" + sourceName + "] Preflight process did not exit cleanly.\n" +
-                           truncateDiagnostics(preflightOutput);
-        }
+    if (!WIFEXITED(waitResult.status)) {
+        SetPreflightDiagnostics(
+            diagnostics,
+            std::format("[JIT Preflight Error][{}] Preflight process did not exit cleanly.\n{}",
+                        sourceName,
+                        truncateDiagnostics(preflightOutput)));
         return false;
     }
 
-    const int exitCode = WEXITSTATUS(status);
+    const int exitCode = WEXITSTATUS(waitResult.status);
     if (exitCode == 127) {
         // clang++ is unavailable; keep old behavior instead of blocking all compiles.
         return true;
     }
 
     if (exitCode != 0) {
-        if (diagnostics) {
-            *diagnostics = "[JIT Preflight Error][" + sourceName + "]\n" + truncateDiagnostics(preflightOutput);
-        }
+        SetPreflightDiagnostics(diagnostics,
+                                std::format("[JIT Preflight Error][{}]\n{}",
+                                            sourceName,
+                                            truncateDiagnostics(preflightOutput)));
         return false;
     }
 
@@ -357,7 +389,7 @@ std::shared_ptr<JitProgram> JitEngine::CompileFile(const std::string& filepath) 
 }
 
 std::shared_ptr<JitProgram> JitEngine::CompileSource(const std::string& sourceName, const std::string& sourceCode) {
-    log("[JIT] Starting compilation for " + sourceName + "...");
+    log(std::format("[JIT] Starting compilation for {}...", sourceName));
     const std::string fullSource = preamble_ + "\n" + sourceCode;
 
     std::string preflightDiagnostics;
@@ -380,7 +412,7 @@ std::shared_ptr<JitProgram> JitEngine::CompileSource(const std::string& sourceNa
         
         msg = truncateDiagnostics(msg);
         
-        log("[JIT Parse Error][" + sourceName + "]\n" + msg);
+        log(std::format("[JIT Parse Error][{}]\n{}", sourceName, msg));
         return nullptr;
     }
 
@@ -389,7 +421,7 @@ std::shared_ptr<JitProgram> JitEngine::CompileSource(const std::string& sourceNa
         std::string msg;
         llvm::raw_string_ostream os(msg);
         llvm::logAllUnhandledErrors(std::move(execErr), os);
-        log("[JIT Execute Error][" + sourceName + "]\n" + os.str());
+        log(std::format("[JIT Execute Error][{}]\n{}", sourceName, os.str()));
         return nullptr;
     }
 
@@ -403,7 +435,7 @@ std::shared_ptr<JitProgram> JitEngine::CompileSource(const std::string& sourceNa
     program->interpreter = std::move(keepAliveInterpreter);
     program->functions = functions;
 
-    log("[JIT] Hot-swap successful for " + sourceName + ".");
+    log(std::format("[JIT] Hot-swap successful for {}.", sourceName));
     if (functions.init) log("  -> init()");
     if (functions.update) log("  -> update()");
     if (functions.render) log("  -> renderFrame()");
@@ -412,7 +444,7 @@ std::shared_ptr<JitProgram> JitEngine::CompileSource(const std::string& sourceNa
     return program;
 }
 
-bool JitEngine::lookupFunctions(clang::Interpreter& interpreter, JitFunctions* outFunctions) {
+bool JitEngine::lookupFunctions(const clang::Interpreter& interpreter, JitFunctions* outFunctions) {
     if (!outFunctions) {
         return false;
     }
@@ -420,19 +452,19 @@ bool JitEngine::lookupFunctions(clang::Interpreter& interpreter, JitFunctions* o
     // Look up all three entry points. Each is optional.
     // The user only needs to define the ones they care about.
 
-    auto tryLookup = [&](const std::string& name) -> void* {
+    auto tryLookup = [&](const std::string& name) -> std::uintptr_t {
         auto addrOrErr = interpreter.getSymbolAddress(name);
         if (!addrOrErr) {
             llvm::consumeError(addrOrErr.takeError());
-            return nullptr;
+            return 0;
         }
-        return reinterpret_cast<void*>(addrOrErr->getValue());
+        return static_cast<std::uintptr_t>(addrOrErr->getValue());
     };
 
-    outFunctions->init = reinterpret_cast<JitInitFn>(tryLookup("init"));
-    outFunctions->update = reinterpret_cast<JitUpdateFn>(tryLookup("update"));
-    outFunctions->render = reinterpret_cast<JitRenderFn>(tryLookup("renderFrame"));
-    outFunctions->shutdown = reinterpret_cast<JitShutdownFn>(tryLookup("shutdown"));
+    outFunctions->init = AddressToFunction<JitInitFn>(tryLookup("init"));
+    outFunctions->update = AddressToFunction<JitUpdateFn>(tryLookup("update"));
+    outFunctions->render = AddressToFunction<JitRenderFn>(tryLookup("renderFrame"));
+    outFunctions->shutdown = AddressToFunction<JitShutdownFn>(tryLookup("shutdown"));
 
     if (!outFunctions->init && !outFunctions->update && !outFunctions->render && !outFunctions->shutdown) {
         log("[JIT] Warning: compiled successfully but found no entry points "

@@ -53,8 +53,8 @@ public:
                                    std::vector<std::string> logHistory);
     void SetRendererTexture(unsigned int texture, int width, int height);
     void SetCompilationStatus(bool isCompiling, bool hasError, bool isStalled = false);
-    void SetupDarkTheme();
-    void SetupLightTheme();
+    void SetupDarkTheme() const;
+    void SetupLightTheme() const;
 
     void AddConsoleOutput(const std::string& text);
     void AddLogOutput(const std::string& text);
@@ -78,7 +78,7 @@ private:
     bool consoleScrollToBottom = true;
     bool logScrollToBottom = true;
 
-    char commandBuffer[512] = "";
+    std::array<char, 512> commandBuffer{};
     std::vector<std::string> commandHistory;
 
     std::function<bool(const std::string&, const std::string&)> onSaveDocument_;
@@ -99,12 +99,39 @@ private:
     bool hasCompileError_ = false;
     bool isStalled_ = false;
     bool openCreateWorkspacePopup_ = false;
-    char newWorkspaceNameBuffer_[128] = "";
+    std::array<char, 128> newWorkspaceNameBuffer_{};
 
     void SetupDockspace();
     void DrawMenuBar();
     void DrawConsolePane();
     void DrawTextEditorPane();
+    void DrawFileMenu(const std::vector<std::string>& workspaceNamesSnapshot,
+                      bool canDeleteAnyWorkspace,
+                      std::string* pendingWorkspaceDelete);
+    void DrawWorkspaceMenu(const std::vector<std::string>& workspaceNamesSnapshot,
+                           std::string* pendingWorkspaceSwitch) const;
+    void DrawViewMenu();
+    void DrawHelpMenu();
+    void OpenCreateWorkspacePopupIfRequested();
+    void DrawCreateWorkspacePopup();
+    void DrawMenuWorkspaceLabel(const std::vector<std::string>& workspaceNamesSnapshot);
+    void ApplyPendingWorkspaceAction(const std::string& pendingWorkspaceDelete,
+                                     const std::string& pendingWorkspaceSwitch);
+    void DrawCompileStatusIndicator() const;
+    void DrawWorkspaceSidebar(const std::vector<std::string>& workspaceNamesSnapshot,
+                              bool canDeleteAnyWorkspace,
+                              std::string* pendingWorkspaceSwitch,
+                              std::string* pendingWorkspaceDelete);
+    void DrawEditorTabsArea();
+    bool DrawEditorTab(Document& doc,
+                       double currentTime,
+                       bool* pendingSelectionVisible,
+                       bool* pendingSelectionConsumed);
+    void AutosaveDirtyDocuments(double currentTime);
+    void DrawRendererTab();
+    void DrawConsoleTab(const std::string& currentWorkspace);
+    void DrawLogsTab(const std::string& currentWorkspace);
+    std::string ResolveCurrentWorkspaceName();
     void DrawWelcomePopup();
     void DrawRuntimeGuidePopup();
     void LoadWelcomePreference();
@@ -121,6 +148,8 @@ private:
     void ApplyPendingDpiScale();
     void SetDpiScale(float newScale);
     void HandleGlobalShortcuts();
+    bool IsWorkspaceNumberShortcutHeld(std::size_t index, bool canUseCtrlShortcuts) const;
+    void TriggerChordAction(bool held, bool* chordState, const std::function<void()>& action);
     void ToggleActiveWorkspaceDocument();
     void CycleWorkspace(int direction);
     void ActivateWorkspaceByIndex(std::size_t index);

@@ -1,6 +1,7 @@
 #include "system/ConsoleRedirectSession.h"
 #include "ui/EditorUI.h"
 
+#include <array>
 #include <cerrno>
 #include <cstdio>
 #include <iostream>
@@ -45,8 +46,8 @@ bool ConsoleRedirectSession::WaitForPipeData() {
     return (pfd.revents & POLLIN) != 0;
 }
 
-bool ConsoleRedirectSession::ReadAvailableData(char* buffer, std::size_t bufferSize) {
-    const ssize_t n = read(pipeReadFd_, buffer, bufferSize);
+bool ConsoleRedirectSession::ReadAvailableData(std::span<char> buffer) {
+    const ssize_t n = read(pipeReadFd_, buffer.data(), buffer.size());
     if (n <= 0) {
         if (!readerRunning_.load()) {
             return false;
@@ -54,13 +55,12 @@ bool ConsoleRedirectSession::ReadAvailableData(char* buffer, std::size_t bufferS
         return errno == EINTR;
     }
 
-    ConsumeBuffer(buffer, n);
+    ConsumeBuffer(buffer.first(static_cast<std::size_t>(n)));
     return true;
 }
 
-void ConsoleRedirectSession::ConsumeBuffer(const char* buffer, ssize_t count) {
-    for (ssize_t i = 0; i < count; ++i) {
-        const char ch = buffer[i];
+void ConsoleRedirectSession::ConsumeBuffer(std::span<const char> buffer) {
+    for (const char ch : buffer) {
         if (ch == '\n') {
             FlushPendingLine();
             continue;
@@ -119,21 +119,18 @@ bool ConsoleRedirectSession::Start(EditorUI* ui) {
     ui_ = ui;
 
     readerRunning_.store(true);
-    readerThread_ = std::thread([this]() { ReaderLoop(); });
+    readerThread_ = std::jthread([this](std::stop_token) { ReaderLoop(); });
 
     active_ = true;
     return true;
 }
 
 void ConsoleRedirectSession::ReaderLoop() {
-    char buffer[1024];
+    std::array<char, 1024> buffer{};
 
     while (readerRunning_.load()) {
-        if (!WaitForPipeData()) {
-            break;
-        }
-
-        if (!ReadAvailableData(buffer, sizeof(buffer))) {
+        const bool hasPipeData = WaitForPipeData();
+        if (!hasPipeData || !ReadAvailableData(buffer)) {
             break;
         }
 
@@ -182,6 +179,7 @@ void ConsoleRedirectSession::Stop() {
         pipeWriteFd_ = -1;
     }
 
+    readerThread_.request_stop();
     if (readerThread_.joinable()) {
         readerThread_.join();
     }

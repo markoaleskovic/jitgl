@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cmath>
 #include <fstream>
+#include <ranges>
 
 namespace {
     constexpr double AUTOSAVE_DEBOUNCE_SECONDS = 0.05;
@@ -41,7 +42,7 @@ namespace {
 
 // style start
 
-void EditorUI::SetupDarkTheme() {
+void EditorUI::SetupDarkTheme() const {
     ImGuiStyle& style = ImGui::GetStyle();
     style = ImGuiStyle();
     ImVec4* colors = style.Colors;
@@ -127,7 +128,7 @@ void EditorUI::SetupDarkTheme() {
     colors[ImGuiCol_DockingEmptyBg]         = bgColor;
 }
 
-void EditorUI::SetupLightTheme() {
+void EditorUI::SetupLightTheme() const {
     ImGuiStyle& style = ImGui::GetStyle();
     style = ImGuiStyle();
     ImVec4* colors = style.Colors;
@@ -338,8 +339,8 @@ void EditorUI::Init(GLFWwindow *win) {
     float contentScaleX = 1.0f;
     float contentScaleY = 1.0f;
     glfwGetWindowContentScale(window, &contentScaleX, &contentScaleY);
-    const float monitorScale = 0.5f * (contentScaleX + contentScaleY);
-    if (std::isfinite(monitorScale) && monitorScale > 0.0f) {
+    if (const float monitorScale = 0.5f * (contentScaleX + contentScaleY);
+        std::isfinite(monitorScale) && monitorScale > 0.0f) {
         currentDpiScale_ = std::clamp(monitorScale, 0.5f, 3.0f);
         pendingDpiScale_ = currentDpiScale_;
     }
@@ -359,8 +360,8 @@ void EditorUI::Init(GLFWwindow *win) {
 }
 
 void EditorUI::ApplyPendingDpiScale() {
-    const bool dpiChanged = std::abs(pendingDpiScale_ - currentDpiScale_) >= 0.001f;
-    if (!dpiChanged && !themeApplyPending_) {
+    if (const bool dpiChanged = std::abs(pendingDpiScale_ - currentDpiScale_) >= 0.001f;
+        !dpiChanged && !themeApplyPending_) {
         return;
     }
 
@@ -519,34 +520,24 @@ void EditorUI::SetWorkspaceLineAppendedCallback(std::function<void(const std::st
 void EditorUI::SetWorkspaces(const std::vector<std::string>& workspaceNames, const std::string& activeWorkspace) {
     workspaceNames_ = workspaceNames;
 
-    openDocuments.erase(std::remove_if(openDocuments.begin(),
-                                       openDocuments.end(),
-                                       [&](const Document& doc) {
-                                           return std::find(workspaceNames_.begin(),
-                                                            workspaceNames_.end(),
-                                                            doc.workspaceName) == workspaceNames_.end();
-                                       }),
-                        openDocuments.end());
+    std::erase_if(openDocuments,
+                  [&](const Document& doc) {
+                      return std::ranges::find(workspaceNames_, doc.workspaceName) == workspaceNames_.end();
+                  });
 
     {
-        std::lock_guard<std::mutex> lock(consoleMutex);
-        for (auto it = workspaceConsoleLines_.begin(); it != workspaceConsoleLines_.end();) {
-            if (std::find(workspaceNames_.begin(), workspaceNames_.end(), it->first) == workspaceNames_.end()) {
-                it = workspaceConsoleLines_.erase(it);
-            } else {
-                ++it;
-            }
-        }
+        std::scoped_lock lock(consoleMutex);
+        std::erase_if(workspaceConsoleLines_,
+                      [&](const auto& entry) {
+                          return std::ranges::find(workspaceNames_, entry.first) == workspaceNames_.end();
+                      });
     }
     {
-        std::lock_guard<std::mutex> lock(logMutex);
-        for (auto it = workspaceLogLines_.begin(); it != workspaceLogLines_.end();) {
-            if (std::find(workspaceNames_.begin(), workspaceNames_.end(), it->first) == workspaceNames_.end()) {
-                it = workspaceLogLines_.erase(it);
-            } else {
-                ++it;
-            }
-        }
+        std::scoped_lock lock(logMutex);
+        std::erase_if(workspaceLogLines_,
+                      [&](const auto& entry) {
+                          return std::ranges::find(workspaceNames_, entry.first) == workspaceNames_.end();
+                      });
     }
 
     SetActiveWorkspace(activeWorkspace);
@@ -558,7 +549,7 @@ void EditorUI::SetActiveWorkspace(const std::string& workspaceName) {
     }
 
     {
-        std::lock_guard<std::mutex> lock(workspaceMutex_);
+        std::scoped_lock lock(workspaceMutex_);
         activeWorkspaceName_ = workspaceName;
     }
 
@@ -598,11 +589,11 @@ void EditorUI::SetWorkspaceOutputHistory(const std::string& workspaceName,
     }
 
     {
-        std::lock_guard<std::mutex> lock(consoleMutex);
+        std::scoped_lock lock(consoleMutex);
         workspaceConsoleLines_[workspaceName] = std::move(consoleHistory);
     }
     {
-        std::lock_guard<std::mutex> lock(logMutex);
+        std::scoped_lock lock(logMutex);
         workspaceLogLines_[workspaceName] = std::move(logHistory);
     }
 }
@@ -859,78 +850,67 @@ void EditorUI::DrawRuntimeGuidePopup() {
     ImGui::EndPopup();
 }
 
+void EditorUI::TriggerChordAction(bool held, bool* chordState, const std::function<void()>& action) {
+    if (held && !(*chordState)) {
+        action();
+    }
+    *chordState = held;
+}
+
+bool EditorUI::IsWorkspaceNumberShortcutHeld(std::size_t index, bool canUseCtrlShortcuts) const {
+    if (!canUseCtrlShortcuts || index >= ctrlWorkspaceIndexChordHeld_.size()) {
+        return false;
+    }
+
+    static constexpr std::array<std::array<int, 2>, 10> kShortcutKeys{{
+        {{GLFW_KEY_1, GLFW_KEY_KP_1}},
+        {{GLFW_KEY_2, GLFW_KEY_KP_2}},
+        {{GLFW_KEY_3, GLFW_KEY_KP_3}},
+        {{GLFW_KEY_4, GLFW_KEY_KP_4}},
+        {{GLFW_KEY_5, GLFW_KEY_KP_5}},
+        {{GLFW_KEY_6, GLFW_KEY_KP_6}},
+        {{GLFW_KEY_7, GLFW_KEY_KP_7}},
+        {{GLFW_KEY_8, GLFW_KEY_KP_8}},
+        {{GLFW_KEY_9, GLFW_KEY_KP_9}},
+        {{GLFW_KEY_0, GLFW_KEY_KP_0}},
+    }};
+
+    const auto& keys = kShortcutKeys[index];
+    return IsKeyDown(window, keys[0]) || IsKeyDown(window, keys[1]);
+}
+
 void EditorUI::HandleGlobalShortcuts() {
     const bool ctrlHeld = IsKeyDown(window, GLFW_KEY_LEFT_CONTROL) || IsKeyDown(window, GLFW_KEY_RIGHT_CONTROL);
     const bool superHeld = IsKeyDown(window, GLFW_KEY_LEFT_SUPER) || IsKeyDown(window, GLFW_KEY_RIGHT_SUPER);
     const bool canUseCtrlShortcuts = ctrlHeld && !superHeld;
-    const bool newWorkspaceHeld = IsKeyDown(window, GLFW_KEY_N);
-    const bool toggleThemeHeld = IsKeyDown(window, GLFW_KEY_T);
-    const bool tabHeld = IsKeyDown(window, GLFW_KEY_TAB);
-    const bool plusHeld = IsKeyDown(window, GLFW_KEY_EQUAL) || IsKeyDown(window, GLFW_KEY_KP_ADD);
-    const bool minusHeld = IsKeyDown(window, GLFW_KEY_MINUS) || IsKeyDown(window, GLFW_KEY_KP_SUBTRACT);
-    const bool workspaceCycleHeld = IsKeyDown(window, GLFW_KEY_GRAVE_ACCENT);
 
-    const bool ctrlWorkspaceCycleHeld = canUseCtrlShortcuts && workspaceCycleHeld;
-    if (ctrlWorkspaceCycleHeld && !ctrlWorkspaceCycleChordHeld_) {
-        CycleWorkspace(1);
-    }
-    ctrlWorkspaceCycleChordHeld_ = ctrlWorkspaceCycleHeld;
+    TriggerChordAction(canUseCtrlShortcuts && IsKeyDown(window, GLFW_KEY_GRAVE_ACCENT),
+                       &ctrlWorkspaceCycleChordHeld_,
+                       [this]() { CycleWorkspace(1); });
 
-    auto numberShortcutHeld = [this, canUseCtrlShortcuts](std::size_t index) {
-        if (!canUseCtrlShortcuts) {
-            return false;
-        }
-        switch (index) {
-            case 0: return IsKeyDown(window, GLFW_KEY_1) || IsKeyDown(window, GLFW_KEY_KP_1);
-            case 1: return IsKeyDown(window, GLFW_KEY_2) || IsKeyDown(window, GLFW_KEY_KP_2);
-            case 2: return IsKeyDown(window, GLFW_KEY_3) || IsKeyDown(window, GLFW_KEY_KP_3);
-            case 3: return IsKeyDown(window, GLFW_KEY_4) || IsKeyDown(window, GLFW_KEY_KP_4);
-            case 4: return IsKeyDown(window, GLFW_KEY_5) || IsKeyDown(window, GLFW_KEY_KP_5);
-            case 5: return IsKeyDown(window, GLFW_KEY_6) || IsKeyDown(window, GLFW_KEY_KP_6);
-            case 6: return IsKeyDown(window, GLFW_KEY_7) || IsKeyDown(window, GLFW_KEY_KP_7);
-            case 7: return IsKeyDown(window, GLFW_KEY_8) || IsKeyDown(window, GLFW_KEY_KP_8);
-            case 8: return IsKeyDown(window, GLFW_KEY_9) || IsKeyDown(window, GLFW_KEY_KP_9);
-            case 9: return IsKeyDown(window, GLFW_KEY_0) || IsKeyDown(window, GLFW_KEY_KP_0);
-            default: return false;
-        }
-    };
     for (std::size_t i = 0; i < ctrlWorkspaceIndexChordHeld_.size(); ++i) {
-        const bool held = numberShortcutHeld(i);
-        if (held && !ctrlWorkspaceIndexChordHeld_[i]) {
-            ActivateWorkspaceByIndex(i);
-        }
-        ctrlWorkspaceIndexChordHeld_[i] = held;
+        TriggerChordAction(IsWorkspaceNumberShortcutHeld(i, canUseCtrlShortcuts),
+                           &ctrlWorkspaceIndexChordHeld_[i],
+                           [this, i]() { ActivateWorkspaceByIndex(i); });
     }
 
-    const bool ctrlTabHeld = canUseCtrlShortcuts && tabHeld;
-    if (ctrlTabHeld && !ctrlTabChordHeld_) {
-        ToggleActiveWorkspaceDocument();
-    }
-    ctrlTabChordHeld_ = ctrlTabHeld;
-
-    const bool ctrlPlusHeld = canUseCtrlShortcuts && plusHeld;
-    if (ctrlPlusHeld && !ctrlPlusChordHeld_) {
-        SetDpiScale(currentDpiScale_ + 0.1f);
-    }
-    ctrlPlusChordHeld_ = ctrlPlusHeld;
-
-    const bool ctrlMinusHeld = canUseCtrlShortcuts && minusHeld;
-    if (ctrlMinusHeld && !ctrlMinusChordHeld_) {
-        SetDpiScale(currentDpiScale_ - 0.1f);
-    }
-    ctrlMinusChordHeld_ = ctrlMinusHeld;
-
-    const bool ctrlNewWorkspaceHeld = canUseCtrlShortcuts && newWorkspaceHeld;
-    if (ctrlNewWorkspaceHeld && !ctrlNewWorkspaceChordHeld_) {
-        openCreateWorkspacePopup_ = true;
-    }
-    ctrlNewWorkspaceChordHeld_ = ctrlNewWorkspaceHeld;
-
-    const bool ctrlThemeToggleHeld = canUseCtrlShortcuts && toggleThemeHeld;
-    if (ctrlThemeToggleHeld && !ctrlThemeToggleChordHeld_) {
-        ToggleTheme();
-    }
-    ctrlThemeToggleChordHeld_ = ctrlThemeToggleHeld;
+    TriggerChordAction(canUseCtrlShortcuts && IsKeyDown(window, GLFW_KEY_TAB),
+                       &ctrlTabChordHeld_,
+                       [this]() { ToggleActiveWorkspaceDocument(); });
+    TriggerChordAction(canUseCtrlShortcuts &&
+                           (IsKeyDown(window, GLFW_KEY_EQUAL) || IsKeyDown(window, GLFW_KEY_KP_ADD)),
+                       &ctrlPlusChordHeld_,
+                       [this]() { SetDpiScale(currentDpiScale_ + 0.1f); });
+    TriggerChordAction(canUseCtrlShortcuts &&
+                           (IsKeyDown(window, GLFW_KEY_MINUS) || IsKeyDown(window, GLFW_KEY_KP_SUBTRACT)),
+                       &ctrlMinusChordHeld_,
+                       [this]() { SetDpiScale(currentDpiScale_ - 0.1f); });
+    TriggerChordAction(canUseCtrlShortcuts && IsKeyDown(window, GLFW_KEY_N),
+                       &ctrlNewWorkspaceChordHeld_,
+                       [this]() { openCreateWorkspacePopup_ = true; });
+    TriggerChordAction(canUseCtrlShortcuts && IsKeyDown(window, GLFW_KEY_T),
+                       &ctrlThemeToggleChordHeld_,
+                       [this]() { ToggleTheme(); });
 }
 
 void EditorUI::ToggleActiveWorkspaceDocument() {
@@ -959,7 +939,7 @@ void EditorUI::ToggleActiveWorkspaceDocument() {
                                         return openDocuments[docIndex].filepath == activeDocumentPath_;
                                     });
     if (activeDocIt != activeWorkspaceDocIndices.end()) {
-        const std::size_t currentPosition = static_cast<std::size_t>(
+        const auto currentPosition = static_cast<std::size_t>(
             std::distance(activeWorkspaceDocIndices.begin(), activeDocIt));
         targetDocListIndex = (currentPosition + 1) % activeWorkspaceDocIndices.size();
     }
@@ -994,7 +974,7 @@ void EditorUI::CycleWorkspace(int direction) {
         nextIndex += workspaceCount;
     }
 
-    const std::size_t nextWorkspaceIndex = static_cast<std::size_t>(nextIndex);
+    const auto nextWorkspaceIndex = static_cast<std::size_t>(nextIndex);
     if (workspaceNames_[nextWorkspaceIndex] == activeWorkspaceName_) {
         return;
     }
@@ -1018,235 +998,296 @@ void EditorUI::ActivateWorkspaceByIndex(std::size_t index) {
     }
 }
 
-void EditorUI::DrawMenuBar() {
-    if (ImGui::BeginMainMenuBar()) {
-        const bool lightTheme = IsLightTheme();
-        const ImVec4 workspaceLabelColor = lightTheme ? ImVec4(0.20f, 0.20f, 0.20f, 1.0f)
-                                                      : ImVec4(0.82f, 0.82f, 0.82f, 1.0f);
-        const ImVec4 stalledColor = lightTheme ? ImVec4(0.78f, 0.33f, 0.00f, 1.0f)
-                                               : ImVec4(1.0f, 0.4f, 0.0f, 1.0f);
-        const ImVec4 compilingColor = lightTheme ? ImVec4(0.72f, 0.56f, 0.00f, 1.0f)
-                                                 : ImVec4(1.0f, 0.8f, 0.0f, 1.0f);
-        const ImVec4 errorColor = lightTheme ? ImVec4(0.75f, 0.20f, 0.20f, 1.0f)
-                                             : ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
-        const ImVec4 readyColor = lightTheme ? ImVec4(0.16f, 0.56f, 0.24f, 1.0f)
-                                             : ImVec4(0.4f, 1.0f, 0.4f, 1.0f);
-        const std::vector<std::string> workspaceNamesSnapshot = workspaceNames_;
-        const bool canDeleteAnyWorkspace = workspaceNamesSnapshot.size() > 1;
-        std::string pendingWorkspaceSwitch;
-        std::string pendingWorkspaceDelete;
+void EditorUI::DrawFileMenu(const std::vector<std::string>& workspaceNamesSnapshot,
+                            bool canDeleteAnyWorkspace,
+                            std::string* pendingWorkspaceDelete) {
+    if (!ImGui::BeginMenu("File")) {
+        return;
+    }
 
-        if (ImGui::BeginMenu("File")) {
-            if (ImGui::MenuItem("New Workspace...", "Ctrl+N")) {
-                openCreateWorkspacePopup_ = true;
-            }
-            if (ImGui::BeginMenu("Delete Workspace")) {
-                if (!canDeleteAnyWorkspace) {
-                    ImGui::BeginDisabled();
-                }
-                for (std::size_t i = 0; i < workspaceNamesSnapshot.size(); ++i) {
-                    const std::string& workspaceName = workspaceNamesSnapshot[i];
-                    const std::string workspaceLabel = BuildWorkspaceDisplayLabel(workspaceName, i);
-                    if (ImGui::MenuItem(workspaceLabel.c_str())) {
-                        pendingWorkspaceDelete = workspaceName;
-                    }
-                }
-                if (!canDeleteAnyWorkspace) {
-                    ImGui::EndDisabled();
-                }
-                ImGui::EndMenu();
-            }
-            if (ImGui::MenuItem("Save", "Ctrl+S")) {}
-            ImGui::Separator();
-            if (ImGui::MenuItem("Exit")) {
-                glfwSetWindowShouldClose(window, GLFW_TRUE);
-            }
-            ImGui::EndMenu();
-        }
+    if (ImGui::MenuItem("New Workspace...", "Ctrl+N")) {
+        openCreateWorkspacePopup_ = true;
+    }
 
-        if (ImGui::BeginMenu("Workspace")) {
-            for (std::size_t i = 0; i < workspaceNamesSnapshot.size(); ++i) {
-                const std::string& workspaceName = workspaceNamesSnapshot[i];
-                const std::string workspaceLabel = BuildWorkspaceDisplayLabel(workspaceName, i);
-                const bool selected = (workspaceName == activeWorkspaceName_);
-                if (ImGui::MenuItem(workspaceLabel.c_str(), nullptr, selected)) {
-                    pendingWorkspaceSwitch = workspaceName;
-                }
-            }
-            ImGui::EndMenu();
+    if (ImGui::BeginMenu("Delete Workspace")) {
+        if (!canDeleteAnyWorkspace) {
+            ImGui::BeginDisabled();
         }
-        
-        if (ImGui::BeginMenu("View")) { 
-            if (ImGui::MenuItem("Increase DPI", "Ctrl++")) {
-                SetDpiScale(currentDpiScale_ + 0.1f);
-            }
-            if (ImGui::MenuItem("Decrease DPI", "Ctrl+-")) {
-                SetDpiScale(currentDpiScale_ - 0.1f);
-            }
-            ImGui::Separator();
-            if (ImGui::MenuItem("Reset DPI")) {
-                SetDpiScale(1.0f);
-            }
-            const bool isLightTheme = (currentTheme_ == UiTheme::Light);
-            if (ImGui::MenuItem(isLightTheme ? "Switch to Dark Theme" : "Switch to Light Theme", "Ctrl+T")) {
-                ToggleTheme();
-            }
-            ImGui::EndMenu(); 
-        }
-        
-        if (ImGui::BeginMenu("Help")) {
-            if (ImGui::MenuItem("Getting Started")) {
-                openWelcomePopupRequested_ = true;
-                welcomePopupOpenedThisSession_ = false;
-            }
-            if (ImGui::MenuItem("Runtime State Guide")) {
-                openRuntimeGuidePopupRequested_ = true;
-                runtimeGuidePopupOpenedThisSession_ = false;
-            }
-            ImGui::EndMenu();
-        }
-
-        if (openCreateWorkspacePopup_) {
-            openCreateWorkspacePopup_ = false;
-            newWorkspaceNameBuffer_[0] = '\0';
-            focusCreateWorkspaceNameInput_ = true;
-            ImGui::OpenPopup("Create Workspace");
-        }
-
-        const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
-        ImGui::SetNextWindowViewport(mainViewport->ID);
-        ImGui::SetNextWindowPos(mainViewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-        const ImGuiWindowFlags createWorkspacePopupFlags = ImGuiWindowFlags_AlwaysAutoResize |
-                                                           ImGuiWindowFlags_NoTitleBar |
-                                                           ImGuiWindowFlags_NoResize |
-                                                           ImGuiWindowFlags_NoMove;
-        if (ImGui::BeginPopupModal("Create Workspace", nullptr, createWorkspacePopupFlags)) {
-            const bool escapePressed = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
-            if (escapePressed) {
-                newWorkspaceNameBuffer_[0] = '\0';
-                focusCreateWorkspaceNameInput_ = false;
-                ImGui::CloseCurrentPopup();
-            } else {
-                if (focusCreateWorkspaceNameInput_) {
-                    ImGui::SetKeyboardFocusHere();
-                }
-                const bool submitFromEnter = ImGui::InputText(
-                    "Name",
-                    newWorkspaceNameBuffer_,
-                    IM_ARRAYSIZE(newWorkspaceNameBuffer_),
-                    ImGuiInputTextFlags_EnterReturnsTrue);
-                focusCreateWorkspaceNameInput_ = false;
-                const bool canCreate = newWorkspaceNameBuffer_[0] != '\0';
-                bool createRequested = canCreate && submitFromEnter;
-
-                if (!canCreate) {
-                    ImGui::BeginDisabled();
-                }
-                if (ImGui::Button("Create")) {
-                    createRequested = true;
-                }
-                if (!canCreate) {
-                    ImGui::EndDisabled();
-                }
-                if (createRequested) {
-                    if (onCreateWorkspace_) {
-                        onCreateWorkspace_(newWorkspaceNameBuffer_);
-                    }
-                    newWorkspaceNameBuffer_[0] = '\0';
-                    focusCreateWorkspaceNameInput_ = false;
-                    ImGui::CloseCurrentPopup();
-                }
-
-                ImGui::SameLine();
-                if (ImGui::Button("Cancel")) {
-                    newWorkspaceNameBuffer_[0] = '\0';
-                    focusCreateWorkspaceNameInput_ = false;
-                    ImGui::CloseCurrentPopup();
-                }
-            }
-            ImGui::EndPopup();
-        }
-
-        std::string currentWorkspace;
-        {
-            std::lock_guard<std::mutex> lock(workspaceMutex_);
-            currentWorkspace = activeWorkspaceName_;
-        }
-        if (!currentWorkspace.empty()) {
-            std::string workspaceLabel = "Workspace: " + currentWorkspace;
-            auto activeWorkspaceIt = std::find(workspaceNamesSnapshot.begin(),
-                                               workspaceNamesSnapshot.end(),
-                                               currentWorkspace);
-            if (activeWorkspaceIt != workspaceNamesSnapshot.end()) {
-                const std::size_t activeWorkspaceIndex = static_cast<std::size_t>(
-                    std::distance(workspaceNamesSnapshot.begin(), activeWorkspaceIt));
-                workspaceLabel = "Workspace " + std::to_string(activeWorkspaceIndex + 1) + ": " + currentWorkspace;
-            }
-            const float centeredX = (ImGui::GetWindowWidth() - ImGui::CalcTextSize(workspaceLabel.c_str()).x) * 0.5f;
-            if (centeredX > 0.0f) {
-                ImGui::SetCursorPosX(centeredX);
-            }
-            ImGui::TextColored(workspaceLabelColor, "%s", workspaceLabel.c_str());
-        }
-
-        if (!pendingWorkspaceDelete.empty() && onDeleteWorkspace_) {
-            onDeleteWorkspace_(pendingWorkspaceDelete);
-        } else if (!pendingWorkspaceSwitch.empty()) {
-            SetActiveWorkspace(pendingWorkspaceSwitch);
-            if (onWorkspaceSwitched_) {
-                onWorkspaceSwitched_(pendingWorkspaceSwitch);
+        for (std::size_t i = 0; i < workspaceNamesSnapshot.size(); ++i) {
+            const std::string& workspaceName = workspaceNamesSnapshot[i];
+            const std::string workspaceLabel = BuildWorkspaceDisplayLabel(workspaceName, i);
+            if (ImGui::MenuItem(workspaceLabel.c_str())) {
+                *pendingWorkspaceDelete = workspaceName;
             }
         }
-
-        // Compile Status Indicator
-        ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 170.0f);
-        if (isStalled_) {
-            ImGui::TextColored(stalledColor, "STALLED?");
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("JIT compilation is taking longer than expected.\nCheck Logs for details.");
-            }
-        } else if (isCompiling_) {
-            ImGui::TextColored(compilingColor, "COMPILING...");
-        } else if (hasCompileError_) {
-            ImGui::TextColored(errorColor, "ERROR");
-        } else {
-            ImGui::TextColored(readyColor, "READY");
+        if (!canDeleteAnyWorkspace) {
+            ImGui::EndDisabled();
         }
+        ImGui::EndMenu();
+    }
 
-        ImGui::EndMainMenuBar();
+    (void)ImGui::MenuItem("Save", "Ctrl+S");
+    ImGui::Separator();
+    if (ImGui::MenuItem("Exit")) {
+        glfwSetWindowShouldClose(window, GLFW_TRUE);
+    }
+    ImGui::EndMenu();
+}
+
+void EditorUI::DrawWorkspaceMenu(const std::vector<std::string>& workspaceNamesSnapshot,
+                                 std::string* pendingWorkspaceSwitch) const {
+    if (!ImGui::BeginMenu("Workspace")) {
+        return;
+    }
+
+    for (std::size_t i = 0; i < workspaceNamesSnapshot.size(); ++i) {
+        const std::string& workspaceName = workspaceNamesSnapshot[i];
+        const std::string workspaceLabel = BuildWorkspaceDisplayLabel(workspaceName, i);
+        const bool selected = (workspaceName == activeWorkspaceName_);
+        if (ImGui::MenuItem(workspaceLabel.c_str(), nullptr, selected)) {
+            *pendingWorkspaceSwitch = workspaceName;
+        }
+    }
+    ImGui::EndMenu();
+}
+
+void EditorUI::DrawViewMenu() {
+    if (!ImGui::BeginMenu("View")) {
+        return;
+    }
+
+    if (ImGui::MenuItem("Increase DPI", "Ctrl++")) {
+        SetDpiScale(currentDpiScale_ + 0.1f);
+    }
+    if (ImGui::MenuItem("Decrease DPI", "Ctrl+-")) {
+        SetDpiScale(currentDpiScale_ - 0.1f);
+    }
+    ImGui::Separator();
+    if (ImGui::MenuItem("Reset DPI")) {
+        SetDpiScale(1.0f);
+    }
+    if (ImGui::MenuItem(IsLightTheme() ? "Switch to Dark Theme" : "Switch to Light Theme", "Ctrl+T")) {
+        ToggleTheme();
+    }
+    ImGui::EndMenu();
+}
+
+void EditorUI::DrawHelpMenu() {
+    if (!ImGui::BeginMenu("Help")) {
+        return;
+    }
+
+    if (ImGui::MenuItem("Getting Started")) {
+        openWelcomePopupRequested_ = true;
+        welcomePopupOpenedThisSession_ = false;
+    }
+    if (ImGui::MenuItem("Runtime State Guide")) {
+        openRuntimeGuidePopupRequested_ = true;
+        runtimeGuidePopupOpenedThisSession_ = false;
+    }
+    ImGui::EndMenu();
+}
+
+void EditorUI::OpenCreateWorkspacePopupIfRequested() {
+    if (!openCreateWorkspacePopup_) {
+        return;
+    }
+
+    openCreateWorkspacePopup_ = false;
+    newWorkspaceNameBuffer_[0] = '\0';
+    focusCreateWorkspaceNameInput_ = true;
+    ImGui::OpenPopup("Create Workspace");
+}
+
+void EditorUI::DrawCreateWorkspacePopup() {
+    const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowViewport(mainViewport->ID);
+    ImGui::SetNextWindowPos(mainViewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    const ImGuiWindowFlags createWorkspacePopupFlags = ImGuiWindowFlags_AlwaysAutoResize |
+                                                       ImGuiWindowFlags_NoTitleBar |
+                                                       ImGuiWindowFlags_NoResize |
+                                                       ImGuiWindowFlags_NoMove;
+    if (!ImGui::BeginPopupModal("Create Workspace", nullptr, createWorkspacePopupFlags)) {
+        return;
+    }
+
+    const auto closePopup = [this]() {
+        newWorkspaceNameBuffer_[0] = '\0';
+        focusCreateWorkspaceNameInput_ = false;
+        ImGui::CloseCurrentPopup();
+    };
+
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        closePopup();
+        ImGui::EndPopup();
+        return;
+    }
+
+    if (focusCreateWorkspaceNameInput_) {
+        ImGui::SetKeyboardFocusHere();
+    }
+
+    const bool submitFromEnter = ImGui::InputText("Name",
+                                                  newWorkspaceNameBuffer_.data(),
+                                                  newWorkspaceNameBuffer_.size(),
+                                                  ImGuiInputTextFlags_EnterReturnsTrue);
+    focusCreateWorkspaceNameInput_ = false;
+
+    const bool canCreate = newWorkspaceNameBuffer_[0] != '\0';
+    bool createRequested = canCreate && submitFromEnter;
+
+    if (!canCreate) {
+        ImGui::BeginDisabled();
+    }
+    if (ImGui::Button("Create")) {
+        createRequested = true;
+    }
+    if (!canCreate) {
+        ImGui::EndDisabled();
+    }
+    if (createRequested) {
+        if (onCreateWorkspace_) {
+            onCreateWorkspace_(newWorkspaceNameBuffer_.data());
+        }
+        closePopup();
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel")) {
+        closePopup();
+    }
+
+    ImGui::EndPopup();
+}
+
+void EditorUI::DrawMenuWorkspaceLabel(const std::vector<std::string>& workspaceNamesSnapshot) {
+    std::string currentWorkspace;
+    {
+        std::scoped_lock lock(workspaceMutex_);
+        currentWorkspace = activeWorkspaceName_;
+    }
+    if (currentWorkspace.empty()) {
+        return;
+    }
+
+    std::string workspaceLabel = "Workspace: " + currentWorkspace;
+    if (auto activeWorkspaceIt = std::ranges::find(workspaceNamesSnapshot, currentWorkspace);
+        activeWorkspaceIt != workspaceNamesSnapshot.end()) {
+        auto activeWorkspaceIndex = static_cast<std::size_t>(
+            std::distance(workspaceNamesSnapshot.begin(), activeWorkspaceIt));
+        workspaceLabel = "Workspace " + std::to_string(activeWorkspaceIndex + 1) + ": " + currentWorkspace;
+    }
+
+    const float centeredX = (ImGui::GetWindowWidth() - ImGui::CalcTextSize(workspaceLabel.c_str()).x) * 0.5f;
+    if (centeredX > 0.0f) {
+        ImGui::SetCursorPosX(centeredX);
+    }
+
+    const ImVec4 workspaceLabelColor = IsLightTheme() ? ImVec4(0.20f, 0.20f, 0.20f, 1.0f)
+                                                       : ImVec4(0.82f, 0.82f, 0.82f, 1.0f);
+    ImGui::TextColored(workspaceLabelColor, "%s", workspaceLabel.c_str());
+}
+
+void EditorUI::ApplyPendingWorkspaceAction(const std::string& pendingWorkspaceDelete,
+                                           const std::string& pendingWorkspaceSwitch) {
+    if (!pendingWorkspaceDelete.empty() && onDeleteWorkspace_) {
+        onDeleteWorkspace_(pendingWorkspaceDelete);
+        return;
+    }
+
+    if (pendingWorkspaceSwitch.empty()) {
+        return;
+    }
+
+    SetActiveWorkspace(pendingWorkspaceSwitch);
+    if (onWorkspaceSwitched_) {
+        onWorkspaceSwitched_(pendingWorkspaceSwitch);
     }
 }
 
-void EditorUI::DrawTextEditorPane() {
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar;
-    ImGui::Begin("Code Editor", nullptr, flags);
+void EditorUI::DrawCompileStatusIndicator() const {
+    const ImVec4 stalledColor = IsLightTheme() ? ImVec4(0.78f, 0.33f, 0.00f, 1.0f)
+                                               : ImVec4(1.0f, 0.4f, 0.0f, 1.0f);
+    const ImVec4 compilingColor = IsLightTheme() ? ImVec4(0.72f, 0.56f, 0.00f, 1.0f)
+                                                 : ImVec4(1.0f, 0.8f, 0.0f, 1.0f);
+    const ImVec4 errorColor = IsLightTheme() ? ImVec4(0.75f, 0.20f, 0.20f, 1.0f)
+                                             : ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
+    const ImVec4 readyColor = IsLightTheme() ? ImVec4(0.16f, 0.56f, 0.24f, 1.0f)
+                                             : ImVec4(0.4f, 1.0f, 0.4f, 1.0f);
 
-    constexpr float workspaceSidebarWidth = 165.0f;
-    ImGui::BeginChild("WorkspaceSidebar", ImVec2(workspaceSidebarWidth, 0.0f), true);
-    ImGui::TextUnformatted("Workspaces");
-    ImGui::Separator();
+    ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 170.0f);
+    if (isStalled_) {
+        ImGui::TextColored(stalledColor, "STALLED?");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("JIT compilation is taking longer than expected.\nCheck Logs for details.");
+        }
+        return;
+    }
+
+    if (isCompiling_) {
+        ImGui::TextColored(compilingColor, "COMPILING...");
+        return;
+    }
+
+    if (hasCompileError_) {
+        ImGui::TextColored(errorColor, "ERROR");
+        return;
+    }
+
+    ImGui::TextColored(readyColor, "READY");
+}
+
+void EditorUI::DrawMenuBar() {
+    if (!ImGui::BeginMainMenuBar()) {
+        return;
+    }
 
     const std::vector<std::string> workspaceNamesSnapshot = workspaceNames_;
     const bool canDeleteAnyWorkspace = workspaceNamesSnapshot.size() > 1;
     std::string pendingWorkspaceSwitch;
     std::string pendingWorkspaceDelete;
+
+    DrawFileMenu(workspaceNamesSnapshot, canDeleteAnyWorkspace, &pendingWorkspaceDelete);
+    DrawWorkspaceMenu(workspaceNamesSnapshot, &pendingWorkspaceSwitch);
+    DrawViewMenu();
+    DrawHelpMenu();
+    OpenCreateWorkspacePopupIfRequested();
+    DrawCreateWorkspacePopup();
+    DrawMenuWorkspaceLabel(workspaceNamesSnapshot);
+    ApplyPendingWorkspaceAction(pendingWorkspaceDelete, pendingWorkspaceSwitch);
+    DrawCompileStatusIndicator();
+
+    ImGui::EndMainMenuBar();
+}
+
+void EditorUI::DrawWorkspaceSidebar(const std::vector<std::string>& workspaceNamesSnapshot,
+                                    bool canDeleteAnyWorkspace,
+                                    std::string* pendingWorkspaceSwitch,
+                                    std::string* pendingWorkspaceDelete) {
+    constexpr float workspaceSidebarWidth = 165.0f;
+    ImGui::BeginChild("WorkspaceSidebar", ImVec2(workspaceSidebarWidth, 0.0f), true);
+    ImGui::TextUnformatted("Workspaces");
+    ImGui::Separator();
+
     for (std::size_t i = 0; i < workspaceNamesSnapshot.size(); ++i) {
         const std::string& workspaceName = workspaceNamesSnapshot[i];
         const std::string workspaceLabel = BuildWorkspaceDisplayLabel(workspaceName, i);
         ImGui::PushID(workspaceName.c_str());
+
         const bool selected = (workspaceName == activeWorkspaceName_);
         const float rowWidth = ImGui::GetContentRegionAvail().x;
         const float deleteButtonWidth = canDeleteAnyWorkspace ? (ImGui::GetFrameHeight() - 2.0f) : 0.0f;
-        const float selectableWidth = canDeleteAnyWorkspace ? std::max(1.0f, rowWidth - deleteButtonWidth - 6.0f)
-                                                            : rowWidth;
+        const float selectableWidth = canDeleteAnyWorkspace
+                                          ? std::max(1.0f, rowWidth - deleteButtonWidth - 6.0f)
+                                          : rowWidth;
         if (ImGui::Selectable(workspaceLabel.c_str(), selected, 0, ImVec2(selectableWidth, 0.0f))) {
-            pendingWorkspaceSwitch = workspaceName;
+            *pendingWorkspaceSwitch = workspaceName;
         }
 
         if (ImGui::BeginPopupContextItem("WorkspaceSidebarContext")) {
             if (canDeleteAnyWorkspace) {
                 if (ImGui::MenuItem("Delete Workspace")) {
-                    pendingWorkspaceDelete = workspaceName;
+                    *pendingWorkspaceDelete = workspaceName;
                 }
             } else {
                 ImGui::TextDisabled("Cannot delete last workspace");
@@ -1257,7 +1298,7 @@ void EditorUI::DrawTextEditorPane() {
         if (canDeleteAnyWorkspace) {
             ImGui::SameLine();
             if (ImGui::SmallButton("x")) {
-                pendingWorkspaceDelete = workspaceName;
+                *pendingWorkspaceDelete = workspaceName;
             }
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("Delete workspace");
@@ -1267,86 +1308,90 @@ void EditorUI::DrawTextEditorPane() {
         ImGui::PopID();
     }
 
-    if (!pendingWorkspaceDelete.empty() && onDeleteWorkspace_) {
-        onDeleteWorkspace_(pendingWorkspaceDelete);
-    } else if (!pendingWorkspaceSwitch.empty()) {
-        SetActiveWorkspace(pendingWorkspaceSwitch);
-        if (onWorkspaceSwitched_) {
-            onWorkspaceSwitched_(pendingWorkspaceSwitch);
+    ImGui::EndChild();
+}
+
+bool EditorUI::DrawEditorTab(Document& doc,
+                             double currentTime,
+                             bool* pendingSelectionVisible,
+                             bool* pendingSelectionConsumed) {
+    if (!doc.isOpen || doc.workspaceName != activeWorkspaceName_) {
+        return false;
+    }
+
+    ImGuiTabItemFlags tabFlags = doc.isDirty ? ImGuiTabItemFlags_UnsavedDocument : ImGuiTabItemFlags_None;
+    if (!pendingDocumentSelectionPath_.empty() && doc.filepath == pendingDocumentSelectionPath_) {
+        *pendingSelectionVisible = true;
+        tabFlags |= ImGuiTabItemFlags_SetSelected;
+    }
+
+    if (!ImGui::BeginTabItem(doc.filename.c_str(), &doc.isOpen, tabFlags)) {
+        return true;
+    }
+
+    if (!pendingDocumentSelectionPath_.empty() && doc.filepath == pendingDocumentSelectionPath_) {
+        *pendingSelectionConsumed = true;
+    }
+    if (activeDocumentPath_ != doc.filepath) {
+        activeDocumentPath_ = doc.filepath;
+        if (onActiveDocumentChanged_) {
+            onActiveDocumentChanged_(doc.filepath, doc.lastKnownText);
         }
     }
-    ImGui::EndChild();
 
-    ImGui::SameLine();
+    doc.editor.Render(doc.filename.c_str());
+    std::string currentText = doc.editor.GetText();
+    if (currentText != doc.lastKnownText) {
+        doc.isDirty = true;
+        doc.lastModifiedTime = currentTime;
+        doc.lastKnownText = std::move(currentText);
+        if (onDocumentChanged_) {
+            onDocumentChanged_(doc.filepath, doc.lastKnownText);
+        }
+    }
+
+    ImGui::EndTabItem();
+    return true;
+}
+
+void EditorUI::AutosaveDirtyDocuments(double currentTime) {
+    for (auto& doc : openDocuments) {
+        if (!doc.isDirty || (currentTime - doc.lastModifiedTime) < AUTOSAVE_DEBOUNCE_SECONDS) {
+            continue;
+        }
+
+        bool saved = false;
+        if (onSaveDocument_) {
+            saved = onSaveDocument_(doc.filepath, doc.lastKnownText);
+        }
+
+        if (saved) {
+            doc.isDirty = false;
+            AddLogOutput("[AutoSave] " + doc.filename + " committed to disk.");
+        } else {
+            AddLogOutput("[AutoSave Error] Failed to write " + doc.filepath);
+        }
+    }
+}
+
+void EditorUI::DrawEditorTabsArea() {
     ImGui::BeginChild("WorkspaceEditorArea", ImVec2(0.0f, 0.0f), false);
     if (ImGui::BeginTabBar("EditorTabs", ImGuiTabBarFlags_Reorderable | ImGuiTabBarFlags_AutoSelectNewTabs)) {
-        double currentTime = ImGui::GetTime();
+        const double currentTime = ImGui::GetTime();
         bool drewAnyDocument = false;
         bool pendingSelectionVisible = false;
         bool pendingSelectionConsumed = false;
 
-        for (auto &doc: openDocuments) {
-            if (!doc.isOpen) continue;
-            if (doc.workspaceName != activeWorkspaceName_) continue;
-            drewAnyDocument = true;
-
-            ImGuiTabItemFlags tabFlags = doc.isDirty ? ImGuiTabItemFlags_UnsavedDocument : ImGuiTabItemFlags_None;
-            if (!pendingDocumentSelectionPath_.empty() &&
-                doc.filepath == pendingDocumentSelectionPath_) {
-                pendingSelectionVisible = true;
-                tabFlags |= ImGuiTabItemFlags_SetSelected;
-            }
-
-            if (ImGui::BeginTabItem(doc.filename.c_str(), &doc.isOpen, tabFlags)) {
-                if (!pendingDocumentSelectionPath_.empty() &&
-                    doc.filepath == pendingDocumentSelectionPath_) {
-                    pendingSelectionConsumed = true;
-                }
-                if (activeDocumentPath_ != doc.filepath) {
-                    activeDocumentPath_ = doc.filepath;
-                    if (onActiveDocumentChanged_) {
-                        onActiveDocumentChanged_(doc.filepath, doc.lastKnownText);
-                    }
-                }
-
-                doc.editor.Render(doc.filename.c_str());
-                std::string currentText = doc.editor.GetText();
-
-                if (currentText != doc.lastKnownText) {
-                    doc.isDirty = true;
-                    doc.lastModifiedTime = currentTime;
-                    doc.lastKnownText = std::move(currentText); // Move semantics avoid a string copy here
-                    if (onDocumentChanged_) {
-                        onDocumentChanged_(doc.filepath, doc.lastKnownText);
-                    }
-                }
-                ImGui::EndTabItem();
-            }
+        for (auto& doc : openDocuments) {
+            drewAnyDocument = DrawEditorTab(doc, currentTime, &pendingSelectionVisible, &pendingSelectionConsumed) ||
+                              drewAnyDocument;
         }
 
-        if (!pendingDocumentSelectionPath_.empty() &&
-            (pendingSelectionConsumed || !pendingSelectionVisible)) {
+        if (!pendingDocumentSelectionPath_.empty() && (pendingSelectionConsumed || !pendingSelectionVisible)) {
             pendingDocumentSelectionPath_.clear();
         }
 
-        for (auto& doc : openDocuments) {
-            if (!doc.isDirty || (currentTime - doc.lastModifiedTime) < AUTOSAVE_DEBOUNCE_SECONDS) {
-                continue;
-            }
-
-            bool saved = false;
-            if (onSaveDocument_) {
-                // Use the already-cached text instead of querying the editor again
-                saved = onSaveDocument_(doc.filepath, doc.lastKnownText);
-            }
-
-            if (saved) {
-                doc.isDirty = false;
-                AddLogOutput("[AutoSave] " + doc.filename + " committed to disk.");
-            } else {
-                AddLogOutput("[AutoSave Error] Failed to write " + doc.filepath);
-            }
-        }
+        AutosaveDirtyDocuments(currentTime);
 
         if (!drewAnyDocument) {
             ImGui::TextUnformatted("No files in this workspace.");
@@ -1354,12 +1399,31 @@ void EditorUI::DrawTextEditorPane() {
         ImGui::EndTabBar();
     }
     ImGui::EndChild();
+}
+
+void EditorUI::DrawTextEditorPane() {
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar;
+    ImGui::Begin("Code Editor", nullptr, flags);
+
+    const std::vector<std::string> workspaceNamesSnapshot = workspaceNames_;
+    const bool canDeleteAnyWorkspace = workspaceNamesSnapshot.size() > 1;
+    std::string pendingWorkspaceSwitch;
+    std::string pendingWorkspaceDelete;
+
+    DrawWorkspaceSidebar(workspaceNamesSnapshot,
+                         canDeleteAnyWorkspace,
+                         &pendingWorkspaceSwitch,
+                         &pendingWorkspaceDelete);
+    ApplyPendingWorkspaceAction(pendingWorkspaceDelete, pendingWorkspaceSwitch);
+
+    ImGui::SameLine();
+    DrawEditorTabsArea();
     ImGui::End();
 }
 void EditorUI::AddConsoleOutput(const std::string &text) {
     std::string workspaceName;
     {
-        std::lock_guard<std::mutex> workspaceLock(workspaceMutex_);
+        std::scoped_lock workspaceLock(workspaceMutex_);
         workspaceName = activeWorkspaceName_;
     }
     if (workspaceName.empty()) {
@@ -1367,7 +1431,7 @@ void EditorUI::AddConsoleOutput(const std::string &text) {
     }
 
     {
-        std::lock_guard<std::mutex> lock(consoleMutex);
+        std::scoped_lock lock(consoleMutex);
         auto& lines = workspaceConsoleLines_[workspaceName];
         lines.push_back(text);
         if (lines.size() > MAX_CONSOLE_LINES) {
@@ -1385,7 +1449,7 @@ void EditorUI::AddConsoleOutput(const std::string &text) {
 void EditorUI::AddLogOutput(const std::string &text) {
     std::string workspaceName;
     {
-        std::lock_guard<std::mutex> workspaceLock(workspaceMutex_);
+        std::scoped_lock workspaceLock(workspaceMutex_);
         workspaceName = activeWorkspaceName_;
     }
     if (workspaceName.empty()) {
@@ -1393,7 +1457,7 @@ void EditorUI::AddLogOutput(const std::string &text) {
     }
 
     {
-        std::lock_guard<std::mutex> lock(logMutex);
+        std::scoped_lock lock(logMutex);
         auto& lines = workspaceLogLines_[workspaceName];
         lines.push_back(text);
         if (lines.size() > MAX_LOG_LINES) {
@@ -1408,128 +1472,154 @@ void EditorUI::AddLogOutput(const std::string &text) {
     }
 }
 
-void EditorUI::DrawConsolePane() {
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar;
-    const bool lightTheme = (currentTheme_ == UiTheme::Light);
-    const ImVec4 utilityPaneBg = lightTheme ? kLightUtilityPaneBgColor : kUtilityPaneBgColor;
-    const ImVec4 utilityPaneChildBg = lightTheme ? kLightUtilityPaneChildBgColor : kUtilityPaneChildBgColor;
-    const ImVec4 consoleCommandColor = lightTheme ? ImVec4(0.12f, 0.42f, 0.78f, 1.0f)
-                                                  : ImVec4(0.6f, 0.9f, 1.0f, 1.0f);
-    const ImVec4 logErrorColor = lightTheme ? ImVec4(0.75f, 0.20f, 0.20f, 1.0f)
-                                            : ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
-    const ImVec4 logSuccessColor = lightTheme ? ImVec4(0.16f, 0.56f, 0.24f, 1.0f)
-                                              : ImVec4(0.5f, 1.0f, 0.5f, 1.0f);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, utilityPaneBg);
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, utilityPaneChildBg);
-    ImGui::Begin("Utility View", nullptr, flags);
-
+std::string EditorUI::ResolveCurrentWorkspaceName() {
     std::string currentWorkspace;
     {
-        std::lock_guard<std::mutex> workspaceLock(workspaceMutex_);
+        std::scoped_lock workspaceLock(workspaceMutex_);
         currentWorkspace = activeWorkspaceName_;
     }
     if (currentWorkspace.empty()) {
         currentWorkspace = FALLBACK_WORKSPACE_NAME;
     }
+    return currentWorkspace;
+}
 
-    if (ImGui::BeginTabBar("UtilityTabs", ImGuiTabBarFlags_None)) {
-        if (ImGui::BeginTabItem("Renderer")) {
-            if (rendererTexture_ != 0 && rendererTextureWidth_ > 0 && rendererTextureHeight_ > 0) {
-                const ImVec2 avail = ImGui::GetContentRegionAvail();
-                const float srcAspect = static_cast<float>(rendererTextureWidth_) / static_cast<float>(rendererTextureHeight_);
-                ImVec2 imageSize = avail;
-                if (imageSize.x > 0.0f && imageSize.y > 0.0f) {
-                    const float dstAspect = imageSize.x / imageSize.y;
-                    if (dstAspect > srcAspect) {
-                        imageSize.x = imageSize.y * srcAspect;
-                    } else {
-                        imageSize.y = imageSize.x / srcAspect;
-                    }
-                }
+void EditorUI::DrawRendererTab() {
+    if (!ImGui::BeginTabItem("Renderer")) {
+        return;
+    }
 
-                const ImVec2 cursor = ImGui::GetCursorPos();
-                const float offsetX = (avail.x - imageSize.x) * 0.5f;
-                const float offsetY = (avail.y - imageSize.y) * 0.5f;
-                ImGui::SetCursorPos(ImVec2(cursor.x + (offsetX > 0.0f ? offsetX : 0.0f),
-                                           cursor.y + (offsetY > 0.0f ? offsetY : 0.0f)));
-
-                ImGui::Image(static_cast<ImTextureID>(rendererTexture_),
-                             imageSize,
-                             ImVec2(0.0f, 1.0f),
-                             ImVec2(1.0f, 0.0f));
+    if (rendererTexture_ != 0 && rendererTextureWidth_ > 0 && rendererTextureHeight_ > 0) {
+        const ImVec2 avail = ImGui::GetContentRegionAvail();
+        const float srcAspect = static_cast<float>(rendererTextureWidth_) / static_cast<float>(rendererTextureHeight_);
+        ImVec2 imageSize = avail;
+        if (imageSize.x > 0.0f && imageSize.y > 0.0f) {
+            const float dstAspect = imageSize.x / imageSize.y;
+            if (dstAspect > srcAspect) {
+                imageSize.x = imageSize.y * srcAspect;
             } else {
-                ImGui::TextUnformatted("Renderer not ready.");
+                imageSize.y = imageSize.x / srcAspect;
             }
-            ImGui::EndTabItem();
         }
 
-        if (ImGui::BeginTabItem("Console")) {
-            const float footerHeight = ImGui::GetStyle().ItemSpacing.y + ImGui::GetFrameHeightWithSpacing();
-            ImGui::BeginChild("ConsoleOutput", ImVec2(0.0f, -footerHeight), false, ImGuiWindowFlags_HorizontalScrollbar);
-            {
-                std::lock_guard<std::mutex> lock(consoleMutex);
-                auto it = workspaceConsoleLines_.find(currentWorkspace);
-                if (it != workspaceConsoleLines_.end()) {
-                    for (const std::string& line : it->second) {
-                        if (!line.empty() && line[0] == '>') {
-                            ImGui::TextColored(consoleCommandColor, "%s", line.c_str());
-                        } else {
-                            ImGui::TextUnformatted(line.c_str());
-                        }
-                    }
-                }
-                if (consoleScrollToBottom || ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
-                    ImGui::SetScrollHereY(1.0f);
-                    consoleScrollToBottom = false;
+        const ImVec2 cursor = ImGui::GetCursorPos();
+        const float offsetX = (avail.x - imageSize.x) * 0.5f;
+        const float offsetY = (avail.y - imageSize.y) * 0.5f;
+        ImGui::SetCursorPos(ImVec2(cursor.x + (offsetX > 0.0f ? offsetX : 0.0f),
+                                   cursor.y + (offsetY > 0.0f ? offsetY : 0.0f)));
+
+        ImGui::Image(static_cast<ImTextureID>(rendererTexture_),
+                     imageSize,
+                     ImVec2(0.0f, 1.0f),
+                     ImVec2(1.0f, 0.0f));
+    } else {
+        ImGui::TextUnformatted("Renderer not ready.");
+    }
+
+    ImGui::EndTabItem();
+}
+
+void EditorUI::DrawConsoleTab(const std::string& currentWorkspace) {
+    if (!ImGui::BeginTabItem("Console")) {
+        return;
+    }
+
+    const ImVec4 consoleCommandColor = IsLightTheme() ? ImVec4(0.12f, 0.42f, 0.78f, 1.0f)
+                                                       : ImVec4(0.6f, 0.9f, 1.0f, 1.0f);
+    const float footerHeight = ImGui::GetStyle().ItemSpacing.y + ImGui::GetFrameHeightWithSpacing();
+    ImGui::BeginChild("ConsoleOutput", ImVec2(0.0f, -footerHeight), false, ImGuiWindowFlags_HorizontalScrollbar);
+    {
+        std::scoped_lock lock(consoleMutex);
+        if (auto it = workspaceConsoleLines_.find(currentWorkspace); it != workspaceConsoleLines_.end()) {
+            for (const std::string& line : it->second) {
+                if (!line.empty() && line[0] == '>') {
+                    ImGui::TextColored(consoleCommandColor, "%s", line.c_str());
+                } else {
+                    ImGui::TextUnformatted(line.c_str());
                 }
             }
-            ImGui::EndChild();
-            ImGui::Separator();
-
-            bool reclaimFocus = false;
-            ImGui::PushItemWidth(-1.0f);
-            if (ImGui::InputText("##ConsoleInput", commandBuffer, IM_ARRAYSIZE(commandBuffer), ImGuiInputTextFlags_EnterReturnsTrue)) {
-                std::string command(commandBuffer);
-                if (!command.empty()) {
-                    AddConsoleOutput("> " + command);
-                    AddConsoleOutput("[JIT not yet connected]");
-                }
-                commandBuffer[0] = '\0';
-                reclaimFocus = true;
-            }
-            ImGui::PopItemWidth();
-            ImGui::SetItemDefaultFocus();
-            if (reclaimFocus) ImGui::SetKeyboardFocusHere(-1);
-
-            ImGui::EndTabItem();
         }
+        if (consoleScrollToBottom || ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
+            ImGui::SetScrollHereY(1.0f);
+            consoleScrollToBottom = false;
+        }
+    }
+    ImGui::EndChild();
+    ImGui::Separator();
 
-        if (ImGui::BeginTabItem("Logs")) {
-            ImGui::BeginChild("LogsRegion", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
-            {
-                std::lock_guard<std::mutex> lock(logMutex);
-                auto it = workspaceLogLines_.find(currentWorkspace);
-                if (it != workspaceLogLines_.end()) {
-                    for (const std::string& line : it->second) {
-                        if (line.find("Error") != std::string::npos || line.find("Failed") != std::string::npos) {
-                            ImGui::TextColored(logErrorColor, "%s", line.c_str());
-                        } else if (line.find("[AutoSave]") != std::string::npos) {
-                            ImGui::TextColored(logSuccessColor, "%s", line.c_str());
-                        } else {
-                            ImGui::TextUnformatted(line.c_str());
-                        }
-                    }
-                }
-                if (logScrollToBottom || ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
-                    ImGui::SetScrollHereY(1.0f);
-                    logScrollToBottom = false;
+    bool reclaimFocus = false;
+    ImGui::PushItemWidth(-1.0f);
+    if (ImGui::InputText("##ConsoleInput",
+                         commandBuffer.data(),
+                         commandBuffer.size(),
+                         ImGuiInputTextFlags_EnterReturnsTrue)) {
+        std::string command(commandBuffer.data());
+        if (!command.empty()) {
+            AddConsoleOutput("> " + command);
+            AddConsoleOutput("[JIT not yet connected]");
+        }
+        commandBuffer[0] = '\0';
+        reclaimFocus = true;
+    }
+    ImGui::PopItemWidth();
+    ImGui::SetItemDefaultFocus();
+    if (reclaimFocus) {
+        ImGui::SetKeyboardFocusHere(-1);
+    }
+
+    ImGui::EndTabItem();
+}
+
+void EditorUI::DrawLogsTab(const std::string& currentWorkspace) {
+    if (!ImGui::BeginTabItem("Logs")) {
+        return;
+    }
+
+    const ImVec4 logErrorColor = IsLightTheme() ? ImVec4(0.75f, 0.20f, 0.20f, 1.0f)
+                                                : ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
+    const ImVec4 logSuccessColor = IsLightTheme() ? ImVec4(0.16f, 0.56f, 0.24f, 1.0f)
+                                                  : ImVec4(0.5f, 1.0f, 0.5f, 1.0f);
+
+    ImGui::BeginChild("LogsRegion", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
+    {
+        std::scoped_lock lock(logMutex);
+        if (auto it = workspaceLogLines_.find(currentWorkspace); it != workspaceLogLines_.end()) {
+            for (const std::string& line : it->second) {
+                if (line.find("Error") != std::string::npos || line.find("Failed") != std::string::npos) {
+                    ImGui::TextColored(logErrorColor, "%s", line.c_str());
+                } else if (line.find("[AutoSave]") != std::string::npos) {
+                    ImGui::TextColored(logSuccessColor, "%s", line.c_str());
+                } else {
+                    ImGui::TextUnformatted(line.c_str());
                 }
             }
-            ImGui::EndChild();
-            ImGui::EndTabItem();
         }
+        if (logScrollToBottom || ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
+            ImGui::SetScrollHereY(1.0f);
+            logScrollToBottom = false;
+        }
+    }
+    ImGui::EndChild();
+    ImGui::EndTabItem();
+}
+
+void EditorUI::DrawConsolePane() {
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar;
+    const bool lightTheme = IsLightTheme();
+    const ImVec4 utilityPaneBg = lightTheme ? kLightUtilityPaneBgColor : kUtilityPaneBgColor;
+    const ImVec4 utilityPaneChildBg = lightTheme ? kLightUtilityPaneChildBgColor : kUtilityPaneChildBgColor;
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, utilityPaneBg);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, utilityPaneChildBg);
+    ImGui::Begin("Utility View", nullptr, flags);
+
+    const std::string currentWorkspace = ResolveCurrentWorkspaceName();
+    if (ImGui::BeginTabBar("UtilityTabs", ImGuiTabBarFlags_None)) {
+        DrawRendererTab();
+        DrawConsoleTab(currentWorkspace);
+        DrawLogsTab(currentWorkspace);
         ImGui::EndTabBar();
     }
+
     ImGui::End();
     ImGui::PopStyleColor(2);
 }

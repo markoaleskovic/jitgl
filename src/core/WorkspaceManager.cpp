@@ -4,6 +4,7 @@
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <ranges>
 #include <sstream>
 #include <utility>
 
@@ -107,7 +108,7 @@ void main() {
 WorkspaceManager::WorkspaceManager(std::string directory)
     : directory_(std::move(directory)) {}
 
-void WorkspaceManager::Initialize() {
+void WorkspaceManager::Initialize() const {
     std::error_code ec;
     if (!fs::exists(directory_, ec)) {
         fs::create_directories(directory_, ec);
@@ -155,13 +156,24 @@ std::vector<WorkspaceDescriptor> WorkspaceManager::ListWorkspaces() const {
             continue;
         }
 
-        if (fs::exists(descriptor->cppPath, ec) && !ec &&
-            fs::exists(descriptor->shaderPath, ec) && !ec) {
-            workspaces.push_back(*descriptor);
+        ec.clear();
+        const bool hasCpp = fs::exists(descriptor->cppPath, ec);
+        if (ec) {
+            continue;
+        }
+
+        ec.clear();
+        const bool hasShader = fs::exists(descriptor->shaderPath, ec);
+        if (ec) {
+            continue;
+        }
+
+        if (hasCpp && hasShader) {
+            workspaces.emplace_back(*descriptor);
         }
     }
 
-    std::sort(workspaces.begin(), workspaces.end(), [](const WorkspaceDescriptor& lhs, const WorkspaceDescriptor& rhs) {
+    std::ranges::sort(workspaces, [](const WorkspaceDescriptor& lhs, const WorkspaceDescriptor& rhs) {
         return lhs.name < rhs.name;
     });
     return workspaces;
@@ -250,14 +262,14 @@ std::vector<WorkspaceFile> WorkspaceManager::LoadAllFiles() const {
         auto cppContent = ReadFile(workspace.cppPath);
         auto shaderContent = ReadFile(workspace.shaderPath);
         if (cppContent.has_value()) {
-            files.push_back(WorkspaceFile{
+            files.emplace_back(WorkspaceFile{
                 workspace.name + "/" + kSceneFilename,
                 workspace.cppPath,
                 std::move(*cppContent)
             });
         }
         if (shaderContent.has_value()) {
-            files.push_back(WorkspaceFile{
+            files.emplace_back(WorkspaceFile{
                 workspace.name + "/" + kShaderFilename,
                 workspace.shaderPath,
                 std::move(*shaderContent)
@@ -265,7 +277,7 @@ std::vector<WorkspaceFile> WorkspaceManager::LoadAllFiles() const {
         }
     }
 
-    std::sort(files.begin(), files.end(), [](const WorkspaceFile& lhs, const WorkspaceFile& rhs) {
+    std::ranges::sort(files, [](const WorkspaceFile& lhs, const WorkspaceFile& rhs) {
         return lhs.filename < rhs.filename;
     });
     return files;
@@ -298,7 +310,7 @@ std::optional<std::string> WorkspaceManager::ReadFile(const std::string& filepat
     return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 }
 
-bool WorkspaceManager::IsPathInsideWorkspace(const std::string& filepath) const {
+bool WorkspaceManager::IsPathInsideWorkspace(const fs::path& filepath) const {
     std::error_code ec;
     const fs::path workspacePath = fs::weakly_canonical(fs::path(directory_), ec);
     if (ec) {
@@ -306,9 +318,9 @@ bool WorkspaceManager::IsPathInsideWorkspace(const std::string& filepath) const 
     }
 
     ec.clear();
-    fs::path targetPath = fs::weakly_canonical(fs::path(filepath), ec);
+    fs::path targetPath = fs::weakly_canonical(filepath, ec);
     if (ec) {
-        targetPath = fs::absolute(fs::path(filepath), ec);
+        targetPath = fs::absolute(filepath, ec);
     }
     if (ec) {
         return false;

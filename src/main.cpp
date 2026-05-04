@@ -1,8 +1,7 @@
 #include "core/Engine.h"
 
 int main() {
-    Engine engine;
-    if (engine.Init()) {
+    if (Engine engine; engine.Init()) {
         engine.Run();
     }
     return 0;
