@@ -54,11 +54,17 @@ public:
     void SetRendererTexture(unsigned int texture, int width, int height);
     void SetCompilationStatus(bool isCompiling, bool hasError, bool isStalled = false);
     void SetupDarkTheme();
+    void SetupLightTheme();
 
     void AddConsoleOutput(const std::string& text);
     void AddLogOutput(const std::string& text);
 
 private:
+    enum class UiTheme {
+        Dark,
+        Light
+    };
+
     GLFWwindow* window;
     std::vector<Document> openDocuments;
     std::unordered_map<std::string, std::vector<std::string>> workspaceConsoleLines_;
@@ -103,6 +109,10 @@ private:
     void DrawRuntimeGuidePopup();
     void LoadWelcomePreference();
     void SaveWelcomePreference() const;
+    void ApplyThemeAndScale(float dpiScale, bool recreateFontTexture);
+    void ToggleTheme();
+    void ApplyEditorPalette(Document& doc) const;
+    bool IsLightTheme() const;
 
     float currentDpiScale_ = 1.0f;
     float pendingDpiScale_ = 1.0f;
@@ -120,6 +130,7 @@ private:
     bool ctrlPlusChordHeld_ = false;
     bool ctrlMinusChordHeld_ = false;
     bool ctrlNewWorkspaceChordHeld_ = false;
+    bool ctrlThemeToggleChordHeld_ = false;
     bool showWelcomeOnStartup_ = true;
     bool welcomePopupOpenedThisSession_ = false;
     bool openWelcomePopupRequested_ = false;
@@ -127,6 +138,8 @@ private:
     bool openRuntimeGuidePopupRequested_ = false;
     bool runtimeGuidePopupOpenedThisSession_ = false;
     bool focusCreateWorkspaceNameInput_ = false;
+    UiTheme currentTheme_ = UiTheme::Dark;
+    bool themeApplyPending_ = false;
 
     bool shutdown_ = false;
     bool initialized_ = false;

@@ -25,6 +25,10 @@ namespace {
     const ImVec4 kPanelBgColor = ImVec4(0.14f, 0.14f, 0.14f, 1.00f);
     const ImVec4 kUtilityPaneBgColor = ImVec4(0.09f, 0.09f, 0.09f, 1.00f);
     const ImVec4 kUtilityPaneChildBgColor = ImVec4(0.10f, 0.10f, 0.10f, 1.00f);
+    const ImVec4 kLightEditorPaneBgColor = ImVec4(0.93f, 0.93f, 0.93f, 1.00f);
+    const ImVec4 kLightPanelBgColor = ImVec4(0.90f, 0.90f, 0.90f, 1.00f);
+    const ImVec4 kLightUtilityPaneBgColor = ImVec4(0.89f, 0.89f, 0.89f, 1.00f);
+    const ImVec4 kLightUtilityPaneChildBgColor = ImVec4(0.92f, 0.92f, 0.92f, 1.00f);
 
     bool IsKeyDown(GLFWwindow* window, int key) {
         return window != nullptr && glfwGetKey(window, key) == GLFW_PRESS;
@@ -123,6 +127,88 @@ void EditorUI::SetupDarkTheme() {
     colors[ImGuiCol_DockingEmptyBg]         = bgColor;
 }
 
+void EditorUI::SetupLightTheme() {
+    ImGuiStyle& style = ImGui::GetStyle();
+    style = ImGuiStyle();
+    ImVec4* colors = style.Colors;
+
+    style.WindowRounding    = 2.0f;
+    style.ChildRounding     = 2.0f;
+    style.FrameRounding     = 2.0f;
+    style.PopupRounding     = 2.0f;
+    style.ScrollbarRounding = 2.0f;
+    style.TabRounding       = 2.0f;
+
+    style.WindowBorderSize  = 1.0f;
+    style.FrameBorderSize   = 1.0f;
+    style.PopupBorderSize   = 1.0f;
+    style.ScrollbarSize     = 14.0f;
+
+    style.FramePadding      = ImVec2(4.0f, 4.0f);
+    style.WindowPadding     = ImVec2(8.0f, 8.0f);
+    style.ItemSpacing       = ImVec2(8.0f, 4.0f);
+
+    const ImVec4 bgColor         = kLightEditorPaneBgColor;
+    const ImVec4 panelBgColor    = kLightPanelBgColor;
+    const ImVec4 borderColor     = ImVec4(0.75f, 0.75f, 0.75f, 1.00f);
+    const ImVec4 highlightColor  = ImVec4(0.07f, 0.45f, 0.88f, 1.00f);
+    const ImVec4 textColor       = ImVec4(0.12f, 0.12f, 0.12f, 1.00f);
+
+    colors[ImGuiCol_Text]                   = textColor;
+    colors[ImGuiCol_TextDisabled]           = ImVec4(0.45f, 0.45f, 0.45f, 1.00f);
+
+    colors[ImGuiCol_WindowBg]               = bgColor;
+    colors[ImGuiCol_ChildBg]                = bgColor;
+    colors[ImGuiCol_PopupBg]                = panelBgColor;
+
+    colors[ImGuiCol_Border]                 = borderColor;
+    colors[ImGuiCol_BorderShadow]           = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
+
+    colors[ImGuiCol_FrameBg]                = ImVec4(0.96f, 0.96f, 0.96f, 1.00f);
+    colors[ImGuiCol_FrameBgHovered]         = ImVec4(0.92f, 0.92f, 0.92f, 1.00f);
+    colors[ImGuiCol_FrameBgActive]          = ImVec4(0.88f, 0.88f, 0.88f, 1.00f);
+
+    colors[ImGuiCol_TitleBg]                = panelBgColor;
+    colors[ImGuiCol_TitleBgActive]          = panelBgColor;
+    colors[ImGuiCol_TitleBgCollapsed]       = panelBgColor;
+
+    colors[ImGuiCol_MenuBarBg]              = panelBgColor;
+
+    colors[ImGuiCol_ScrollbarBg]            = bgColor;
+    colors[ImGuiCol_ScrollbarGrab]          = ImVec4(0.72f, 0.72f, 0.72f, 1.00f);
+    colors[ImGuiCol_ScrollbarGrabHovered]   = ImVec4(0.62f, 0.62f, 0.62f, 1.00f);
+    colors[ImGuiCol_ScrollbarGrabActive]    = ImVec4(0.52f, 0.52f, 0.52f, 1.00f);
+
+    colors[ImGuiCol_CheckMark]              = highlightColor;
+    colors[ImGuiCol_SliderGrab]             = highlightColor;
+    colors[ImGuiCol_SliderGrabActive]       = highlightColor;
+
+    colors[ImGuiCol_Button]                 = ImVec4(0.93f, 0.93f, 0.93f, 1.00f);
+    colors[ImGuiCol_ButtonHovered]          = ImVec4(0.89f, 0.89f, 0.89f, 1.00f);
+    colors[ImGuiCol_ButtonActive]           = ImVec4(0.84f, 0.84f, 0.84f, 1.00f);
+
+    colors[ImGuiCol_Header]                 = ImVec4(0.90f, 0.90f, 0.90f, 1.00f);
+    colors[ImGuiCol_HeaderHovered]          = ImVec4(0.86f, 0.86f, 0.86f, 1.00f);
+    colors[ImGuiCol_HeaderActive]           = highlightColor;
+
+    colors[ImGuiCol_Separator]              = borderColor;
+    colors[ImGuiCol_SeparatorHovered]       = ImVec4(0.55f, 0.55f, 0.55f, 1.00f);
+    colors[ImGuiCol_SeparatorActive]        = ImVec4(0.45f, 0.45f, 0.45f, 1.00f);
+
+    colors[ImGuiCol_ResizeGrip]             = ImVec4(0.35f, 0.35f, 0.35f, 0.10f);
+    colors[ImGuiCol_ResizeGripHovered]      = ImVec4(0.35f, 0.35f, 0.35f, 0.20f);
+    colors[ImGuiCol_ResizeGripActive]       = highlightColor;
+
+    colors[ImGuiCol_Tab]                    = panelBgColor;
+    colors[ImGuiCol_TabHovered]             = ImVec4(0.87f, 0.87f, 0.87f, 1.00f);
+    colors[ImGuiCol_TabActive]              = bgColor;
+    colors[ImGuiCol_TabUnfocused]           = panelBgColor;
+    colors[ImGuiCol_TabUnfocusedActive]     = bgColor;
+
+    colors[ImGuiCol_DockingPreview]         = ImVec4(highlightColor.x, highlightColor.y, highlightColor.z, 0.30f);
+    colors[ImGuiCol_DockingEmptyBg]         = bgColor;
+}
+
 // style end
 
 EditorUI::EditorUI() : window(nullptr), activeWorkspaceName_(FALLBACK_WORKSPACE_NAME) {}
@@ -155,6 +241,52 @@ void EditorUI::SaveWelcomePreference() const {
     outFile << (showWelcomeOnStartup_ ? "hide=0\n" : "hide=1\n");
 }
 
+void EditorUI::ApplyEditorPalette(Document& doc) const {
+    if (currentTheme_ == UiTheme::Light) {
+        auto palette = TextEditor::GetLightPalette();
+        palette[(int)TextEditor::PaletteIndex::Background] = 0xffececec;
+        doc.editor.SetPalette(palette);
+        return;
+    }
+
+    auto palette = TextEditor::GetDarkPalette();
+    palette[(int)TextEditor::PaletteIndex::Background] = 0xff1e1e1e;
+    doc.editor.SetPalette(palette);
+}
+
+bool EditorUI::IsLightTheme() const {
+    return currentTheme_ == UiTheme::Light;
+}
+
+void EditorUI::ApplyThemeAndScale(float dpiScale, bool recreateFontTexture) {
+    if (currentTheme_ == UiTheme::Light) {
+        SetupLightTheme();
+    } else {
+        SetupDarkTheme();
+    }
+
+    ImGuiIO& io = ImGui::GetIO();
+    ImGuiStyle& style = ImGui::GetStyle();
+    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+        style.WindowRounding = 0.0f;
+        style.Colors[ImGuiCol_WindowBg].w = 1.0f;
+    }
+    style.ScaleAllSizes(dpiScale);
+    if (style.ScrollbarSize <= 0.0f || !std::isfinite(style.ScrollbarSize)) {
+        style.ScrollbarSize = 1.0f;
+    }
+
+    ReloadFontAtlas(dpiScale, recreateFontTexture);
+}
+
+void EditorUI::ToggleTheme() {
+    currentTheme_ = (currentTheme_ == UiTheme::Dark) ? UiTheme::Light : UiTheme::Dark;
+    for (auto& doc : openDocuments) {
+        ApplyEditorPalette(doc);
+    }
+    themeApplyPending_ = true;
+}
+
 void EditorUI::ReloadFontAtlas(float dpiScale, bool recreateTexture) {
     ImGuiIO& io = ImGui::GetIO();
 
@@ -165,11 +297,11 @@ void EditorUI::ReloadFontAtlas(float dpiScale, bool recreateTexture) {
     io.Fonts->Clear();
 
     ImFontConfig fontConfig;
-    fontConfig.OversampleH = 2;
-    fontConfig.OversampleV = 2;
+    fontConfig.OversampleH = 3;
+    fontConfig.OversampleV = 3;
     fontConfig.PixelSnapH = true;
 
-    const float requestedSize = BASE_FONT_SIZE;
+    const float requestedSize = BASE_FONT_SIZE * std::max(0.5f, dpiScale);
     const float pixelSize = std::round(requestedSize);
 
     ImFont* font = io.Fonts->AddFontFromFileTTF(FONT_PATH, pixelSize, &fontConfig);
@@ -178,7 +310,7 @@ void EditorUI::ReloadFontAtlas(float dpiScale, bool recreateTexture) {
     }
 
     io.FontDefault = font;
-    io.FontGlobalScale = dpiScale;
+    io.FontGlobalScale = 1.0f;
     io.Fonts->Build();
 
     if (recreateTexture) {
@@ -203,16 +335,16 @@ void EditorUI::Init(GLFWwindow *win) {
         context->ConfigNavWindowingKeyPrev = ImGuiKey_None;
     }
 
-    ReloadFontAtlas(currentDpiScale_, false);
-
-    SetupDarkTheme();
-
-    // When viewports are enabled we tweak WindowRounding/WindowBg so platform windows can look identical to regular ones.
-    ImGuiStyle& style = ImGui::GetStyle();
-    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
-        style.WindowRounding = 0.0f;
-        style.Colors[ImGuiCol_WindowBg].w = 1.0f;
+    float contentScaleX = 1.0f;
+    float contentScaleY = 1.0f;
+    glfwGetWindowContentScale(window, &contentScaleX, &contentScaleY);
+    const float monitorScale = 0.5f * (contentScaleX + contentScaleY);
+    if (std::isfinite(monitorScale) && monitorScale > 0.0f) {
+        currentDpiScale_ = std::clamp(monitorScale, 0.5f, 3.0f);
+        pendingDpiScale_ = currentDpiScale_;
     }
+
+    ApplyThemeAndScale(currentDpiScale_, false);
 
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init(GLSL_VERSION);
@@ -227,7 +359,8 @@ void EditorUI::Init(GLFWwindow *win) {
 }
 
 void EditorUI::ApplyPendingDpiScale() {
-    if (std::abs(pendingDpiScale_ - currentDpiScale_) < 0.001f) {
+    const bool dpiChanged = std::abs(pendingDpiScale_ - currentDpiScale_) >= 0.001f;
+    if (!dpiChanged && !themeApplyPending_) {
         return;
     }
 
@@ -246,19 +379,9 @@ void EditorUI::ApplyPendingDpiScale() {
         return;
     }
 
-    SetupDarkTheme();
-    ImGuiIO& io = ImGui::GetIO();
-    ImGuiStyle& style = ImGui::GetStyle();
-    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
-        style.WindowRounding = 0.0f;
-        style.Colors[ImGuiCol_WindowBg].w = 1.0f;
-    }
-    style.ScaleAllSizes(pendingDpiScale_);
-    if (style.ScrollbarSize <= 0.0f || !std::isfinite(style.ScrollbarSize)) {
-        style.ScrollbarSize = 1.0f;
-    }
-    ImGui::GetIO().FontGlobalScale = pendingDpiScale_;
+    ApplyThemeAndScale(pendingDpiScale_, true);
     currentDpiScale_ = pendingDpiScale_;
+    themeApplyPending_ = false;
     lastDpiApplyTime_ = now;
 }
 
@@ -335,9 +458,7 @@ void EditorUI::AddDocument(const std::string& workspaceName,
     doc.filename = filename;
     doc.filepath = filepath;
     doc.editor.SetLanguageDefinition(TextEditor::LanguageDefinition::CPlusPlus());
-    auto palette = TextEditor::GetDarkPalette();
-    palette[(int)TextEditor::PaletteIndex::Background] = 0xff1e1e1e; // Matches your bgColor (#1e1e1e) in ImVec4(0.12, 0.12, 0.12)
-    doc.editor.SetPalette(palette);
+    ApplyEditorPalette(doc);
     doc.editor.SetText(content);
     doc.lastKnownText = content;
     doc.isDirty = false;
@@ -534,10 +655,15 @@ void EditorUI::DrawWelcomePopup() {
         return;
     }
 
-    const ImVec4 titleColor = ImVec4(0.38f, 0.78f, 1.0f, 1.0f);
-    const ImVec4 sectionColor = ImVec4(0.94f, 0.75f, 0.37f, 1.0f);
-    const ImVec4 keyColor = ImVec4(0.62f, 0.89f, 1.0f, 1.0f);
-    const ImVec4 noteColor = ImVec4(0.73f, 0.86f, 0.73f, 1.0f);
+    const bool lightTheme = IsLightTheme();
+    const ImVec4 titleColor = lightTheme ? ImVec4(0.10f, 0.39f, 0.78f, 1.0f)
+                                         : ImVec4(0.38f, 0.78f, 1.0f, 1.0f);
+    const ImVec4 sectionColor = lightTheme ? ImVec4(0.58f, 0.42f, 0.16f, 1.0f)
+                                           : ImVec4(0.94f, 0.75f, 0.37f, 1.0f);
+    const ImVec4 keyColor = lightTheme ? ImVec4(0.14f, 0.44f, 0.79f, 1.0f)
+                                       : ImVec4(0.62f, 0.89f, 1.0f, 1.0f);
+    const ImVec4 noteColor = lightTheme ? ImVec4(0.20f, 0.47f, 0.25f, 1.0f)
+                                        : ImVec4(0.73f, 0.86f, 0.73f, 1.0f);
 
     const float footerReserve = ImGui::GetFrameHeightWithSpacing() * 2.5f;
     if (ImGui::BeginChild("WelcomeScrollableContent", ImVec2(0.0f, -footerReserve), false,
@@ -579,6 +705,7 @@ void EditorUI::DrawWelcomePopup() {
             drawShortcutRow("Ctrl+Tab", "Switch active editor file (scene.cpp <-> shader.glsl)");
             drawShortcutRow("Ctrl+`", "Cycle to next workspace");
             drawShortcutRow("Ctrl+N", "Open Create Workspace dialog");
+            drawShortcutRow("Ctrl+T", "Toggle UI theme (dark/light)");
             drawShortcutRow("Ctrl+1..9", "Jump directly to workspace 1..9");
             drawShortcutRow("Ctrl+0", "Jump directly to workspace 10");
             drawShortcutRow("Ctrl++ / Ctrl+-", "Increase / decrease UI DPI scale");
@@ -644,9 +771,15 @@ void EditorUI::DrawRuntimeGuidePopup() {
         return;
     }
 
-    const ImVec4 titleColor = ImVec4(0.54f, 0.86f, 1.0f, 1.0f);
-    const ImVec4 sectionColor = ImVec4(0.94f, 0.75f, 0.37f, 1.0f);
-    const ImVec4 noteColor = ImVec4(0.73f, 0.86f, 0.73f, 1.0f);
+    const bool lightTheme = IsLightTheme();
+    const ImVec4 titleColor = lightTheme ? ImVec4(0.10f, 0.39f, 0.78f, 1.0f)
+                                         : ImVec4(0.54f, 0.86f, 1.0f, 1.0f);
+    const ImVec4 sectionColor = lightTheme ? ImVec4(0.58f, 0.42f, 0.16f, 1.0f)
+                                           : ImVec4(0.94f, 0.75f, 0.37f, 1.0f);
+    const ImVec4 noteColor = lightTheme ? ImVec4(0.20f, 0.47f, 0.25f, 1.0f)
+                                        : ImVec4(0.73f, 0.86f, 0.73f, 1.0f);
+    const ImVec4 codeBgColor = lightTheme ? ImVec4(0.88f, 0.89f, 0.91f, 1.0f)
+                                          : ImVec4(0.09f, 0.10f, 0.12f, 1.0f);
 
     const float footerReserve = ImGui::GetFrameHeightWithSpacing() * 2.1f;
     if (ImGui::BeginChild("RuntimeGuideScrollableContent", ImVec2(0.0f, -footerReserve), false,
@@ -659,8 +792,8 @@ void EditorUI::DrawRuntimeGuidePopup() {
             ImGui::PopTextWrapPos();
         };
 
-        auto codeBlock = [] (const char* id, const char* code) {
-            ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.09f, 0.10f, 0.12f, 1.0f));
+        auto codeBlock = [codeBgColor] (const char* id, const char* code) {
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, codeBgColor);
             ImGui::BeginChild(id, ImVec2(0.0f, 78.0f), true, ImGuiWindowFlags_NoScrollbar);
             ImGui::TextUnformatted(code);
             ImGui::EndChild();
@@ -731,6 +864,7 @@ void EditorUI::HandleGlobalShortcuts() {
     const bool superHeld = IsKeyDown(window, GLFW_KEY_LEFT_SUPER) || IsKeyDown(window, GLFW_KEY_RIGHT_SUPER);
     const bool canUseCtrlShortcuts = ctrlHeld && !superHeld;
     const bool newWorkspaceHeld = IsKeyDown(window, GLFW_KEY_N);
+    const bool toggleThemeHeld = IsKeyDown(window, GLFW_KEY_T);
     const bool tabHeld = IsKeyDown(window, GLFW_KEY_TAB);
     const bool plusHeld = IsKeyDown(window, GLFW_KEY_EQUAL) || IsKeyDown(window, GLFW_KEY_KP_ADD);
     const bool minusHeld = IsKeyDown(window, GLFW_KEY_MINUS) || IsKeyDown(window, GLFW_KEY_KP_SUBTRACT);
@@ -791,6 +925,12 @@ void EditorUI::HandleGlobalShortcuts() {
         openCreateWorkspacePopup_ = true;
     }
     ctrlNewWorkspaceChordHeld_ = ctrlNewWorkspaceHeld;
+
+    const bool ctrlThemeToggleHeld = canUseCtrlShortcuts && toggleThemeHeld;
+    if (ctrlThemeToggleHeld && !ctrlThemeToggleChordHeld_) {
+        ToggleTheme();
+    }
+    ctrlThemeToggleChordHeld_ = ctrlThemeToggleHeld;
 }
 
 void EditorUI::ToggleActiveWorkspaceDocument() {
@@ -880,6 +1020,17 @@ void EditorUI::ActivateWorkspaceByIndex(std::size_t index) {
 
 void EditorUI::DrawMenuBar() {
     if (ImGui::BeginMainMenuBar()) {
+        const bool lightTheme = IsLightTheme();
+        const ImVec4 workspaceLabelColor = lightTheme ? ImVec4(0.20f, 0.20f, 0.20f, 1.0f)
+                                                      : ImVec4(0.82f, 0.82f, 0.82f, 1.0f);
+        const ImVec4 stalledColor = lightTheme ? ImVec4(0.78f, 0.33f, 0.00f, 1.0f)
+                                               : ImVec4(1.0f, 0.4f, 0.0f, 1.0f);
+        const ImVec4 compilingColor = lightTheme ? ImVec4(0.72f, 0.56f, 0.00f, 1.0f)
+                                                 : ImVec4(1.0f, 0.8f, 0.0f, 1.0f);
+        const ImVec4 errorColor = lightTheme ? ImVec4(0.75f, 0.20f, 0.20f, 1.0f)
+                                             : ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
+        const ImVec4 readyColor = lightTheme ? ImVec4(0.16f, 0.56f, 0.24f, 1.0f)
+                                             : ImVec4(0.4f, 1.0f, 0.4f, 1.0f);
         const std::vector<std::string> workspaceNamesSnapshot = workspaceNames_;
         const bool canDeleteAnyWorkspace = workspaceNamesSnapshot.size() > 1;
         std::string pendingWorkspaceSwitch;
@@ -935,6 +1086,10 @@ void EditorUI::DrawMenuBar() {
             ImGui::Separator();
             if (ImGui::MenuItem("Reset DPI")) {
                 SetDpiScale(1.0f);
+            }
+            const bool isLightTheme = (currentTheme_ == UiTheme::Light);
+            if (ImGui::MenuItem(isLightTheme ? "Switch to Dark Theme" : "Switch to Light Theme", "Ctrl+T")) {
+                ToggleTheme();
             }
             ImGui::EndMenu(); 
         }
@@ -1031,7 +1186,7 @@ void EditorUI::DrawMenuBar() {
             if (centeredX > 0.0f) {
                 ImGui::SetCursorPosX(centeredX);
             }
-            ImGui::TextColored(ImVec4(0.82f, 0.82f, 0.82f, 1.0f), "%s", workspaceLabel.c_str());
+            ImGui::TextColored(workspaceLabelColor, "%s", workspaceLabel.c_str());
         }
 
         if (!pendingWorkspaceDelete.empty() && onDeleteWorkspace_) {
@@ -1046,16 +1201,16 @@ void EditorUI::DrawMenuBar() {
         // Compile Status Indicator
         ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 170.0f);
         if (isStalled_) {
-            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.0f, 1.0f), "STALLED?");
+            ImGui::TextColored(stalledColor, "STALLED?");
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("JIT compilation is taking longer than expected.\nCheck Logs for details.");
             }
         } else if (isCompiling_) {
-            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "COMPILING...");
+            ImGui::TextColored(compilingColor, "COMPILING...");
         } else if (hasCompileError_) {
-            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "ERROR");
+            ImGui::TextColored(errorColor, "ERROR");
         } else {
-            ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "READY");
+            ImGui::TextColored(readyColor, "READY");
         }
 
         ImGui::EndMainMenuBar();
@@ -1255,8 +1410,17 @@ void EditorUI::AddLogOutput(const std::string &text) {
 
 void EditorUI::DrawConsolePane() {
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar;
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, kUtilityPaneBgColor);
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, kUtilityPaneChildBgColor);
+    const bool lightTheme = (currentTheme_ == UiTheme::Light);
+    const ImVec4 utilityPaneBg = lightTheme ? kLightUtilityPaneBgColor : kUtilityPaneBgColor;
+    const ImVec4 utilityPaneChildBg = lightTheme ? kLightUtilityPaneChildBgColor : kUtilityPaneChildBgColor;
+    const ImVec4 consoleCommandColor = lightTheme ? ImVec4(0.12f, 0.42f, 0.78f, 1.0f)
+                                                  : ImVec4(0.6f, 0.9f, 1.0f, 1.0f);
+    const ImVec4 logErrorColor = lightTheme ? ImVec4(0.75f, 0.20f, 0.20f, 1.0f)
+                                            : ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
+    const ImVec4 logSuccessColor = lightTheme ? ImVec4(0.16f, 0.56f, 0.24f, 1.0f)
+                                              : ImVec4(0.5f, 1.0f, 0.5f, 1.0f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, utilityPaneBg);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, utilityPaneChildBg);
     ImGui::Begin("Utility View", nullptr, flags);
 
     std::string currentWorkspace;
@@ -1308,7 +1472,7 @@ void EditorUI::DrawConsolePane() {
                 if (it != workspaceConsoleLines_.end()) {
                     for (const std::string& line : it->second) {
                         if (!line.empty() && line[0] == '>') {
-                            ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f), "%s", line.c_str());
+                            ImGui::TextColored(consoleCommandColor, "%s", line.c_str());
                         } else {
                             ImGui::TextUnformatted(line.c_str());
                         }
@@ -1348,9 +1512,9 @@ void EditorUI::DrawConsolePane() {
                 if (it != workspaceLogLines_.end()) {
                     for (const std::string& line : it->second) {
                         if (line.find("Error") != std::string::npos || line.find("Failed") != std::string::npos) {
-                            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", line.c_str());
+                            ImGui::TextColored(logErrorColor, "%s", line.c_str());
                         } else if (line.find("[AutoSave]") != std::string::npos) {
-                            ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "%s", line.c_str());
+                            ImGui::TextColored(logSuccessColor, "%s", line.c_str());
                         } else {
                             ImGui::TextUnformatted(line.c_str());
                         }
