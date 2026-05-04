@@ -19,6 +19,7 @@ namespace {
     constexpr float BASE_FONT_SIZE = 16.0f;
     constexpr const char* FALLBACK_WORKSPACE_NAME = "default";
     constexpr const char* WELCOME_PREFS_FILE = ".jitgl_welcome_prefs";
+    constexpr double DPI_APPLY_MIN_INTERVAL_SECONDS = 0.08;
 
     const ImVec4 kEditorPaneBgColor = ImVec4(0.12f, 0.12f, 0.12f, 1.00f);
     const ImVec4 kPanelBgColor = ImVec4(0.14f, 0.14f, 0.14f, 1.00f);
@@ -38,6 +39,7 @@ namespace {
 
 void EditorUI::SetupDarkTheme() {
     ImGuiStyle& style = ImGui::GetStyle();
+    style = ImGuiStyle();
     ImVec4* colors = style.Colors;
 
     // Flat UI, minimal rounding
@@ -52,6 +54,7 @@ void EditorUI::SetupDarkTheme() {
     style.WindowBorderSize  = 1.0f;
     style.FrameBorderSize   = 0.0f;
     style.PopupBorderSize   = 1.0f;
+    style.ScrollbarSize     = 14.0f;
     
     // Padding
     style.FramePadding      = ImVec2(4.0f, 4.0f);
@@ -166,7 +169,7 @@ void EditorUI::ReloadFontAtlas(float dpiScale, bool recreateTexture) {
     fontConfig.OversampleV = 2;
     fontConfig.PixelSnapH = true;
 
-    const float requestedSize = BASE_FONT_SIZE * dpiScale;
+    const float requestedSize = BASE_FONT_SIZE;
     const float pixelSize = std::round(requestedSize);
 
     ImFont* font = io.Fonts->AddFontFromFileTTF(FONT_PATH, pixelSize, &fontConfig);
@@ -175,7 +178,7 @@ void EditorUI::ReloadFontAtlas(float dpiScale, bool recreateTexture) {
     }
 
     io.FontDefault = font;
-    io.FontGlobalScale = 1.0f;
+    io.FontGlobalScale = dpiScale;
     io.Fonts->Build();
 
     if (recreateTexture) {
@@ -228,10 +231,35 @@ void EditorUI::ApplyPendingDpiScale() {
         return;
     }
 
-    const float ratio = pendingDpiScale_ / currentDpiScale_;
-    ImGui::GetStyle().ScaleAllSizes(ratio);
-    ReloadFontAtlas(pendingDpiScale_, true);
+    const double now = ImGui::GetTime();
+    if (lastDpiApplyTime_ >= 0.0 && (now - lastDpiApplyTime_) < DPI_APPLY_MIN_INTERVAL_SECONDS) {
+        return;
+    }
+
+    if (!std::isfinite(pendingDpiScale_)) {
+        pendingDpiScale_ = currentDpiScale_;
+        return;
+    }
+
+    if (pendingDpiScale_ <= 0.0f) {
+        pendingDpiScale_ = currentDpiScale_;
+        return;
+    }
+
+    SetupDarkTheme();
+    ImGuiIO& io = ImGui::GetIO();
+    ImGuiStyle& style = ImGui::GetStyle();
+    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+        style.WindowRounding = 0.0f;
+        style.Colors[ImGuiCol_WindowBg].w = 1.0f;
+    }
+    style.ScaleAllSizes(pendingDpiScale_);
+    if (style.ScrollbarSize <= 0.0f || !std::isfinite(style.ScrollbarSize)) {
+        style.ScrollbarSize = 1.0f;
+    }
+    ImGui::GetIO().FontGlobalScale = pendingDpiScale_;
     currentDpiScale_ = pendingDpiScale_;
+    lastDpiApplyTime_ = now;
 }
 
 void EditorUI::NewFrame() {

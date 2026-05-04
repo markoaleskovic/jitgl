@@ -106,6 +106,7 @@ private:
 
     float currentDpiScale_ = 1.0f;
     float pendingDpiScale_ = 1.0f;
+    double lastDpiApplyTime_ = -1.0;
     void ReloadFontAtlas(float dpiScale, bool recreateTexture);
     void ApplyPendingDpiScale();
     void SetDpiScale(float newScale);
