@@ -7,12 +7,20 @@
 #include <imgui_internal.h>
 #include <algorithm>
 #include <cstddef>
+#include <cmath>
 
 namespace {
     constexpr double AUTOSAVE_DEBOUNCE_SECONDS = 0.05;
     constexpr const char* GLSL_VERSION = "#version 330 core";
     constexpr std::size_t MAX_CONSOLE_LINES = 2000;
     constexpr std::size_t MAX_LOG_LINES = 2000;
+    constexpr const char* FONT_PATH = "assets/JetBrainsMono-Regular.ttf";
+    constexpr float BASE_FONT_SIZE = 16.0f;
+
+    const ImVec4 kEditorPaneBgColor = ImVec4(0.12f, 0.12f, 0.12f, 1.00f);
+    const ImVec4 kPanelBgColor = ImVec4(0.14f, 0.14f, 0.14f, 1.00f);
+    const ImVec4 kUtilityPaneBgColor = ImVec4(0.09f, 0.09f, 0.09f, 1.00f);
+    const ImVec4 kUtilityPaneChildBgColor = ImVec4(0.10f, 0.10f, 0.10f, 1.00f);
 }
 
 // style start
@@ -40,8 +48,8 @@ void EditorUI::SetupDarkTheme() {
     style.ItemSpacing       = ImVec2(8.0f, 4.0f);
 
     // Color Palette (VS Code / Dark+ inspired)
-    const ImVec4 bgColor         = ImVec4(0.12f, 0.12f, 0.12f, 1.00f); // #1E1E1E
-    const ImVec4 panelBgColor    = ImVec4(0.14f, 0.14f, 0.14f, 1.00f); // #252526
+    const ImVec4 bgColor         = kEditorPaneBgColor;
+    const ImVec4 panelBgColor    = kPanelBgColor;
     const ImVec4 borderColor     = ImVec4(0.20f, 0.20f, 0.20f, 1.00f); // #333333
     const ImVec4 highlightColor  = ImVec4(0.00f, 0.47f, 0.83f, 1.00f); // #007ACC (Blue accent)
     const ImVec4 textColor       = ImVec4(0.80f, 0.80f, 0.80f, 1.00f); // #CCCCCC
@@ -84,8 +92,8 @@ void EditorUI::SetupDarkTheme() {
     colors[ImGuiCol_HeaderActive]           = highlightColor;
     
     colors[ImGuiCol_Separator]              = borderColor;
-    colors[ImGuiCol_SeparatorHovered]       = borderColor;
-    colors[ImGuiCol_SeparatorActive]        = borderColor;
+    colors[ImGuiCol_SeparatorHovered]       = ImVec4(0.30f, 0.30f, 0.30f, 1.00f);
+    colors[ImGuiCol_SeparatorActive]        = ImVec4(0.35f, 0.35f, 0.35f, 1.00f);
     
     colors[ImGuiCol_ResizeGrip]             = ImVec4(1.00f, 1.00f, 1.00f, 0.05f);
     colors[ImGuiCol_ResizeGripHovered]      = ImVec4(1.00f, 1.00f, 1.00f, 0.10f);
@@ -109,6 +117,37 @@ EditorUI::~EditorUI() {
     Shutdown();
 }
 
+void EditorUI::ReloadFontAtlas(float dpiScale, bool recreateTexture) {
+    ImGuiIO& io = ImGui::GetIO();
+
+    if (recreateTexture) {
+        ImGui_ImplOpenGL3_DestroyFontsTexture();
+    }
+
+    io.Fonts->Clear();
+
+    ImFontConfig fontConfig;
+    fontConfig.OversampleH = 2;
+    fontConfig.OversampleV = 2;
+    fontConfig.PixelSnapH = true;
+
+    const float requestedSize = BASE_FONT_SIZE * dpiScale;
+    const float pixelSize = std::round(requestedSize);
+
+    ImFont* font = io.Fonts->AddFontFromFileTTF(FONT_PATH, pixelSize, &fontConfig);
+    if (!font) {
+        font = io.Fonts->AddFontDefault();
+    }
+
+    io.FontDefault = font;
+    io.FontGlobalScale = 1.0f;
+    io.Fonts->Build();
+
+    if (recreateTexture) {
+        ImGui_ImplOpenGL3_CreateFontsTexture();
+    }
+}
+
 void EditorUI::Init(GLFWwindow *win) {
     window = win;
 
@@ -119,8 +158,7 @@ void EditorUI::Init(GLFWwindow *win) {
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
 
-
-    io.Fonts->AddFontFromFileTTF("assets/JetBrainsMono-Regular.ttf", 16.0f);
+    ReloadFontAtlas(currentDpiScale_, false);
 
     SetupDarkTheme();
 
@@ -138,7 +176,19 @@ void EditorUI::Init(GLFWwindow *win) {
     shutdown_ = false;
 }
 
+void EditorUI::ApplyPendingDpiScale() {
+    if (std::abs(pendingDpiScale_ - currentDpiScale_) < 0.001f) {
+        return;
+    }
+
+    const float ratio = pendingDpiScale_ / currentDpiScale_;
+    ImGui::GetStyle().ScaleAllSizes(ratio);
+    ReloadFontAtlas(pendingDpiScale_, true);
+    currentDpiScale_ = pendingDpiScale_;
+}
+
 void EditorUI::NewFrame() {
+    ApplyPendingDpiScale();
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
@@ -257,12 +307,10 @@ void EditorUI::SetDpiScale(float newScale) {
     if (newScale < 0.5f) newScale = 0.5f;
     if (newScale > 3.0f) newScale = 3.0f;
 
-    float ratio = newScale / currentDpiScale_;
-    
-    ImGui::GetStyle().ScaleAllSizes(ratio);
-    ImGui::GetIO().FontGlobalScale = newScale;
-
-    currentDpiScale_ = newScale;
+    if (std::abs(newScale - pendingDpiScale_) < 0.001f) {
+        return;
+    }
+    pendingDpiScale_ = newScale;
 }
 
 void EditorUI::DrawMenuBar() {
@@ -389,6 +437,8 @@ void EditorUI::AddLogOutput(const std::string &text) {
 
 void EditorUI::DrawConsolePane() {
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar;
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, kUtilityPaneBgColor);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, kUtilityPaneChildBgColor);
     ImGui::Begin("Utility View", nullptr, flags);
 
     if (ImGui::BeginTabBar("UtilityTabs", ImGuiTabBarFlags_None)) {
@@ -484,6 +534,7 @@ void EditorUI::DrawConsolePane() {
         ImGui::EndTabBar();
     }
     ImGui::End();
+    ImGui::PopStyleColor(2);
 }
 
 void EditorUI::Render() {

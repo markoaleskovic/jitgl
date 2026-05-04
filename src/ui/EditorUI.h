@@ -75,6 +75,9 @@ private:
     void DrawTextEditorPane();
 
     float currentDpiScale_ = 1.0f;
+    float pendingDpiScale_ = 1.0f;
+    void ReloadFontAtlas(float dpiScale, bool recreateTexture);
+    void ApplyPendingDpiScale();
     void SetDpiScale(float newScale);
 
     bool shutdown_ = false;
