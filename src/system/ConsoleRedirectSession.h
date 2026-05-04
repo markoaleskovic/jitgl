@@ -24,6 +24,7 @@ public:
     void Stop();
 
 private:
+    // Reader loop consumes stdout/stderr from a pipe and forwards complete lines to UI.
     void ReaderLoop();
     void FlushPendingLine();
 
@@ -31,7 +32,7 @@ private:
     bool ReadAvailableData(std::span<char> buffer);
     void ConsumeBuffer(std::span<const char> buffer);
 
-    EditorUI* ui_ = nullptr;
+    EditorUI* ui_ = nullptr; // Non-owning UI target for forwarded console lines.
     std::jthread readerThread_;
     std::atomic<bool> readerRunning_{ false };
     int oldStdoutFd_ = -1;

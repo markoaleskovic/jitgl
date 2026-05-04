@@ -113,6 +113,7 @@ namespace {
     [[noreturn]] void RunPreflightChildProcess(const fs::path& tempSourcePath,
                                                const std::vector<std::string>& argStorage,
                                                const std::array<int, 2>& outputPipe) {
+        // Child writes diagnostics back through the pipe so parent can surface them in UI logs.
         dup2(outputPipe[1], STDOUT_FILENO);
         dup2(outputPipe[1], STDERR_FILENO);
         close(outputPipe[0]);
@@ -148,6 +149,7 @@ namespace {
         argv.push_back(nullptr);
 
         execvp("clang++", argv.data());
+        // Reserved fallback code: parent treats 127 as "clang++ unavailable".
         _exit(127);
     }
 
@@ -172,6 +174,7 @@ namespace {
     Fn AddressToFunction(std::uintptr_t address) {
         static_assert(sizeof(Fn) == sizeof(std::uintptr_t),
                       "Function pointer size must match address size");
+        // Symbol lookup gives an integer address; bit_cast preserves bits without UB-prone casts.
         return std::bit_cast<Fn>(address);
     }
 }
@@ -332,6 +335,7 @@ bool JitEngine::RunPreflightSyntaxCheck(const std::string& sourceName,
 
     close(outputPipe[1]);
 
+    // Preflight runs out-of-process so syntax failures/crashes never poison the live interpreter.
     const PreflightWaitResult waitResult = WaitForPreflightProcess(pid, std::chrono::milliseconds(PRECHECK_TIMEOUT_MS));
     std::string preflightOutput = readFdToString(outputPipe[0]);
     close(outputPipe[0]);
@@ -432,6 +436,7 @@ std::shared_ptr<JitProgram> JitEngine::CompileSource(const std::string& sourceNa
 
     auto keepAliveInterpreter = std::shared_ptr<clang::Interpreter>(stagingInterpreter.release());
     auto program = std::make_shared<JitProgram>();
+    // Program keeps interpreter alive so resolved function pointers remain valid.
     program->interpreter = std::move(keepAliveInterpreter);
     program->functions = functions;
 

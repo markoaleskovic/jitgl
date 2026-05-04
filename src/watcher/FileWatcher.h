@@ -19,7 +19,9 @@ public:
     void Stop();
 
 private:
+    // Snapshot current mtimes so Start() does not fire callbacks for existing files.
     void SeedInitialTimestamps();
+    // Simple polling watcher used for portability (no inotify/FSEvents dependency).
     void PollLoop(std::stop_token stopToken);
 
     std::string watchDir_;

@@ -35,6 +35,7 @@ void FileWatcher::PollLoop(std::stop_token stopToken) {
 
             auto it = lastWriteTimes_.find(path);
             if (it == lastWriteTimes_.end()) {
+                // New files are reported once and then tracked normally.
                 lastWriteTimes_[path] = currentTime;
                 std::scoped_lock lock(callbackMutex_);
                 callback_(path);

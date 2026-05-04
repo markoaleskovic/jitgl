@@ -90,6 +90,7 @@ private:
     std::function<void(const std::string&, const std::string&, bool)> onWorkspaceLineAppended_;
 
     std::string activeDocumentPath_;
+    // Used once to force-select a tab after workspace/document changes.
     std::string pendingDocumentSelectionPath_;
     unsigned int rendererTexture_ = 0;
     int rendererTextureWidth_ = 0;
@@ -154,6 +155,7 @@ private:
     void CycleWorkspace(int direction);
     void ActivateWorkspaceByIndex(std::size_t index);
     bool ctrlWorkspaceCycleChordHeld_ = false;
+    // Edge-triggered key chord latches to prevent repeat-firing while keys are held down.
     std::array<bool, 10> ctrlWorkspaceIndexChordHeld_{};
     bool ctrlTabChordHeld_ = false;
     bool ctrlPlusChordHeld_ = false;

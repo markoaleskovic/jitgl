@@ -15,6 +15,7 @@ using JitRenderFn = void(*)(EngineContext*);
 using JitShutdownFn = void(*)(EngineContext*);
 
 struct JitFunctions {
+    // Any callback may be null; user code can implement only the hooks it needs.
     JitInitFn    init     = nullptr;
     JitUpdateFn  update   = nullptr;
     JitRenderFn  render   = nullptr;
@@ -22,6 +23,7 @@ struct JitFunctions {
 };
 
 struct JitProgram {
+    // Interpreter must stay alive as long as function pointers are used.
     std::shared_ptr<clang::Interpreter> interpreter;
     JitFunctions functions;
     bool initialized = false;

@@ -42,6 +42,7 @@ public:
     bool AppendWorkspaceEngineLog(const std::string& workspaceName, const std::string& line) const;
 
     std::vector<WorkspaceFile> LoadAllFiles() const;
+    // Save/Read reject paths outside workspace root to avoid arbitrary file access.
     bool SaveFile(const std::string& filepath, const std::string& content) const;
     std::optional<std::string> ReadFile(const std::string& filepath) const;
     bool IsPathInsideWorkspace(const std::filesystem::path& filepath) const;

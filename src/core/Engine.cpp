@@ -347,6 +347,7 @@ void Engine::ResetJIT() {
     ui_->AddLogOutput("[JIT] Compilation stalled for too long. Restart requested.");
 
     if (compileThreadRunning_) {
+        // Let the worker exit gracefully; CompletePendingJITReset() handles restart on main thread.
         compileThreadRunning_->store(false);
     }
     compileCv_.notify_all();
@@ -414,6 +415,7 @@ void Engine::SaveActiveWorkspaceRuntimeState() {
     }
 
     auto& workspace = workspaceIt->second;
+    // Snapshot persisted runtime state before switching programs/workspaces.
     std::ranges::copy(ctx_.state_i, workspace.stateI.begin());
     std::ranges::copy(ctx_.state_f, workspace.stateF.begin());
     workspace.userData = ctx_.userData;
@@ -471,6 +473,7 @@ std::string Engine::BuildCompileSourceForWorkspace(const std::string& workspaceN
         return generatedSource.str();
     }
 
+    // Inject parsed shader sources and hash into the generated C++ translation unit.
     const uint32_t shaderHash = static_cast<uint32_t>(std::hash<std::string>{}(workspace.shaderSource));
     generatedSource << "static const unsigned int jitgl_workspace_shader_hash = " << shaderHash << "u;\n";
     generatedSource << "static const char* jitgl_workspace_vertex_shader_source = \""
@@ -688,6 +691,7 @@ void Engine::SwitchToWorkspace(const std::string& workspaceName, bool focusCppDo
             previousWorkspaceIt != workspaces_.end()) {
             auto& previousWorkspace = previousWorkspaceIt->second;
             if (previousWorkspace.activeClockStartSeconds >= 0.0) {
+                // Freeze per-workspace time when leaving it; inactive workspaces stay paused.
                 const double elapsed = std::max(0.0, nowSeconds - previousWorkspace.activeClockStartSeconds);
                 previousWorkspace.accumulatedActiveSeconds += elapsed;
                 previousWorkspace.activeClockStartSeconds = -1.0;
@@ -904,6 +908,7 @@ void Engine::QueueCompile(const std::string& workspaceName, const std::string& s
     }
 
     latestSources_[workspaceName] = source;
+    // Error-heavy workspaces get a longer debounce to avoid compile spam while user is fixing errors.
     double debounce = MIN_DEBOUNCE_SECONDS;
     auto errorIt = recentErrors_.find(workspaceName);
     if (errorIt != recentErrors_.end()) {
@@ -965,6 +970,7 @@ void Engine::EnqueueDueCompiles(const std::vector<std::string>& duePaths) {
             continue;
         }
 
+        // Avoid duplicate work when the same source hash is already queued/in-flight.
         const bool alreadyQueued = std::any_of(compileJobs_.begin(),
                                                compileJobs_.end(),
                                                [&](const CompileJob& job) {
@@ -1048,6 +1054,7 @@ void Engine::CompileThreadMain(std::shared_ptr<std::atomic<bool>> running) {
             inFlightStartTime_ = glfwGetTime();
         }
 
+        // Heavy JIT/Clang work happens off the UI thread.
         auto program = currentJit->CompileSource(job.sourceName, job.source);
         {
             std::scoped_lock lock(compileMutex_);
@@ -1109,6 +1116,7 @@ void Engine::HandleCompileFailure(const CompileResult& result) {
         }
     }
 
+    // Exponential-ish retry delay dampens repeated failing recompiles.
     const double now = glfwGetTime();
     auto& history = recentErrors_[result.workspaceName];
     history.push_back(now);
@@ -1169,6 +1177,7 @@ void Engine::ProcessCompileResults() {
         std::swap(localResults, compileResults_);
     }
 
+    // Drain queue on main thread so GL/JIT state transitions stay single-threaded.
     while (!localResults.empty()) {
         CompileResult result = std::move(localResults.front());
         localResults.pop();

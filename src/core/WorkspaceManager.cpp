@@ -121,6 +121,7 @@ void WorkspaceManager::Initialize() const {
         return;
     }
 
+    // Fresh install path: create "default" workspace and optionally migrate legacy main.cpp.
     auto descriptor = CreateWorkspace(kDefaultWorkspaceName);
     if (!descriptor.has_value()) {
         return;
@@ -326,6 +327,7 @@ bool WorkspaceManager::IsPathInsideWorkspace(const fs::path& filepath) const {
         return false;
     }
 
+    // Compare normalized string prefixes so "../" traversal cannot escape workspace root.
     const auto workspaceStr = workspacePath.lexically_normal().string();
     const auto targetStr = targetPath.lexically_normal().string();
 

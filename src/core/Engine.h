@@ -68,6 +68,7 @@ private:
     std::unordered_map<std::string, bool> workspaceDirty_;
 
     std::unordered_map<std::string, std::string> latestSources_;
+    // Per-workspace "earliest compile time" used for debounce/backoff scheduling.
     std::unordered_map<std::string, double> pendingCompilesAt_;
     std::unordered_map<std::string, double> ignoreWatcherUntil_;
     std::string activeWorkspaceName_;
@@ -110,6 +111,7 @@ private:
 
     std::mutex compileMutex_;
     std::condition_variable compileCv_;
+    // Main thread enqueues compile jobs; compile thread pops and executes them.
     std::deque<CompileJob> compileJobs_;
     std::queue<CompileResult> compileResults_;
     std::unordered_map<std::string, std::size_t> inFlightSourceHashes_;

@@ -31,6 +31,7 @@ bool ConsoleRedirectSession::WaitForPipeData() {
     }
 
     if (pollResult == 0) {
+        // Timeout: flush partial lines so long-running prints still appear in UI.
         FlushPendingLine();
         return true;
     }
@@ -99,6 +100,7 @@ bool ConsoleRedirectSession::Start(EditorUI* ui) {
     std::cout.flush();
     std::cerr.flush();
 
+    // Redirect process stdout/stderr into the write side of our pipe.
     if (dup2(fds[1], kStdoutFd) < 0 || dup2(fds[1], kStderrFd) < 0) {
         dup2(oldStdoutFd_, kStdoutFd);
         dup2(oldStderrFd_, kStderrFd);
@@ -134,6 +136,7 @@ void ConsoleRedirectSession::ReaderLoop() {
             break;
         }
 
+        // Flush after each read pass so output appears with minimal UI latency.
         FlushPendingLine();
     }
 

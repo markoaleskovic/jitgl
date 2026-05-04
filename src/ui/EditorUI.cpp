@@ -851,6 +851,7 @@ void EditorUI::DrawRuntimeGuidePopup() {
 }
 
 void EditorUI::TriggerChordAction(bool held, bool* chordState, const std::function<void()>& action) {
+    // Fire once on key-down transition, not every frame while key is held.
     if (held && !(*chordState)) {
         action();
     }
@@ -1111,6 +1112,7 @@ void EditorUI::DrawCreateWorkspacePopup() {
         return;
     }
 
+    // Keep close/reset behavior identical for Escape, Cancel, and successful Create.
     const auto closePopup = [this]() {
         newWorkspaceNameBuffer_[0] = '\0';
         focusCreateWorkspaceNameInput_ = false;
@@ -1190,6 +1192,7 @@ void EditorUI::DrawMenuWorkspaceLabel(const std::vector<std::string>& workspaceN
 
 void EditorUI::ApplyPendingWorkspaceAction(const std::string& pendingWorkspaceDelete,
                                            const std::string& pendingWorkspaceSwitch) {
+    // Deletion wins over switching when both are requested in the same frame.
     if (!pendingWorkspaceDelete.empty() && onDeleteWorkspace_) {
         onDeleteWorkspace_(pendingWorkspaceDelete);
         return;
@@ -1387,6 +1390,7 @@ void EditorUI::DrawEditorTabsArea() {
                               drewAnyDocument;
         }
 
+        // Clear one-shot tab selection request once target is selected or no longer visible.
         if (!pendingDocumentSelectionPath_.empty() && (pendingSelectionConsumed || !pendingSelectionVisible)) {
             pendingDocumentSelectionPath_.clear();
         }
@@ -1433,6 +1437,7 @@ void EditorUI::AddConsoleOutput(const std::string &text) {
     {
         std::scoped_lock lock(consoleMutex);
         auto& lines = workspaceConsoleLines_[workspaceName];
+        // Keep bounded history per workspace to avoid unbounded memory growth.
         lines.push_back(text);
         if (lines.size() > MAX_CONSOLE_LINES) {
             const std::size_t removeCount = lines.size() - MAX_CONSOLE_LINES;
@@ -1502,6 +1507,7 @@ void EditorUI::DrawRendererTab() {
             }
         }
 
+        // Center letterboxed image while preserving source aspect ratio.
         const ImVec2 cursor = ImGui::GetCursorPos();
         const float offsetX = (avail.x - imageSize.x) * 0.5f;
         const float offsetY = (avail.y - imageSize.y) * 0.5f;
