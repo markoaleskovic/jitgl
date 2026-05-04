@@ -10,9 +10,11 @@
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <sstream>
 #include <utility>
 #include <vector>
 
@@ -36,6 +38,84 @@ namespace {
     constexpr double DEBOUNCE_STEP_SECONDS = 0.2;
     constexpr double WATCHER_IGNORE_SECONDS = 1.0;
     constexpr double ERROR_HISTORY_SECONDS = 5.0;
+
+    std::string trim(std::string value) {
+        while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) {
+            value.erase(value.begin());
+        }
+        while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) {
+            value.pop_back();
+        }
+        return value;
+    }
+
+    bool parseShaderSections(const std::string& shaderSource,
+                             std::string* vertexShaderOut,
+                             std::string* fragmentShaderOut) {
+        if (!vertexShaderOut || !fragmentShaderOut) {
+            return false;
+        }
+        vertexShaderOut->clear();
+        fragmentShaderOut->clear();
+
+        enum class Section {
+            None,
+            Vertex,
+            Fragment,
+        };
+
+        Section currentSection = Section::None;
+        std::size_t cursor = 0;
+
+        while (cursor <= shaderSource.size()) {
+            const std::size_t lineEnd = shaderSource.find('\n', cursor);
+            const std::size_t lineLength = (lineEnd == std::string::npos) ? (shaderSource.size() - cursor)
+                                                                           : (lineEnd - cursor);
+            const std::string line = shaderSource.substr(cursor, lineLength);
+            const std::string trimmedLine = trim(line);
+
+            if (trimmedLine.rfind("#type", 0) == 0) {
+                if (trimmedLine.find("vertex") != std::string::npos) {
+                    currentSection = Section::Vertex;
+                } else if (trimmedLine.find("fragment") != std::string::npos) {
+                    currentSection = Section::Fragment;
+                } else {
+                    currentSection = Section::None;
+                }
+            } else {
+                if (currentSection == Section::Vertex) {
+                    *vertexShaderOut += line;
+                    *vertexShaderOut += '\n';
+                } else if (currentSection == Section::Fragment) {
+                    *fragmentShaderOut += line;
+                    *fragmentShaderOut += '\n';
+                }
+            }
+
+            if (lineEnd == std::string::npos) {
+                break;
+            }
+            cursor = lineEnd + 1;
+        }
+
+        return !vertexShaderOut->empty() && !fragmentShaderOut->empty();
+    }
+
+    std::string escapeForCStringLiteral(const std::string& text) {
+        std::string escaped;
+        escaped.reserve(text.size() * 2);
+        for (const char ch : text) {
+            switch (ch) {
+                case '\\': escaped += "\\\\"; break;
+                case '"': escaped += "\\\""; break;
+                case '\n': escaped += "\\n"; break;
+                case '\r': break;
+                case '\t': escaped += "\\t"; break;
+                default: escaped.push_back(ch); break;
+            }
+        }
+        return escaped;
+    }
 }
 
 Engine::Engine() = default;
@@ -282,7 +362,7 @@ void Engine::CompletePendingJITReset() {
             ui_->AddLogOutput("[JIT] Waiting for compile thread to finish before restart.");
             resetWaitLogged_ = true;
         }
-        ui_->SetCompilationStatus(true, !compileFailures_.empty(), true);
+        ui_->SetCompilationStatus(true, ActiveWorkspaceHasCompileError(), true);
         return;
     }
 
@@ -309,6 +389,216 @@ void Engine::CompletePendingJITReset() {
     ui_->AddLogOutput("[JIT] JIT engine restarted.");
 }
 
+std::string Engine::WorkspaceForPath(const std::string& filepath) const {
+    auto it = fileToWorkspace_.find(filepath);
+    if (it == fileToWorkspace_.end()) {
+        return {};
+    }
+    return it->second;
+}
+
+bool Engine::ActiveWorkspaceHasCompileError() const {
+    if (activeWorkspaceName_.empty()) {
+        return false;
+    }
+    return compileFailures_.find(activeWorkspaceName_) != compileFailures_.end();
+}
+
+void Engine::SaveActiveWorkspaceRuntimeState() {
+    if (activeWorkspaceName_.empty()) {
+        return;
+    }
+
+    auto workspaceIt = workspaces_.find(activeWorkspaceName_);
+    if (workspaceIt == workspaces_.end()) {
+        return;
+    }
+
+    auto& workspace = workspaceIt->second;
+    std::copy(std::begin(ctx_.state_i), std::end(ctx_.state_i), workspace.stateI.begin());
+    std::copy(std::begin(ctx_.state_f), std::end(ctx_.state_f), workspace.stateF.begin());
+    workspace.userData = ctx_.userData;
+}
+
+void Engine::LoadWorkspaceRuntimeState(const std::string& workspaceName) {
+    auto workspaceIt = workspaces_.find(workspaceName);
+    if (workspaceIt == workspaces_.end()) {
+        return;
+    }
+
+    const auto& workspace = workspaceIt->second;
+    std::copy(workspace.stateI.begin(), workspace.stateI.end(), std::begin(ctx_.state_i));
+    std::copy(workspace.stateF.begin(), workspace.stateF.end(), std::begin(ctx_.state_f));
+    ctx_.userData = workspace.userData;
+}
+
+void Engine::UpdateWorkspaceSourceFromDocument(const std::string& workspaceName,
+                                               const std::string& filepath,
+                                               const std::string& content) {
+    auto workspaceIt = workspaces_.find(workspaceName);
+    if (workspaceIt == workspaces_.end()) {
+        return;
+    }
+
+    auto& workspace = workspaceIt->second;
+    bool changed = false;
+    if (filepath == workspace.cppPath) {
+        changed = (workspace.cppSource != content);
+        workspace.cppSource = content;
+    } else if (filepath == workspace.shaderPath) {
+        changed = (workspace.shaderSource != content);
+        workspace.shaderSource = content;
+    }
+
+    if (changed) {
+        workspaceDirty_[workspaceName] = true;
+    }
+}
+
+std::string Engine::BuildCompileSourceForWorkspace(const std::string& workspaceName) const {
+    auto workspaceIt = workspaces_.find(workspaceName);
+    if (workspaceIt == workspaces_.end()) {
+        return {};
+    }
+
+    const auto& workspace = workspaceIt->second;
+    std::string vertexShader;
+    std::string fragmentShader;
+
+    std::ostringstream generatedSource;
+    if (!parseShaderSections(workspace.shaderSource, &vertexShader, &fragmentShader)) {
+        generatedSource << "#error \"shader.glsl must define '#type vertex' and '#type fragment' sections\"\n";
+        generatedSource << workspace.cppSource;
+        return generatedSource.str();
+    }
+
+    const uint32_t shaderHash = static_cast<uint32_t>(std::hash<std::string>{}(workspace.shaderSource));
+    generatedSource << "static const unsigned int jitgl_workspace_shader_hash = " << shaderHash << "u;\n";
+    generatedSource << "static const char* jitgl_workspace_vertex_shader_source = \""
+                    << escapeForCStringLiteral(vertexShader) << "\";\n";
+    generatedSource << "static const char* jitgl_workspace_fragment_shader_source = \""
+                    << escapeForCStringLiteral(fragmentShader) << "\";\n";
+    generatedSource << "#define JIT_WORKSPACE_VERTEX_SHADER jitgl_workspace_vertex_shader_source\n";
+    generatedSource << "#define JIT_WORKSPACE_FRAGMENT_SHADER jitgl_workspace_fragment_shader_source\n";
+    generatedSource << "#define JIT_WORKSPACE_SHADER_HASH jitgl_workspace_shader_hash\n";
+    generatedSource << workspace.cppSource;
+
+    return generatedSource.str();
+}
+
+void Engine::QueueCompileForWorkspace(const std::string& workspaceName, double nowSeconds, bool immediate) {
+    const std::string generatedSource = BuildCompileSourceForWorkspace(workspaceName);
+    if (generatedSource.empty()) {
+        return;
+    }
+    QueueCompile(workspaceName, generatedSource, nowSeconds, immediate);
+}
+
+bool Engine::RegisterWorkspace(const WorkspaceDescriptor& descriptor) {
+    if (!workspaceManager_) {
+        return false;
+    }
+
+    auto cppSource = workspaceManager_->ReadFile(descriptor.cppPath);
+    auto shaderSource = workspaceManager_->ReadFile(descriptor.shaderPath);
+    if (!cppSource.has_value() || !shaderSource.has_value()) {
+        return false;
+    }
+
+    WorkspaceState workspace;
+    workspace.name = descriptor.name;
+    workspace.directory = descriptor.directory;
+    workspace.cppPath = descriptor.cppPath;
+    workspace.shaderPath = descriptor.shaderPath;
+    workspace.consoleLogPath = descriptor.consoleLogPath;
+    workspace.engineLogPath = descriptor.engineLogPath;
+    workspace.cppSource = std::move(*cppSource);
+    workspace.shaderSource = std::move(*shaderSource);
+
+    workspaces_[workspace.name] = workspace;
+    fileToWorkspace_[workspace.cppPath] = workspace.name;
+    fileToWorkspace_[workspace.shaderPath] = workspace.name;
+    workspaceDirty_[workspace.name] = false;
+
+    if (std::find(workspaceOrder_.begin(), workspaceOrder_.end(), workspace.name) == workspaceOrder_.end()) {
+        workspaceOrder_.push_back(workspace.name);
+        std::sort(workspaceOrder_.begin(), workspaceOrder_.end());
+    }
+
+    ui_->AddDocument(workspace.name, "scene.cpp", workspace.cppPath, workspace.cppSource);
+    ui_->AddDocument(workspace.name, "shader.glsl", workspace.shaderPath, workspace.shaderSource);
+    ui_->SetWorkspaceOutputHistory(workspace.name,
+                                   workspaceManager_->LoadWorkspaceConsoleLog(workspace.name),
+                                   workspaceManager_->LoadWorkspaceEngineLog(workspace.name));
+    return true;
+}
+
+void Engine::SyncWorkspaceUiState() {
+    if (!ui_) {
+        return;
+    }
+    ui_->SetWorkspaces(workspaceOrder_, activeWorkspaceName_);
+}
+
+bool Engine::CreateWorkspaceFromUI(const std::string& workspaceName) {
+    if (!workspaceManager_) {
+        return false;
+    }
+
+    auto descriptor = workspaceManager_->CreateWorkspace(workspaceName);
+    if (!descriptor.has_value()) {
+        ui_->AddLogOutput("[Workspace Error] Failed to create workspace '" + workspaceName +
+                          "'. Use letters, numbers, '_' or '-'.");
+        return false;
+    }
+
+    if (!RegisterWorkspace(*descriptor)) {
+        ui_->AddLogOutput("[Workspace Error] Workspace created but failed to load '" + workspaceName + "'.");
+        return false;
+    }
+
+    SyncWorkspaceUiState();
+    SwitchToWorkspace(descriptor->name, true);
+    ui_->AddLogOutput("[Workspace] Created workspace '" + descriptor->name + "'.");
+    return true;
+}
+
+void Engine::SwitchToWorkspace(const std::string& workspaceName, bool focusCppDocument) {
+    auto workspaceIt = workspaces_.find(workspaceName);
+    if (workspaceIt == workspaces_.end()) {
+        return;
+    }
+
+    if (activeWorkspaceName_ != workspaceName) {
+        if (activeProgram_) {
+            ShutdownProgramIfInitialized(activeProgram_);
+        }
+        SaveActiveWorkspaceRuntimeState();
+        activeProgram_.reset();
+        activeWorkspaceName_ = workspaceName;
+        LoadWorkspaceRuntimeState(workspaceName);
+        ui_->SetActiveWorkspace(workspaceName);
+    }
+
+    if (focusCppDocument) {
+        activeFilePath_ = workspaceIt->second.cppPath;
+        ui_->SetActiveDocument(activeFilePath_);
+    }
+
+    const bool requiresRecompile = workspaceDirty_[workspaceName];
+    if (requiresRecompile) {
+        ActivateProgramForWorkspace(workspaceName);
+        QueueCompileForWorkspace(workspaceName, glfwGetTime(), true);
+        SaveActiveWorkspaceRuntimeState();
+        return;
+    }
+
+    if (!ActivateProgramForWorkspace(workspaceName)) {
+        QueueCompileForWorkspace(workspaceName, glfwGetTime(), true);
+    }
+    SaveActiveWorkspaceRuntimeState();
+}
+
 bool Engine::InitWatcher() {
     workspaceManager_ = std::make_unique<WorkspaceManager>(WORKSPACE_DIR);
     workspaceManager_->Initialize();
@@ -330,16 +620,40 @@ bool Engine::InitWatcher() {
         HandleActiveDocumentChanged(filepath, content);
     });
 
-    auto files = workspaceManager_->LoadAllFiles();
-    for (const auto& file : files) {
-        latestSources_[file.filepath] = file.content;
-        ui_->AddDocument(file.filename, file.filepath, file.content);
+    ui_->SetCreateWorkspaceCallback([this](const std::string& workspaceName) {
+        CreateWorkspaceFromUI(workspaceName);
+    });
+
+    ui_->SetWorkspaceSwitchedCallback([this](const std::string& workspaceName) {
+        SwitchToWorkspace(workspaceName, true);
+    });
+
+    ui_->SetWorkspaceLineAppendedCallback([this](const std::string& workspaceName,
+                                                 const std::string& line,
+                                                 bool isConsole) {
+        if (!workspaceManager_) {
+            return;
+        }
+        if (isConsole) {
+            workspaceManager_->AppendWorkspaceConsoleLog(workspaceName, line);
+        } else {
+            workspaceManager_->AppendWorkspaceEngineLog(workspaceName, line);
+        }
+    });
+
+    auto workspaceDescriptors = workspaceManager_->ListWorkspaces();
+    for (const auto& descriptor : workspaceDescriptors) {
+        RegisterWorkspace(descriptor);
     }
 
-    if (!files.empty()) {
-        activeFilePath_ = files.front().filepath;
-        QueueCompile(activeFilePath_, files.front().content, glfwGetTime(), true);
+    if (workspaceOrder_.empty()) {
+        ui_->AddLogOutput("[Workspace Error] No workspace could be loaded.");
+        return false;
     }
+
+    activeWorkspaceName_ = workspaceOrder_.front();
+    SyncWorkspaceUiState();
+    SwitchToWorkspace(activeWorkspaceName_, true);
 
     watcher_ = std::make_unique<FileWatcher>(
         WORKSPACE_DIR,
@@ -352,7 +666,7 @@ bool Engine::InitWatcher() {
 
 void Engine::OnFileChanged(const std::string& filepath) {
     const auto extension = std::filesystem::path(filepath).extension().string();
-    if (extension != ".cpp") {
+    if (extension != ".cpp" && extension != ".glsl") {
         return;
     }
 
@@ -382,49 +696,81 @@ void Engine::ProcessPendingReloads(double nowSeconds) {
             continue;
         }
 
-        auto latestIt = latestSources_.find(filepath);
-        if (latestIt != latestSources_.end() && latestIt->second == *content) {
+        const std::string workspaceName = WorkspaceForPath(filepath);
+        if (workspaceName.empty()) {
             continue;
         }
 
-        latestSources_[filepath] = *content;
-        ui_->AddDocument(std::filesystem::path(filepath).filename().string(), filepath, *content);
-        QueueCompile(filepath, *content, nowSeconds, filepath == activeFilePath_);
+        auto workspaceIt = workspaces_.find(workspaceName);
+        if (workspaceIt == workspaces_.end()) {
+            continue;
+        }
+
+        const bool isCpp = (filepath == workspaceIt->second.cppPath);
+        const bool unchanged = isCpp ? (workspaceIt->second.cppSource == *content)
+                                     : (workspaceIt->second.shaderSource == *content);
+        if (unchanged) {
+            continue;
+        }
+
+        UpdateWorkspaceSourceFromDocument(workspaceName, filepath, *content);
+        ui_->UpdateDocumentContent(filepath, *content);
+        if (workspaceName == activeWorkspaceName_) {
+            QueueCompileForWorkspace(workspaceName, nowSeconds, true);
+        }
         ui_->AddLogOutput("[Watcher] External change detected: " + filepath);
     }
 }
 
 void Engine::HandleDocumentEdited(const std::string& filepath, const std::string& content) {
-    QueueCompile(filepath, content, glfwGetTime(), false);
+    const std::string workspaceName = WorkspaceForPath(filepath);
+    if (workspaceName.empty()) {
+        return;
+    }
+
+    UpdateWorkspaceSourceFromDocument(workspaceName, filepath, content);
+    if (workspaceName == activeWorkspaceName_) {
+        QueueCompileForWorkspace(workspaceName, glfwGetTime(), false);
+    }
 }
 
 void Engine::HandleActiveDocumentChanged(const std::string& filepath, const std::string& content) {
     activeFilePath_ = filepath;
-    latestSources_[filepath] = content;
+    const std::string workspaceName = WorkspaceForPath(filepath);
+    if (workspaceName.empty()) {
+        return;
+    }
 
-    if (!ActivateProgramForPath(filepath)) {
-        QueueCompile(filepath, content, glfwGetTime(), true);
+    UpdateWorkspaceSourceFromDocument(workspaceName, filepath, content);
+    if (workspaceName != activeWorkspaceName_) {
+        SwitchToWorkspace(workspaceName, false);
+        return;
+    }
+
+    if (!ActivateProgramForWorkspace(workspaceName)) {
+        QueueCompileForWorkspace(workspaceName, glfwGetTime(), true);
     }
 }
 
-void Engine::QueueCompile(const std::string& filepath, const std::string& source, double nowSeconds, bool immediate) {
+void Engine::QueueCompile(const std::string& workspaceName, const std::string& source, double nowSeconds, bool immediate) {
     const std::size_t sourceHash = std::hash<std::string>{}(source);
-    auto failureIt = compileFailures_.find(filepath);
+    auto failureIt = compileFailures_.find(workspaceName);
     if (failureIt != compileFailures_.end() && failureIt->second.sourceHash == sourceHash) {
         if (!failureIt->second.suppressionLogged) {
-            ui_->AddLogOutput("[JIT] Skipping unchanged invalid source for " + filepath + ". Waiting for edits.");
+            ui_->AddLogOutput("[JIT] Skipping unchanged invalid source for workspace '" + workspaceName +
+                              "'. Waiting for edits.");
             failureIt->second.suppressionLogged = true;
         }
-        pendingCompilesAt_.erase(filepath);
+        pendingCompilesAt_.erase(workspaceName);
         return;
     }
     if (failureIt != compileFailures_.end() && failureIt->second.sourceHash != sourceHash) {
         compileFailures_.erase(failureIt);
     }
 
-    latestSources_[filepath] = source;
+    latestSources_[workspaceName] = source;
     double debounce = MIN_DEBOUNCE_SECONDS;
-    auto errorIt = recentErrors_.find(filepath);
+    auto errorIt = recentErrors_.find(workspaceName);
     if (errorIt != recentErrors_.end()) {
         auto& history = errorIt->second;
         while (!history.empty() && (nowSeconds - history.front() > ERROR_HISTORY_SECONDS)) {
@@ -435,16 +781,16 @@ void Engine::QueueCompile(const std::string& filepath, const std::string& source
     }
 
     double requestedAt = immediate ? nowSeconds : (nowSeconds + debounce);
-    auto retryIt = compileRetryAfter_.find(filepath);
+    auto retryIt = compileRetryAfter_.find(workspaceName);
     if (retryIt != compileRetryAfter_.end() && requestedAt < retryIt->second) {
         requestedAt = retryIt->second;
     }
-    pendingCompilesAt_[filepath] = requestedAt;
+    pendingCompilesAt_[workspaceName] = requestedAt;
 }
 
 void Engine::SubmitDueCompiles(double nowSeconds) {
     if (resetRequested_) {
-        ui_->SetCompilationStatus(true, !compileFailures_.empty(), true);
+        ui_->SetCompilationStatus(true, ActiveWorkspaceHasCompileError(), true);
         return;
     }
 
@@ -473,11 +819,11 @@ void Engine::SubmitDueCompiles(double nowSeconds) {
 
         if (shouldReset) {
             ResetJIT();
-            ui_->SetCompilationStatus(true, !compileFailures_.empty(), true);
+            ui_->SetCompilationStatus(true, ActiveWorkspaceHasCompileError(), true);
             return;
         }
 
-        ui_->SetCompilationStatus(inFlight, !compileFailures_.empty(), stalled);
+        ui_->SetCompilationStatus(inFlight, ActiveWorkspaceHasCompileError(), stalled);
         return;
     }
 
@@ -494,46 +840,57 @@ void Engine::SubmitDueCompiles(double nowSeconds) {
         }
 
         if (!shouldReset) {
-            for (const auto& path : duePaths) {
-                auto sourceIt = latestSources_.find(path);
+            for (const auto& workspaceName : duePaths) {
+                auto sourceIt = latestSources_.find(workspaceName);
                 if (sourceIt == latestSources_.end()) {
                     continue;
                 }
                 const std::size_t sourceHash = std::hash<std::string>{}(sourceIt->second);
 
-                auto inFlightIt = inFlightSourceHashes_.find(path);
+                auto inFlightIt = inFlightSourceHashes_.find(workspaceName);
                 if (inFlightIt != inFlightSourceHashes_.end() && inFlightIt->second == sourceHash) {
-                    pendingCompilesAt_.erase(path);
+                    pendingCompilesAt_.erase(workspaceName);
                     continue;
                 }
 
                 const bool alreadyQueued = std::any_of(compileJobs_.begin(), compileJobs_.end(), [&](const CompileJob& job) {
-                    return job.filepath == path && job.sourceHash == sourceHash;
+                    return job.workspaceName == workspaceName && job.sourceHash == sourceHash;
                 });
                 if (alreadyQueued) {
-                    pendingCompilesAt_.erase(path);
+                    pendingCompilesAt_.erase(workspaceName);
+                    continue;
+                }
+
+                auto workspaceIt = workspaces_.find(workspaceName);
+                if (workspaceIt == workspaces_.end()) {
+                    pendingCompilesAt_.erase(workspaceName);
                     continue;
                 }
 
                 compileJobs_.erase(std::remove_if(compileJobs_.begin(), compileJobs_.end(),
                                                   [&](const CompileJob& job) {
-                                                      return job.filepath == path;
+                                                      return job.workspaceName == workspaceName;
                                                   }),
                                    compileJobs_.end());
-                compileJobs_.push_back(CompileJob{ path, sourceIt->second, sourceHash });
-                pendingCompilesAt_.erase(path);
+                compileJobs_.push_back(CompileJob{
+                    workspaceName,
+                    workspaceIt->second.cppPath,
+                    sourceIt->second,
+                    sourceHash
+                });
+                pendingCompilesAt_.erase(workspaceName);
             }
         }
     }
 
     if (shouldReset) {
         ResetJIT();
-        ui_->SetCompilationStatus(true, !compileFailures_.empty(), true);
+        ui_->SetCompilationStatus(true, ActiveWorkspaceHasCompileError(), true);
         return;
     }
 
     compileCv_.notify_one();
-    ui_->SetCompilationStatus(true, !compileFailures_.empty(), stalled);
+    ui_->SetCompilationStatus(true, ActiveWorkspaceHasCompileError(), stalled);
 }
 
 void Engine::CompileThreadMain(std::shared_ptr<std::atomic<bool>> running) {
@@ -552,16 +909,16 @@ void Engine::CompileThreadMain(std::shared_ptr<std::atomic<bool>> running) {
 
             job = std::move(compileJobs_.front());
             compileJobs_.pop_front();
-            inFlightSourceHashes_[job.filepath] = job.sourceHash;
+            inFlightSourceHashes_[job.workspaceName] = job.sourceHash;
             inFlightStartTime_ = glfwGetTime();
         }
 
-        auto program = currentJit->CompileSource(job.filepath, job.source);
+        auto program = currentJit->CompileSource(job.sourceName, job.source);
         {
             std::lock_guard<std::mutex> lock(compileMutex_);
-            inFlightSourceHashes_.erase(job.filepath);
+            inFlightSourceHashes_.erase(job.workspaceName);
             inFlightStartTime_ = 0.0;
-            compileResults_.push(CompileResult{ job.filepath, std::move(program), job.sourceHash });
+            compileResults_.push(CompileResult{ job.workspaceName, std::move(program), job.sourceHash });
         }
     }
 }
@@ -588,8 +945,8 @@ void Engine::ShutdownProgramIfInitialized(const std::shared_ptr<JitProgram>& pro
     program->initialized = false;
 }
 
-bool Engine::ActivateProgramForPath(const std::string& filepath) {
-    auto it = compiledPrograms_.find(filepath);
+bool Engine::ActivateProgramForWorkspace(const std::string& workspaceName) {
+    auto it = compiledPrograms_.find(workspaceName);
     if (it == compiledPrograms_.end()) {
         return false;
     }
@@ -602,7 +959,7 @@ bool Engine::ActivateProgramForPath(const std::string& filepath) {
     activeProgram_ = nextProgram;
     InitializeProgramIfNeeded(activeProgram_);
 
-    ui_->AddLogOutput("[Runtime] Active scene switched to " + filepath);
+    ui_->AddLogOutput("[Runtime] Active workspace switched to " + workspaceName);
     return true;
 }
 
@@ -617,20 +974,19 @@ void Engine::ProcessCompileResults() {
         CompileResult result = std::move(localResults.front());
         localResults.pop();
 
-        bool hasError = !compileFailures_.empty();
-
         if (!result.program) {
-            ui_->AddLogOutput("[JIT] Compile failed for " + result.filepath + ". Keeping previous program.");
-            auto sourceIt = latestSources_.find(result.filepath);
+            ui_->AddLogOutput("[JIT] Compile failed for workspace '" + result.workspaceName +
+                              "'. Keeping previous program.");
+            auto sourceIt = latestSources_.find(result.workspaceName);
             if (sourceIt != latestSources_.end()) {
                 const std::size_t currentHash = std::hash<std::string>{}(sourceIt->second);
                 if (currentHash == result.sourceHash) {
-                    compileFailures_[result.filepath] = CompileFailureState{ result.sourceHash, false };
+                    compileFailures_[result.workspaceName] = CompileFailureState{ result.sourceHash, false };
                 }
             }
 
             double now = glfwGetTime();
-            auto& history = recentErrors_[result.filepath];
+            auto& history = recentErrors_[result.workspaceName];
             history.push_back(now);
             while (!history.empty() && (now - history.front() > ERROR_HISTORY_SECONDS)) {
                 history.pop_front();
@@ -639,33 +995,42 @@ void Engine::ProcessCompileResults() {
             double debounce = MIN_DEBOUNCE_SECONDS + history.size() * DEBOUNCE_STEP_SECONDS;
             if (debounce > MAX_DEBOUNCE_SECONDS) debounce = MAX_DEBOUNCE_SECONDS;
 
-            compileRetryAfter_[result.filepath] = now + debounce;
+            compileRetryAfter_[result.workspaceName] = now + debounce;
             ui_->SetCompilationStatus(false, true, false);
             continue;
         }
 
-        ui_->SetCompilationStatus(false, !compileFailures_.empty(), false);
-        recentErrors_.erase(result.filepath);
+        ui_->SetCompilationStatus(false, ActiveWorkspaceHasCompileError(), false);
+        recentErrors_.erase(result.workspaceName);
 
-        auto failureIt = compileFailures_.find(result.filepath);
+        auto latestIt = latestSources_.find(result.workspaceName);
+        if (latestIt != latestSources_.end()) {
+            const std::size_t latestHash = std::hash<std::string>{}(latestIt->second);
+            if (latestHash == result.sourceHash) {
+                workspaceDirty_[result.workspaceName] = false;
+            }
+        }
+
+        auto failureIt = compileFailures_.find(result.workspaceName);
         if (failureIt != compileFailures_.end() && failureIt->second.sourceHash == result.sourceHash) {
             compileFailures_.erase(failureIt);
         }
-        compileRetryAfter_.erase(result.filepath);
+        compileRetryAfter_.erase(result.workspaceName);
 
-        auto existingIt = compiledPrograms_.find(result.filepath);
+        auto existingIt = compiledPrograms_.find(result.workspaceName);
         if (existingIt != compiledPrograms_.end() && existingIt->second != result.program) {
             ShutdownProgramIfInitialized(existingIt->second);
         }
 
-        compiledPrograms_[result.filepath] = result.program;
-        if (result.filepath == activeFilePath_) {
+        compiledPrograms_[result.workspaceName] = result.program;
+        if (result.workspaceName == activeWorkspaceName_) {
             if (activeProgram_ && activeProgram_ != result.program) {
                 ShutdownProgramIfInitialized(activeProgram_);
             }
             activeProgram_ = result.program;
             ctx_.reloadCount++;
             InitializeProgramIfNeeded(activeProgram_);
+            SaveActiveWorkspaceRuntimeState();
         }
     }
 }
@@ -773,18 +1138,29 @@ void Engine::Shutdown() {
         inFlightSourceHashes_.clear();
     }
 
-    // Call shutdown on the active program before clearing resources
-    if (activeProgram_) {
-        ShutdownProgramIfInitialized(activeProgram_);
+    for (auto& entry : compiledPrograms_) {
+        ShutdownProgramIfInitialized(entry.second);
     }
+    ShutdownProgramIfInitialized(activeProgram_);
 
-    // IMPORTANT: Clear all JIT programs (and their interpreters) 
+    // IMPORTANT: Clear all JIT programs (and their interpreters)
     // BEFORE terminating the JIT engine (which shuts down LLVM).
     activeProgram_.reset();
     compiledPrograms_.clear();
 
     compileFailures_.clear();
     compileRetryAfter_.clear();
+    recentErrors_.clear();
+    ignoreWatcherUntil_.clear();
+    latestSources_.clear();
+    pendingCompilesAt_.clear();
+    inFlightSourceHashes_.clear();
+    workspaces_.clear();
+    workspaceOrder_.clear();
+    fileToWorkspace_.clear();
+    workspaceDirty_.clear();
+    activeWorkspaceName_.clear();
+    activeFilePath_.clear();
 
     if (jit_) {
         if (!detachedCompileThread) {

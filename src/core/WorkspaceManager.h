@@ -15,12 +15,30 @@ struct WorkspaceFile {
     std::string content;
 };
 
+struct WorkspaceDescriptor {
+    std::string name;
+    std::string directory;
+    std::string cppPath;
+    std::string shaderPath;
+    std::string consoleLogPath;
+    std::string engineLogPath;
+};
+
 class WorkspaceManager {
 public:
     explicit WorkspaceManager(std::string directory);
     ~WorkspaceManager() = default;
 
     void Initialize();
+    std::vector<WorkspaceDescriptor> ListWorkspaces() const;
+    std::optional<WorkspaceDescriptor> GetWorkspace(const std::string& workspaceName) const;
+    std::optional<WorkspaceDescriptor> CreateWorkspace(const std::string& workspaceName) const;
+
+    std::vector<std::string> LoadWorkspaceConsoleLog(const std::string& workspaceName) const;
+    std::vector<std::string> LoadWorkspaceEngineLog(const std::string& workspaceName) const;
+    bool AppendWorkspaceConsoleLog(const std::string& workspaceName, const std::string& line) const;
+    bool AppendWorkspaceEngineLog(const std::string& workspaceName, const std::string& line) const;
+
     std::vector<WorkspaceFile> LoadAllFiles() const;
     bool SaveFile(const std::string& filepath, const std::string& content) const;
     std::optional<std::string> ReadFile(const std::string& filepath) const;
@@ -28,6 +46,12 @@ public:
     const std::string& Directory() const { return directory_; }
 
 private:
+    std::optional<WorkspaceDescriptor> BuildDescriptor(const std::string& workspaceName) const;
+    bool EnsureWorkspaceScaffold(const WorkspaceDescriptor& descriptor) const;
+    static bool IsValidWorkspaceName(const std::string& workspaceName);
+    static std::vector<std::string> LoadLogFileLines(const std::string& logPath);
+    static bool AppendLogFileLine(const std::string& logPath, const std::string& line);
+
     std::string directory_;
 };
 

@@ -16,6 +16,7 @@ namespace {
     constexpr std::size_t MAX_LOG_LINES = 2000;
     constexpr const char* FONT_PATH = "assets/JetBrainsMono-Regular.ttf";
     constexpr float BASE_FONT_SIZE = 16.0f;
+    constexpr const char* FALLBACK_WORKSPACE_NAME = "default";
 
     const ImVec4 kEditorPaneBgColor = ImVec4(0.12f, 0.12f, 0.12f, 1.00f);
     const ImVec4 kPanelBgColor = ImVec4(0.14f, 0.14f, 0.14f, 1.00f);
@@ -111,7 +112,7 @@ void EditorUI::SetupDarkTheme() {
 
 // style end
 
-EditorUI::EditorUI() : window(nullptr) {}
+EditorUI::EditorUI() : window(nullptr), activeWorkspaceName_(FALLBACK_WORKSPACE_NAME) {}
 
 EditorUI::~EditorUI() {
     Shutdown();
@@ -236,11 +237,15 @@ void EditorUI::SetupDockspace() {
     ImGui::End();
 }
 
-void EditorUI::AddDocument(const std::string& filename, const std::string& filepath, const std::string& content) {
+void EditorUI::AddDocument(const std::string& workspaceName,
+                           const std::string& filename,
+                           const std::string& filepath,
+                           const std::string& content) {
     auto existing = std::find_if(openDocuments.begin(), openDocuments.end(), [&](const Document& doc) {
         return doc.filepath == filepath;
     });
     if (existing != openDocuments.end()) {
+        existing->workspaceName = workspaceName;
         existing->filename = filename;
         existing->editor.SetText(content);
         existing->lastKnownText = content;
@@ -249,6 +254,7 @@ void EditorUI::AddDocument(const std::string& filename, const std::string& filep
     }
 
     Document doc;
+    doc.workspaceName = workspaceName;
     doc.filename = filename;
     doc.filepath = filepath;
     doc.editor.SetLanguageDefinition(TextEditor::LanguageDefinition::CPlusPlus());
@@ -261,7 +267,7 @@ void EditorUI::AddDocument(const std::string& filename, const std::string& filep
     doc.isOpen = true;
     openDocuments.push_back(doc);
 
-    if (activeDocumentPath_.empty()) {
+    if (activeDocumentPath_.empty() && workspaceName == activeWorkspaceName_) {
         activeDocumentPath_ = filepath;
     }
 }
@@ -279,6 +285,10 @@ void EditorUI::UpdateDocumentContent(const std::string& filepath, const std::str
     existing->isDirty = false;
 }
 
+void EditorUI::SetActiveDocument(const std::string& filepath) {
+    activeDocumentPath_ = filepath;
+}
+
 void EditorUI::SetSaveCallback(std::function<bool(const std::string&, const std::string&)> cb) {
     onSaveDocument_ = std::move(cb);
 }
@@ -289,6 +299,77 @@ void EditorUI::SetDocumentChangedCallback(std::function<void(const std::string&,
 
 void EditorUI::SetActiveDocumentChangedCallback(std::function<void(const std::string&, const std::string&)> cb) {
     onActiveDocumentChanged_ = std::move(cb);
+}
+
+void EditorUI::SetCreateWorkspaceCallback(std::function<void(const std::string&)> cb) {
+    onCreateWorkspace_ = std::move(cb);
+}
+
+void EditorUI::SetWorkspaceSwitchedCallback(std::function<void(const std::string&)> cb) {
+    onWorkspaceSwitched_ = std::move(cb);
+}
+
+void EditorUI::SetWorkspaceLineAppendedCallback(std::function<void(const std::string&, const std::string&, bool)> cb) {
+    onWorkspaceLineAppended_ = std::move(cb);
+}
+
+void EditorUI::SetWorkspaces(const std::vector<std::string>& workspaceNames, const std::string& activeWorkspace) {
+    workspaceNames_ = workspaceNames;
+    SetActiveWorkspace(activeWorkspace);
+}
+
+void EditorUI::SetActiveWorkspace(const std::string& workspaceName) {
+    if (workspaceName.empty()) {
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(workspaceMutex_);
+        activeWorkspaceName_ = workspaceName;
+    }
+
+    auto docIt = std::find_if(openDocuments.begin(), openDocuments.end(), [&](const Document& doc) {
+        return doc.workspaceName == workspaceName && doc.filepath == activeDocumentPath_;
+    });
+    if (docIt == openDocuments.end()) {
+        auto firstWorkspaceDoc = std::find_if(openDocuments.begin(), openDocuments.end(), [&](const Document& doc) {
+            return doc.workspaceName == workspaceName;
+        });
+        if (firstWorkspaceDoc != openDocuments.end()) {
+            activeDocumentPath_ = firstWorkspaceDoc->filepath;
+        }
+    }
+
+    consoleScrollToBottom = true;
+    logScrollToBottom = true;
+}
+
+void EditorUI::SetWorkspaceOutputHistory(const std::string& workspaceName,
+                                         std::vector<std::string> consoleHistory,
+                                         std::vector<std::string> logHistory) {
+    if (workspaceName.empty()) {
+        return;
+    }
+
+    if (consoleHistory.size() > MAX_CONSOLE_LINES) {
+        const std::size_t removeCount = consoleHistory.size() - MAX_CONSOLE_LINES;
+        consoleHistory.erase(consoleHistory.begin(),
+                             consoleHistory.begin() + static_cast<std::ptrdiff_t>(removeCount));
+    }
+    if (logHistory.size() > MAX_LOG_LINES) {
+        const std::size_t removeCount = logHistory.size() - MAX_LOG_LINES;
+        logHistory.erase(logHistory.begin(),
+                         logHistory.begin() + static_cast<std::ptrdiff_t>(removeCount));
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(consoleMutex);
+        workspaceConsoleLines_[workspaceName] = std::move(consoleHistory);
+    }
+    {
+        std::lock_guard<std::mutex> lock(logMutex);
+        workspaceLogLines_[workspaceName] = std::move(logHistory);
+    }
 }
 
 void EditorUI::SetRendererTexture(unsigned int texture, int width, int height) {
@@ -316,7 +397,9 @@ void EditorUI::SetDpiScale(float newScale) {
 void EditorUI::DrawMenuBar() {
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
-            if (ImGui::MenuItem("New")) {}
+            if (ImGui::MenuItem("New Workspace...")) {
+                openCreateWorkspacePopup_ = true;
+            }
             if (ImGui::MenuItem("Save", "Ctrl+S")) {}
             ImGui::Separator();
             if (ImGui::MenuItem("Exit")) {
@@ -324,9 +407,20 @@ void EditorUI::DrawMenuBar() {
             }
             ImGui::EndMenu();
         }
-        if (ImGui::BeginMenu("Edit")) { ImGui::EndMenu(); }
+
+        if (ImGui::BeginMenu("Workspace")) {
+            for (const auto& workspaceName : workspaceNames_) {
+                const bool selected = (workspaceName == activeWorkspaceName_);
+                if (ImGui::MenuItem(workspaceName.c_str(), nullptr, selected)) {
+                    SetActiveWorkspace(workspaceName);
+                    if (onWorkspaceSwitched_) {
+                        onWorkspaceSwitched_(workspaceName);
+                    }
+                }
+            }
+            ImGui::EndMenu();
+        }
         
-        // --- Updated View Menu ---
         if (ImGui::BeginMenu("View")) { 
             if (ImGui::MenuItem("Increase DPI", "Ctrl++")) {
                 SetDpiScale(currentDpiScale_ + 0.1f);
@@ -343,8 +437,50 @@ void EditorUI::DrawMenuBar() {
         
         if (ImGui::BeginMenu("Help")) { ImGui::EndMenu(); }
 
+        if (openCreateWorkspacePopup_) {
+            openCreateWorkspacePopup_ = false;
+            newWorkspaceNameBuffer_[0] = '\0';
+            ImGui::OpenPopup("Create Workspace");
+        }
+
+        if (ImGui::BeginPopupModal("Create Workspace", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::InputText("Name", newWorkspaceNameBuffer_, IM_ARRAYSIZE(newWorkspaceNameBuffer_));
+            const bool canCreate = newWorkspaceNameBuffer_[0] != '\0';
+
+            if (!canCreate) {
+                ImGui::BeginDisabled();
+            }
+            if (ImGui::Button("Create")) {
+                if (onCreateWorkspace_) {
+                    onCreateWorkspace_(newWorkspaceNameBuffer_);
+                }
+                newWorkspaceNameBuffer_[0] = '\0';
+                ImGui::CloseCurrentPopup();
+            }
+            if (!canCreate) {
+                ImGui::EndDisabled();
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel")) {
+                newWorkspaceNameBuffer_[0] = '\0';
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+
+        std::string currentWorkspace;
+        {
+            std::lock_guard<std::mutex> lock(workspaceMutex_);
+            currentWorkspace = activeWorkspaceName_;
+        }
+        if (!currentWorkspace.empty()) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("Workspace: %s", currentWorkspace.c_str());
+        }
+
         // Compile Status Indicator
-        ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 150.0f);
+        ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 170.0f);
         if (isStalled_) {
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.0f, 1.0f), "STALLED?");
             if (ImGui::IsItemHovered()) {
@@ -368,9 +504,12 @@ void EditorUI::DrawTextEditorPane() {
 
     if (ImGui::BeginTabBar("EditorTabs", ImGuiTabBarFlags_Reorderable | ImGuiTabBarFlags_AutoSelectNewTabs)) {
         double currentTime = ImGui::GetTime();
+        bool drewAnyDocument = false;
 
         for (auto &doc: openDocuments) {
             if (!doc.isOpen) continue;
+            if (doc.workspaceName != activeWorkspaceName_) continue;
+            drewAnyDocument = true;
 
             ImGuiTabItemFlags tabFlags = doc.isDirty ? ImGuiTabItemFlags_UnsavedDocument : ImGuiTabItemFlags_None;
 
@@ -395,44 +534,84 @@ void EditorUI::DrawTextEditorPane() {
                 }
                 ImGui::EndTabItem();
             }
+        }
 
-            if (doc.isDirty && (currentTime - doc.lastModifiedTime) >= AUTOSAVE_DEBOUNCE_SECONDS) {
-                bool saved = false;
-                if (onSaveDocument_) {
-                    // Use the already-cached text instead of querying the editor again
-                    saved = onSaveDocument_(doc.filepath, doc.lastKnownText);
-                }
-
-                if (saved) {
-                    doc.isDirty = false;
-                    AddLogOutput("[AutoSave] " + doc.filename + " committed to disk.");
-                } else {
-                    AddLogOutput("[AutoSave Error] Failed to write " + doc.filepath);
-                }
+        for (auto& doc : openDocuments) {
+            if (!doc.isDirty || (currentTime - doc.lastModifiedTime) < AUTOSAVE_DEBOUNCE_SECONDS) {
+                continue;
             }
+
+            bool saved = false;
+            if (onSaveDocument_) {
+                // Use the already-cached text instead of querying the editor again
+                saved = onSaveDocument_(doc.filepath, doc.lastKnownText);
+            }
+
+            if (saved) {
+                doc.isDirty = false;
+                AddLogOutput("[AutoSave] " + doc.filename + " committed to disk.");
+            } else {
+                AddLogOutput("[AutoSave Error] Failed to write " + doc.filepath);
+            }
+        }
+
+        if (!drewAnyDocument) {
+            ImGui::TextUnformatted("No files in this workspace.");
         }
         ImGui::EndTabBar();
     }
     ImGui::End();
 }
 void EditorUI::AddConsoleOutput(const std::string &text) {
-    std::lock_guard<std::mutex> lock(consoleMutex);
-    consoleLines.push_back(text);
-    if (consoleLines.size() > MAX_CONSOLE_LINES) {
-        const std::size_t removeCount = consoleLines.size() - MAX_CONSOLE_LINES;
-        consoleLines.erase(consoleLines.begin(), consoleLines.begin() + static_cast<std::ptrdiff_t>(removeCount));
+    std::string workspaceName;
+    {
+        std::lock_guard<std::mutex> workspaceLock(workspaceMutex_);
+        workspaceName = activeWorkspaceName_;
+    }
+    if (workspaceName.empty()) {
+        workspaceName = FALLBACK_WORKSPACE_NAME;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(consoleMutex);
+        auto& lines = workspaceConsoleLines_[workspaceName];
+        lines.push_back(text);
+        if (lines.size() > MAX_CONSOLE_LINES) {
+            const std::size_t removeCount = lines.size() - MAX_CONSOLE_LINES;
+            lines.erase(lines.begin(), lines.begin() + static_cast<std::ptrdiff_t>(removeCount));
+        }
     }
     consoleScrollToBottom = true;
+
+    if (onWorkspaceLineAppended_) {
+        onWorkspaceLineAppended_(workspaceName, text, true);
+    }
 }
 
 void EditorUI::AddLogOutput(const std::string &text) {
-    std::lock_guard<std::mutex> lock(logMutex);
-    logLines.push_back(text);
-    if (logLines.size() > MAX_LOG_LINES) {
-        const std::size_t removeCount = logLines.size() - MAX_LOG_LINES;
-        logLines.erase(logLines.begin(), logLines.begin() + static_cast<std::ptrdiff_t>(removeCount));
+    std::string workspaceName;
+    {
+        std::lock_guard<std::mutex> workspaceLock(workspaceMutex_);
+        workspaceName = activeWorkspaceName_;
+    }
+    if (workspaceName.empty()) {
+        workspaceName = FALLBACK_WORKSPACE_NAME;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(logMutex);
+        auto& lines = workspaceLogLines_[workspaceName];
+        lines.push_back(text);
+        if (lines.size() > MAX_LOG_LINES) {
+            const std::size_t removeCount = lines.size() - MAX_LOG_LINES;
+            lines.erase(lines.begin(), lines.begin() + static_cast<std::ptrdiff_t>(removeCount));
+        }
     }
     logScrollToBottom = true;
+
+    if (onWorkspaceLineAppended_) {
+        onWorkspaceLineAppended_(workspaceName, text, false);
+    }
 }
 
 void EditorUI::DrawConsolePane() {
@@ -440,6 +619,15 @@ void EditorUI::DrawConsolePane() {
     ImGui::PushStyleColor(ImGuiCol_WindowBg, kUtilityPaneBgColor);
     ImGui::PushStyleColor(ImGuiCol_ChildBg, kUtilityPaneChildBgColor);
     ImGui::Begin("Utility View", nullptr, flags);
+
+    std::string currentWorkspace;
+    {
+        std::lock_guard<std::mutex> workspaceLock(workspaceMutex_);
+        currentWorkspace = activeWorkspaceName_;
+    }
+    if (currentWorkspace.empty()) {
+        currentWorkspace = FALLBACK_WORKSPACE_NAME;
+    }
 
     if (ImGui::BeginTabBar("UtilityTabs", ImGuiTabBarFlags_None)) {
         if (ImGui::BeginTabItem("Renderer")) {
@@ -477,11 +665,14 @@ void EditorUI::DrawConsolePane() {
             ImGui::BeginChild("ConsoleOutput", ImVec2(0.0f, -footerHeight), false, ImGuiWindowFlags_HorizontalScrollbar);
             {
                 std::lock_guard<std::mutex> lock(consoleMutex);
-                for (const std::string &line: consoleLines) {
-                    if (!line.empty() && line[0] == '>') {
-                        ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f), "%s", line.c_str());
-                    } else {
-                        ImGui::TextUnformatted(line.c_str());
+                auto it = workspaceConsoleLines_.find(currentWorkspace);
+                if (it != workspaceConsoleLines_.end()) {
+                    for (const std::string& line : it->second) {
+                        if (!line.empty() && line[0] == '>') {
+                            ImGui::TextColored(ImVec4(0.6f, 0.9f, 1.0f, 1.0f), "%s", line.c_str());
+                        } else {
+                            ImGui::TextUnformatted(line.c_str());
+                        }
                     }
                 }
                 if (consoleScrollToBottom || ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
@@ -514,13 +705,16 @@ void EditorUI::DrawConsolePane() {
             ImGui::BeginChild("LogsRegion", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
             {
                 std::lock_guard<std::mutex> lock(logMutex);
-                for (const std::string &line: logLines) {
-                    if (line.find("Error") != std::string::npos || line.find("Failed") != std::string::npos) {
-                        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", line.c_str());
-                    } else if (line.find("[AutoSave]") != std::string::npos) {
-                        ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "%s", line.c_str());
-                    } else {
-                        ImGui::TextUnformatted(line.c_str());
+                auto it = workspaceLogLines_.find(currentWorkspace);
+                if (it != workspaceLogLines_.end()) {
+                    for (const std::string& line : it->second) {
+                        if (line.find("Error") != std::string::npos || line.find("Failed") != std::string::npos) {
+                            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", line.c_str());
+                        } else if (line.find("[AutoSave]") != std::string::npos) {
+                            ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "%s", line.c_str());
+                        } else {
+                            ImGui::TextUnformatted(line.c_str());
+                        }
                     }
                 }
                 if (logScrollToBottom || ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {

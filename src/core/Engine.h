@@ -3,6 +3,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <deque>
+#include <array>
 #include <mutex>
 #include <memory>
 #include <queue>
@@ -20,6 +21,7 @@ struct GLFWwindow;
 class FileWatcher;
 class ConsoleRedirectSession;
 class WorkspaceManager;
+struct WorkspaceDescriptor;
 
 class Engine {
 public:
@@ -44,9 +46,29 @@ private:
     EngineContext ctx_;
     std::shared_ptr<JitProgram> activeProgram_;
     std::unordered_map<std::string, std::shared_ptr<JitProgram>> compiledPrograms_;
+    struct WorkspaceState {
+        std::string name;
+        std::string directory;
+        std::string cppPath;
+        std::string shaderPath;
+        std::string consoleLogPath;
+        std::string engineLogPath;
+        std::string cppSource;
+        std::string shaderSource;
+        std::array<uint32_t, 64> stateI{};
+        std::array<float, 64> stateF{};
+        void* userData = nullptr;
+    };
+
+    std::unordered_map<std::string, WorkspaceState> workspaces_;
+    std::vector<std::string> workspaceOrder_;
+    std::unordered_map<std::string, std::string> fileToWorkspace_;
+    std::unordered_map<std::string, bool> workspaceDirty_;
+
     std::unordered_map<std::string, std::string> latestSources_;
     std::unordered_map<std::string, double> pendingCompilesAt_;
     std::unordered_map<std::string, double> ignoreWatcherUntil_;
+    std::string activeWorkspaceName_;
     std::string activeFilePath_;
     double lastTime_ = 0.0;
 
@@ -62,13 +84,14 @@ private:
     std::queue<std::string> pendingReloads_;
 
     struct CompileJob {
-        std::string filepath;
+        std::string workspaceName;
+        std::string sourceName;
         std::string source;
         std::size_t sourceHash = 0;
     };
 
     struct CompileResult {
-        std::string filepath;
+        std::string workspaceName;
         std::shared_ptr<JitProgram> program;
         std::size_t sourceHash = 0;
     };
@@ -93,6 +116,20 @@ private:
     bool resetRequested_ = false;
     bool resetWaitLogged_ = false;
 
+    bool RegisterWorkspace(const WorkspaceDescriptor& descriptor);
+    void SyncWorkspaceUiState();
+    bool CreateWorkspaceFromUI(const std::string& workspaceName);
+    void SwitchToWorkspace(const std::string& workspaceName, bool focusCppDocument);
+    std::string BuildCompileSourceForWorkspace(const std::string& workspaceName) const;
+    void QueueCompileForWorkspace(const std::string& workspaceName, double nowSeconds, bool immediate);
+    void UpdateWorkspaceSourceFromDocument(const std::string& workspaceName,
+                                           const std::string& filepath,
+                                           const std::string& content);
+    std::string WorkspaceForPath(const std::string& filepath) const;
+    bool ActiveWorkspaceHasCompileError() const;
+    void SaveActiveWorkspaceRuntimeState();
+    void LoadWorkspaceRuntimeState(const std::string& workspaceName);
+
     void ResetJIT();
     void CompletePendingJITReset();
     void OnFileChanged(const std::string& filepath);
@@ -100,11 +137,11 @@ private:
 
     void HandleDocumentEdited(const std::string& filepath, const std::string& content);
     void HandleActiveDocumentChanged(const std::string& filepath, const std::string& content);
-    void QueueCompile(const std::string& filepath, const std::string& source, double nowSeconds, bool immediate);
+    void QueueCompile(const std::string& workspaceName, const std::string& source, double nowSeconds, bool immediate);
     void SubmitDueCompiles(double nowSeconds);
     void ProcessCompileResults();
     void CompileThreadMain(std::shared_ptr<std::atomic<bool>> running);
-    bool ActivateProgramForPath(const std::string& filepath);
+    bool ActivateProgramForWorkspace(const std::string& workspaceName);
     void InitializeProgramIfNeeded(const std::shared_ptr<JitProgram>& program);
     void ShutdownProgramIfInitialized(const std::shared_ptr<JitProgram>& program);
 

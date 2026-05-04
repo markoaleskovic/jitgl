@@ -4,11 +4,13 @@
 #include <vector>
 #include <mutex>
 #include <functional>
+#include <unordered_map>
 #include "TextEditor.h"
 
 struct GLFWwindow;
 
 struct Document {
+    std::string workspaceName;
     std::string filename;
     std::string filepath;
     TextEditor editor;
@@ -30,11 +32,23 @@ public:
     void Shutdown();
 
     // Data injection methods
-    void AddDocument(const std::string& filename, const std::string& filepath, const std::string& content);
+    void AddDocument(const std::string& workspaceName,
+                     const std::string& filename,
+                     const std::string& filepath,
+                     const std::string& content);
     void UpdateDocumentContent(const std::string& filepath, const std::string& content);
+    void SetActiveDocument(const std::string& filepath);
     void SetSaveCallback(std::function<bool(const std::string&, const std::string&)> cb);
     void SetDocumentChangedCallback(std::function<void(const std::string&, const std::string&)> cb);
     void SetActiveDocumentChangedCallback(std::function<void(const std::string&, const std::string&)> cb);
+    void SetCreateWorkspaceCallback(std::function<void(const std::string&)> cb);
+    void SetWorkspaceSwitchedCallback(std::function<void(const std::string&)> cb);
+    void SetWorkspaceLineAppendedCallback(std::function<void(const std::string&, const std::string&, bool)> cb);
+    void SetWorkspaces(const std::vector<std::string>& workspaceNames, const std::string& activeWorkspace);
+    void SetActiveWorkspace(const std::string& workspaceName);
+    void SetWorkspaceOutputHistory(const std::string& workspaceName,
+                                   std::vector<std::string> consoleHistory,
+                                   std::vector<std::string> logHistory);
     void SetRendererTexture(unsigned int texture, int width, int height);
     void SetCompilationStatus(bool isCompiling, bool hasError, bool isStalled = false);
     void SetupDarkTheme();
@@ -45,10 +59,13 @@ public:
 private:
     GLFWwindow* window;
     std::vector<Document> openDocuments;
-    std::vector<std::string> consoleLines;
-    std::vector<std::string> logLines;
+    std::unordered_map<std::string, std::vector<std::string>> workspaceConsoleLines_;
+    std::unordered_map<std::string, std::vector<std::string>> workspaceLogLines_;
+    std::vector<std::string> workspaceNames_;
+    std::string activeWorkspaceName_;
     std::mutex consoleMutex;
     std::mutex logMutex;
+    std::mutex workspaceMutex_;
 
     bool consoleScrollToBottom = true;
     bool logScrollToBottom = true;
@@ -59,6 +76,9 @@ private:
     std::function<bool(const std::string&, const std::string&)> onSaveDocument_;
     std::function<void(const std::string&, const std::string&)> onDocumentChanged_;
     std::function<void(const std::string&, const std::string&)> onActiveDocumentChanged_;
+    std::function<void(const std::string&)> onCreateWorkspace_;
+    std::function<void(const std::string&)> onWorkspaceSwitched_;
+    std::function<void(const std::string&, const std::string&, bool)> onWorkspaceLineAppended_;
 
     std::string activeDocumentPath_;
     unsigned int rendererTexture_ = 0;
@@ -68,6 +88,8 @@ private:
     bool isCompiling_ = false;
     bool hasCompileError_ = false;
     bool isStalled_ = false;
+    bool openCreateWorkspacePopup_ = false;
+    char newWorkspaceNameBuffer_[128] = "";
 
     void SetupDockspace();
     void DrawMenuBar();

@@ -15,7 +15,8 @@ void FileWatcher::Start() {
 
     // Seed initial timestamps to avoid false triggers on startup
     std::error_code ec;
-    for (auto& entry : fs::directory_iterator(watchDir_, ec)) {
+    for (auto& entry : fs::recursive_directory_iterator(
+             watchDir_, fs::directory_options::skip_permission_denied, ec)) {
         if (entry.is_regular_file(ec)) {
             lastWriteTimes_[entry.path().string()] = entry.last_write_time(ec);
         }
@@ -26,7 +27,8 @@ void FileWatcher::Start() {
             std::this_thread::sleep_for(POLL_INTERVAL);
 
             std::error_code ec;
-            for (auto& entry : fs::directory_iterator(watchDir_, ec)) {
+            for (auto& entry : fs::recursive_directory_iterator(
+                     watchDir_, fs::directory_options::skip_permission_denied, ec)) {
                 if (!entry.is_regular_file(ec)) continue;
 
                 auto path        = entry.path().string();
