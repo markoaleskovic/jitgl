@@ -410,10 +410,16 @@ void EditorUI::NewFrame() {
 
 void EditorUI::Draw() {
     HandleGlobalShortcuts();
-    DrawMenuBar();
-    SetupDockspace();
-    DrawTextEditorPane();
-    DrawConsolePane();
+
+    if (rendererFullscreen_) {
+        DrawRendererFullscreen();
+    } else {
+        DrawMenuBar();
+        SetupDockspace();
+        DrawTextEditorPane();
+        DrawConsolePane();
+    }
+
     DrawWelcomePopup();
     DrawRuntimeGuidePopup();
 }
@@ -899,6 +905,9 @@ void EditorUI::HandleGlobalShortcuts() {
     TriggerChordAction(canUseCtrlShortcuts && IsKeyDown(window, GLFW_KEY_T),
                        &ctrlThemeToggleChordHeld_,
                        [this]() { ToggleTheme(); });
+    TriggerChordAction(canUseCtrlShortcuts && IsKeyDown(window, GLFW_KEY_F),
+                       &ctrlFullscreenChordHeld_,
+                       [this]() { rendererFullscreen_ = !rendererFullscreen_; });
 }
 
 void EditorUI::ToggleActiveWorkspaceDocument() {
@@ -1474,6 +1483,54 @@ std::string EditorUI::ResolveCurrentWorkspaceName() {
         currentWorkspace = FALLBACK_WORKSPACE_NAME;
     }
     return currentWorkspace;
+}
+
+void EditorUI::DrawRendererFullscreen() {
+    const ImGuiViewport *viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->WorkPos);
+    ImGui::SetNextWindowSize(viewport->WorkSize);
+    ImGui::SetNextWindowViewport(viewport->ID);
+
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings |
+                             ImGuiWindowFlags_NoBringToFrontOnFocus;
+
+    // Use a background color consistent with the theme
+    const bool lightTheme = IsLightTheme();
+    const ImVec4 bg = lightTheme ? kLightUtilityPaneBgColor : kUtilityPaneBgColor;
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, bg);
+
+    if (ImGui::Begin("FullscreenRenderer", nullptr, flags)) {
+        if (rendererTexture_ != 0 && rendererTextureWidth_ > 0 && rendererTextureHeight_ > 0) {
+            const ImVec2 avail = ImGui::GetContentRegionAvail();
+            const float srcAspect = static_cast<float>(rendererTextureWidth_) / static_cast<float>(rendererTextureHeight_);
+            ImVec2 imageSize = avail;
+
+            if (imageSize.x > 0.0f && imageSize.y > 0.0f) {
+                const float dstAspect = imageSize.x / imageSize.y;
+                if (dstAspect > srcAspect) {
+                    imageSize.x = imageSize.y * srcAspect;
+                } else {
+                    imageSize.y = imageSize.x / srcAspect;
+                }
+            }
+
+            const ImVec2 cursor = ImGui::GetCursorPos();
+            const float offsetX = (avail.x - imageSize.x) * 0.5f;
+            const float offsetY = (avail.y - imageSize.y) * 0.5f;
+            ImGui::SetCursorPos(ImVec2(cursor.x + (offsetX > 0.0f ? offsetX : 0.0f),
+                                       cursor.y + (offsetY > 0.0f ? offsetY : 0.0f)));
+
+            ImGui::Image(static_cast<ImTextureID>(rendererTexture_),
+                         imageSize,
+                         ImVec2(0.0f, 1.0f),
+                         ImVec2(1.0f, 0.0f));
+        } else {
+            ImGui::TextUnformatted("Renderer not ready.");
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleColor();
 }
 
 void EditorUI::DrawRendererTab() {

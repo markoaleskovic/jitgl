@@ -15,3 +15,9 @@ compile_commands.json
 _deps/
 CMakeUserPresets.json
 CMakeLists.txt.user
+
+# IDEA
+/.idea
+/.cache
+/.codex
+/output.log

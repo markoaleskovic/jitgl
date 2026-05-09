@@ -156,6 +156,7 @@ private:
     void ToggleTheme();
     void ApplyEditorPalette(Document& doc) const;
     bool IsLightTheme() const;
+    void DrawRendererFullscreen();
 
     float currentDpiScale_ = 1.0f;
     float pendingDpiScale_ = 1.0f;
@@ -177,6 +178,7 @@ private:
     bool ctrlMinusChordHeld_ = false;
     bool ctrlNewWorkspaceChordHeld_ = false;
     bool ctrlThemeToggleChordHeld_ = false;
+    bool ctrlFullscreenChordHeld_ = false;
     bool showWelcomeOnStartup_ = true;
     bool welcomePopupOpenedThisSession_ = false;
     bool openWelcomePopupRequested_ = false;
@@ -186,6 +188,7 @@ private:
     bool focusCreateWorkspaceNameInput_ = false;
     UiTheme currentTheme_ = UiTheme::Dark;
     bool themeApplyPending_ = false;
+    bool rendererFullscreen_ = false;
 
     std::string welcomeMarkdown_;
     std::string guideMarkdown_;

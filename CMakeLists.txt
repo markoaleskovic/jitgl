@@ -120,6 +120,9 @@ target_include_directories(jit_ide PRIVATE
         $<TARGET_PROPERTY:glad_gl_core_33,INTERFACE_INCLUDE_DIRECTORIES>
 )
 
+# Explicitly add imgui_markdown.h to the target sources so CLion indexes it properly
+target_sources(jit_ide PRIVATE ${imgui_markdown_SOURCE_DIR}/imgui_markdown.h)
+
 # Convert LLVM definitions string into a proper CMake list (avoids parsing issues)
 separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
 
