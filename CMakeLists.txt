@@ -67,6 +67,13 @@ FetchContent_Declare(imgui_markdown
 )
 FetchContent_MakeAvailable(imgui_markdown)
 
+# ── nativefiledialog-extended ───────────────────────────────────────────────
+FetchContent_Declare(nfd
+    GIT_REPOSITORY https://github.com/btzy/nativefiledialog-extended.git
+    GIT_TAG master
+)
+FetchContent_MakeAvailable(nfd)
+
 # ── LLVM + Clang ─────────────────────────────────────────────────────────────
 find_package(LLVM REQUIRED CONFIG)
 find_package(Clang REQUIRED CONFIG)
@@ -148,6 +155,7 @@ target_link_libraries(jit_ide PRIVATE
     OpenGL::GL
     clang-cpp
     LLVM
+    nfd
 )
 
 set_target_properties(jit_ide PROPERTIES ENABLE_EXPORTS TRUE)

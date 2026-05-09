@@ -130,6 +130,8 @@ private:
     bool CreateWorkspaceFromUI(const std::string& workspaceName);
     bool DeleteWorkspaceFromUI(const std::string& workspaceName);
     void SwitchToWorkspace(const std::string& workspaceName, bool focusCppDocument);
+    bool ExportActiveWorkspace(const std::string& targetPath) const;
+    bool ImportWorkspace(const std::string& sourcePath);
     std::string BuildCompileSourceForWorkspace(const std::string& workspaceName) const;
     void QueueCompileForWorkspace(const std::string& workspaceName, double nowSeconds, bool immediate);
     void UpdateWorkspaceSourceFromDocument(const std::string& workspaceName,

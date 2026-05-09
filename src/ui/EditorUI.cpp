@@ -11,6 +11,7 @@
 #include <fstream>
 #include <ranges>
 #include <sstream>
+#include <nfd.hpp>
 
 namespace {
     constexpr double AUTOSAVE_DEBOUNCE_SECONDS = 0.05;
@@ -337,6 +338,8 @@ void EditorUI::Init(GLFWwindow *win) {
     window = win;
     LoadMarkdownFiles();
 
+    NFD_Init();
+
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO &io = ImGui::GetIO();
@@ -536,6 +539,14 @@ void EditorUI::SetWorkspaceSwitchedCallback(std::function<void(const std::string
 
 void EditorUI::SetWorkspaceLineAppendedCallback(std::function<void(const std::string&, const std::string&, bool)> cb) {
     onWorkspaceLineAppended_ = std::move(cb);
+}
+
+void EditorUI::SetExportWorkspaceCallback(std::function<bool(const std::string&)> cb) {
+    onExportWorkspace_ = std::move(cb);
+}
+
+void EditorUI::SetImportWorkspaceCallback(std::function<bool(const std::string&)> cb) {
+    onImportWorkspace_ = std::move(cb);
 }
 
 void EditorUI::SetWorkspaces(const std::vector<std::string>& workspaceNames, const std::string& activeWorkspace) {
@@ -910,7 +921,10 @@ void EditorUI::HandleGlobalShortcuts() {
                        [this]() {
                            rendererFullscreen_ = !rendererFullscreen_;
                            if (!rendererFullscreen_) {
-                               focusEditorRequested_ = true;
+                               focusEditorRequestFramesRemaining_ = 4;
+                               if (!activeDocumentPath_.empty()) {
+                                   pendingDocumentSelectionPath_ = activeDocumentPath_;
+                               }
                            }
                        });
 }
@@ -1029,6 +1043,45 @@ void EditorUI::DrawFileMenu(const std::vector<std::string>& workspaceNamesSnapsh
     }
 
     (void)ImGui::MenuItem("Save", "Ctrl+S");
+    ImGui::Separator();
+    if (ImGui::MenuItem("Export Workspace...")) {
+        const std::string currentWorkspace = ResolveCurrentWorkspaceName();
+        const std::string defaultExportFilename = currentWorkspace + ".jws";
+        nfdchar_t *outPath = nullptr;
+        nfdfilteritem_t filterItem[1] = {{"JITGL Workspace", "jws,jitglws"}};
+        nfdresult_t result = NFD_SaveDialog(&outPath, filterItem, 1, nullptr, defaultExportFilename.c_str());
+
+        if (result == NFD_OKAY) {
+            bool exported = false;
+            if (onExportWorkspace_) {
+                exported = onExportWorkspace_(outPath);
+            }
+            if (exported) {
+                AddLogOutput("[Workspace] Exported '" + currentWorkspace + "'.");
+            } else {
+                AddLogOutput("[Workspace Error] Failed to export '" + currentWorkspace + "'.");
+            }
+            NFD_FreePath(outPath);
+        }
+    }
+    if (ImGui::MenuItem("Import Workspace...")) {
+        nfdchar_t *outPath = nullptr;
+        nfdfilteritem_t filterItem[1] = {{"JITGL Workspace", "jws,jitglws"}};
+        nfdresult_t result = NFD_OpenDialog(&outPath, filterItem, 1, nullptr);
+
+        if (result == NFD_OKAY) {
+            bool imported = false;
+            if (onImportWorkspace_) {
+                imported = onImportWorkspace_(outPath);
+            }
+            if (imported) {
+                AddLogOutput("[Workspace] Imported workspace package.");
+            } else {
+                AddLogOutput("[Workspace Error] Failed to import workspace package.");
+            }
+            NFD_FreePath(outPath);
+        }
+    }
     ImGui::Separator();
     if (ImGui::MenuItem("Exit")) {
         glfwSetWindowShouldClose(window, GLFW_TRUE);
@@ -1257,6 +1310,7 @@ void EditorUI::DrawMenuBar() {
     DrawHelpMenu();
     OpenCreateWorkspacePopupIfRequested();
     DrawCreateWorkspacePopup();
+
     DrawMenuWorkspaceLabel(workspaceNamesSnapshot);
     ApplyPendingWorkspaceAction(pendingWorkspaceDelete, pendingWorkspaceSwitch);
     DrawCompileStatusIndicator();
@@ -1333,10 +1387,9 @@ bool EditorUI::DrawEditorTab(Document& doc,
         return true;
     }
 
-    if (focusEditorRequested_ && doc.filepath == activeDocumentPath_) {
+    if (focusEditorRequestFramesRemaining_ > 0 && doc.filepath == activeDocumentPath_) {
         // We set the focus to the next item (the child window inside TextEditor::Render)
         ImGui::SetKeyboardFocusHere();
-        focusEditorRequested_ = false;
     }
 
     if (!pendingDocumentSelectionPath_.empty() && doc.filepath == pendingDocumentSelectionPath_) {
@@ -1350,6 +1403,10 @@ bool EditorUI::DrawEditorTab(Document& doc,
     }
 
     doc.editor.Render(doc.filename.c_str());
+    if (focusEditorRequestFramesRemaining_ > 0 && doc.filepath == activeDocumentPath_) {
+        --focusEditorRequestFramesRemaining_;
+    }
+
     std::string currentText = doc.editor.GetText();
     if (currentText != doc.lastKnownText) {
         doc.isDirty = true;
@@ -1413,7 +1470,7 @@ void EditorUI::DrawEditorTabsArea() {
 }
 
 void EditorUI::DrawTextEditorPane() {
-    if (focusEditorRequested_) {
+    if (focusEditorRequestFramesRemaining_ > 0) {
         ImGui::SetNextWindowFocus();
     }
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar;
@@ -1515,6 +1572,17 @@ void EditorUI::DrawRendererFullscreen() {
     ImGui::PushStyleColor(ImGuiCol_WindowBg, bg);
 
     if (ImGui::Begin("FullscreenRenderer", nullptr, flags)) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            rendererFullscreen_ = false;
+            focusEditorRequestFramesRemaining_ = 4;
+            if (!activeDocumentPath_.empty()) {
+                pendingDocumentSelectionPath_ = activeDocumentPath_;
+            }
+            ImGui::End();
+            ImGui::PopStyleColor();
+            return;
+        }
+
         if (rendererTexture_ != 0 && rendererTextureWidth_ > 0 && rendererTextureHeight_ > 0) {
             const ImVec2 avail = ImGui::GetContentRegionAvail();
             const float srcAspect = static_cast<float>(rendererTextureWidth_) / static_cast<float>(rendererTextureHeight_);
@@ -1707,6 +1775,8 @@ void EditorUI::Shutdown() {
     }
     shutdown_ = true;
     initialized_ = false;
+
+    NFD_Quit();
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();

@@ -312,6 +312,31 @@ bool Engine::InitUI() {
         return false;
     }
 
+    ui_->SetSaveCallback([this](const std::string& path, const std::string& content) {
+        return workspaceManager_->SaveFile(path, content);
+    });
+    ui_->SetDocumentChangedCallback([this](const std::string& path, const std::string& content) {
+        HandleDocumentEdited(path, content);
+    });
+    ui_->SetActiveDocumentChangedCallback([this](const std::string& path, const std::string& content) {
+        HandleActiveDocumentChanged(path, content);
+    });
+    ui_->SetCreateWorkspaceCallback([this](const std::string& name) {
+        CreateWorkspaceFromUI(name);
+    });
+    ui_->SetDeleteWorkspaceCallback([this](const std::string& name) {
+        DeleteWorkspaceFromUI(name);
+    });
+    ui_->SetWorkspaceSwitchedCallback([this](const std::string& name) {
+        SwitchToWorkspace(name, false);
+    });
+    ui_->SetExportWorkspaceCallback([this](const std::string& path) {
+        return ExportActiveWorkspace(path);
+    });
+    ui_->SetImportWorkspaceCallback([this](const std::string& path) {
+        return ImportWorkspace(path);
+    });
+
     return true;
 }
 
@@ -1103,6 +1128,26 @@ bool Engine::ActivateProgramForWorkspace(const std::string& workspaceName) {
 
     ui_->AddLogOutput("[Runtime] Active workspace switched to " + workspaceName);
     return true;
+}
+
+bool Engine::ExportActiveWorkspace(const std::string& targetPath) const {
+    if (activeWorkspaceName_.empty()) return false;
+    return workspaceManager_->ExportWorkspace(activeWorkspaceName_, targetPath);
+}
+
+bool Engine::ImportWorkspace(const std::string& sourcePath) {
+    auto importedName = workspaceManager_->ImportWorkspace(sourcePath);
+    if (!importedName) return false;
+
+    auto descriptor = workspaceManager_->GetWorkspace(*importedName);
+    if (!descriptor) return false;
+
+    if (RegisterWorkspace(*descriptor)) {
+        SyncWorkspaceUiState();
+        SwitchToWorkspace(*importedName, true);
+        return true;
+    }
+    return false;
 }
 
 void Engine::HandleCompileFailure(const CompileResult& result) {

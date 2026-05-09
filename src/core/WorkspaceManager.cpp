@@ -1,11 +1,14 @@
 #include "core/WorkspaceManager.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <ranges>
 #include <sstream>
+#include <string_view>
+#include <system_error>
 #include <utility>
 
 namespace fs = std::filesystem;
@@ -16,6 +19,225 @@ namespace {
     constexpr const char* kConsoleLogFilename = "console.log";
     constexpr const char* kEngineLogFilename = "engine.log";
     constexpr const char* kDefaultWorkspaceName = "default";
+    constexpr const char* kWorkspaceExportExtension = ".jws";
+    constexpr const char* kWorkspaceExportMagicV1 = "JIT_WORKSPACE_V1";
+    constexpr const char* kWorkspaceExportMagicV2 = "JIT_WORKSPACE_V2";
+    constexpr const char* kWorkspaceNamePrefixV1 = "NAME: ";
+    constexpr const char* kWorkspaceNamePrefixV2 = "NAME:";
+    constexpr const char* kCppSizePrefix = "CPP_SIZE:";
+    constexpr const char* kShaderSizePrefix = "SHADER_SIZE:";
+    constexpr const char* kImportedWorkspaceFallbackName = "workspace";
+    constexpr std::size_t kMaxImportedSourceBytes = 8u * 1024u * 1024u;
+
+    struct ImportedWorkspacePayload {
+        std::string workspaceName;
+        std::string cppSource;
+        std::string shaderSource;
+    };
+
+    void TrimTrailingCarriageReturn(std::string* line) {
+        if (line != nullptr && !line->empty() && line->back() == '\r') {
+            line->pop_back();
+        }
+    }
+
+    bool ReadTrimmedLine(std::istream* stream, std::string* outLine) {
+        if (stream == nullptr || outLine == nullptr || !std::getline(*stream, *outLine)) {
+            return false;
+        }
+        TrimTrailingCarriageReturn(outLine);
+        return true;
+    }
+
+    bool ParseSizeField(const std::string& line, std::string_view prefix, std::size_t* outSize) {
+        if (outSize == nullptr || !line.starts_with(prefix)) {
+            return false;
+        }
+
+        const std::string_view numeric = std::string_view(line).substr(prefix.size());
+        if (numeric.empty()) {
+            return false;
+        }
+
+        std::size_t value = 0;
+        const char* begin = numeric.data();
+        const char* end = begin + numeric.size();
+        const auto [ptr, ec] = std::from_chars(begin, end, value);
+        if (ec != std::errc{} || ptr != end) {
+            return false;
+        }
+
+        *outSize = value;
+        return true;
+    }
+
+    std::string SanitizeWorkspaceName(std::string_view rawName) {
+        std::string sanitized;
+        sanitized.reserve(rawName.size());
+
+        bool previousWasDash = false;
+        for (const char c : rawName) {
+            const unsigned char uc = static_cast<unsigned char>(c);
+            if (std::isalnum(uc) || c == '_' || c == '-') {
+                sanitized.push_back(c);
+                previousWasDash = (c == '-');
+                continue;
+            }
+
+            if (!sanitized.empty() && !previousWasDash) {
+                sanitized.push_back('-');
+                previousWasDash = true;
+            }
+        }
+
+        std::size_t start = 0;
+        while (start < sanitized.size() && (sanitized[start] == '-' || sanitized[start] == '_')) {
+            ++start;
+        }
+
+        std::size_t end = sanitized.size();
+        while (end > start && (sanitized[end - 1] == '-' || sanitized[end - 1] == '_')) {
+            --end;
+        }
+
+        if (start >= end) {
+            return {};
+        }
+        return sanitized.substr(start, end - start);
+    }
+
+    std::string BuildUniqueWorkspaceName(const std::filesystem::path& workspaceRoot, const std::string& baseName) {
+        if (baseName.empty()) {
+            return {};
+        }
+
+        for (std::size_t i = 0; i < 100000; ++i) {
+            std::string candidate = baseName;
+            if (i > 0) {
+                candidate += "-" + std::to_string(i);
+            }
+
+            std::error_code ec;
+            const bool exists = fs::exists(workspaceRoot / candidate, ec);
+            if (ec) {
+                return {};
+            }
+            if (!exists) {
+                return candidate;
+            }
+        }
+
+        return {};
+    }
+
+    std::optional<ImportedWorkspacePayload> ParseWorkspacePayloadV1(std::istream* stream) {
+        if (stream == nullptr) {
+            return std::nullopt;
+        }
+
+        ImportedWorkspacePayload payload;
+        bool inCpp = false;
+        bool inShader = false;
+        std::string line;
+        while (ReadTrimmedLine(stream, &line)) {
+            if (line.starts_with(kWorkspaceNamePrefixV1)) {
+                payload.workspaceName = line.substr(std::char_traits<char>::length(kWorkspaceNamePrefixV1));
+                continue;
+            }
+            if (line == "CPP_START") {
+                inCpp = true;
+                inShader = false;
+                continue;
+            }
+            if (line == "CPP_END") {
+                inCpp = false;
+                continue;
+            }
+            if (line == "SHADER_START") {
+                inShader = true;
+                inCpp = false;
+                continue;
+            }
+            if (line == "SHADER_END") {
+                inShader = false;
+                continue;
+            }
+
+            if (inCpp) {
+                if (payload.cppSource.size() + line.size() + 1 > kMaxImportedSourceBytes) {
+                    return std::nullopt;
+                }
+                payload.cppSource += line;
+                payload.cppSource.push_back('\n');
+            } else if (inShader) {
+                if (payload.shaderSource.size() + line.size() + 1 > kMaxImportedSourceBytes) {
+                    return std::nullopt;
+                }
+                payload.shaderSource += line;
+                payload.shaderSource.push_back('\n');
+            }
+        }
+
+        if (!payload.cppSource.empty() && payload.cppSource.back() == '\n') {
+            payload.cppSource.pop_back();
+        }
+        if (!payload.shaderSource.empty() && payload.shaderSource.back() == '\n') {
+            payload.shaderSource.pop_back();
+        }
+
+        if (payload.workspaceName.empty()) {
+            return std::nullopt;
+        }
+        return payload;
+    }
+
+    std::optional<ImportedWorkspacePayload> ParseWorkspacePayloadV2(std::istream* stream) {
+        if (stream == nullptr) {
+            return std::nullopt;
+        }
+
+        ImportedWorkspacePayload payload;
+        std::size_t cppSize = 0;
+        std::size_t shaderSize = 0;
+
+        std::string line;
+        if (!ReadTrimmedLine(stream, &line) || !line.starts_with(kWorkspaceNamePrefixV2)) {
+            return std::nullopt;
+        }
+        payload.workspaceName = line.substr(std::char_traits<char>::length(kWorkspaceNamePrefixV2));
+
+        if (!ReadTrimmedLine(stream, &line) || !ParseSizeField(line, kCppSizePrefix, &cppSize)) {
+            return std::nullopt;
+        }
+        if (!ReadTrimmedLine(stream, &line) || !ParseSizeField(line, kShaderSizePrefix, &shaderSize)) {
+            return std::nullopt;
+        }
+        if (cppSize > kMaxImportedSourceBytes || shaderSize > kMaxImportedSourceBytes) {
+            return std::nullopt;
+        }
+
+        if (!ReadTrimmedLine(stream, &line) || !line.empty()) {
+            return std::nullopt;
+        }
+
+        payload.cppSource.resize(cppSize);
+        if (cppSize > 0) {
+            stream->read(payload.cppSource.data(), static_cast<std::streamsize>(cppSize));
+            if (static_cast<std::size_t>(stream->gcount()) != cppSize) {
+                return std::nullopt;
+            }
+        }
+
+        payload.shaderSource.resize(shaderSize);
+        if (shaderSize > 0) {
+            stream->read(payload.shaderSource.data(), static_cast<std::streamsize>(shaderSize));
+            if (static_cast<std::size_t>(stream->gcount()) != shaderSize) {
+                return std::nullopt;
+            }
+        }
+
+        return payload;
+    }
 
     std::string DefaultSceneTemplate() {
         return R"(// Workspace C++ entry points:
@@ -445,4 +667,86 @@ bool WorkspaceManager::AppendLogFileLine(const std::string& logPath, const std::
     }
     out << line << '\n';
     return out.good();
+}
+
+bool WorkspaceManager::ExportWorkspace(const std::string& workspaceName, const std::string& targetPath) const {
+    auto descriptor = GetWorkspace(workspaceName);
+    if (!descriptor) {
+        return false;
+    }
+
+    auto cppSource = ReadFile(descriptor->cppPath);
+    auto shaderSource = ReadFile(descriptor->shaderPath);
+
+    if (!cppSource || !shaderSource) {
+        return false;
+    }
+
+    fs::path normalizedTargetPath = targetPath;
+    if (!normalizedTargetPath.has_extension()) {
+        normalizedTargetPath += kWorkspaceExportExtension;
+    }
+
+    std::ofstream file(normalizedTargetPath, std::ios::binary);
+    if (!file.is_open()) {
+        return false;
+    }
+
+    file << kWorkspaceExportMagicV2 << '\n';
+    file << kWorkspaceNamePrefixV2 << workspaceName << '\n';
+    file << kCppSizePrefix << cppSource->size() << '\n';
+    file << kShaderSizePrefix << shaderSource->size() << '\n';
+    file << '\n';
+    file.write(cppSource->data(), static_cast<std::streamsize>(cppSource->size()));
+    file.write(shaderSource->data(), static_cast<std::streamsize>(shaderSource->size()));
+
+    return file.good();
+}
+
+std::optional<std::string> WorkspaceManager::ImportWorkspace(const std::string& sourcePath) const {
+    std::ifstream file(sourcePath, std::ios::binary);
+    if (!file.is_open()) {
+        return std::nullopt;
+    }
+
+    std::string line;
+    if (!ReadTrimmedLine(&file, &line)) {
+        return std::nullopt;
+    }
+
+    std::optional<ImportedWorkspacePayload> payload;
+    if (line == kWorkspaceExportMagicV2) {
+        payload = ParseWorkspacePayloadV2(&file);
+    } else if (line == kWorkspaceExportMagicV1) {
+        payload = ParseWorkspacePayloadV1(&file);
+    } else {
+        return std::nullopt;
+    }
+    if (!payload.has_value()) {
+        return std::nullopt;
+    }
+
+    const std::string fallbackName = fs::path(sourcePath).stem().string();
+    const std::string requestedName = payload->workspaceName.empty() ? fallbackName : payload->workspaceName;
+    std::string importBaseName = SanitizeWorkspaceName(requestedName);
+    if (importBaseName.empty()) {
+        importBaseName = kImportedWorkspaceFallbackName;
+    }
+
+    const std::string uniqueWorkspaceName = BuildUniqueWorkspaceName(directory_, importBaseName);
+    if (uniqueWorkspaceName.empty()) {
+        return std::nullopt;
+    }
+
+    auto descriptor = CreateWorkspace(uniqueWorkspaceName);
+    if (!descriptor) {
+        return std::nullopt;
+    }
+
+    if (!SaveFile(descriptor->cppPath, payload->cppSource) ||
+        !SaveFile(descriptor->shaderPath, payload->shaderSource)) {
+        return std::nullopt;
+    }
+
+    return descriptor->name;
 }

@@ -48,6 +48,9 @@ public:
     bool IsPathInsideWorkspace(const std::filesystem::path& filepath) const;
     const std::string& Directory() const { return directory_; }
 
+    bool ExportWorkspace(const std::string& workspaceName, const std::string& targetPath) const;
+    std::optional<std::string> ImportWorkspace(const std::string& sourcePath) const;
+
 private:
     std::optional<WorkspaceDescriptor> BuildDescriptor(const std::string& workspaceName) const;
     bool EnsureWorkspaceScaffold(const WorkspaceDescriptor& descriptor) const;

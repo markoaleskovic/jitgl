@@ -57,6 +57,8 @@ public:
     void SetDeleteWorkspaceCallback(std::function<void(const std::string&)> cb);
     void SetWorkspaceSwitchedCallback(std::function<void(const std::string&)> cb);
     void SetWorkspaceLineAppendedCallback(std::function<void(const std::string&, const std::string&, bool)> cb);
+    void SetExportWorkspaceCallback(std::function<bool(const std::string&)> cb);
+    void SetImportWorkspaceCallback(std::function<bool(const std::string&)> cb);
     void SetWorkspaces(const std::vector<std::string>& workspaceNames, const std::string& activeWorkspace);
     void SetActiveWorkspace(const std::string& workspaceName);
     void SetWorkspaceOutputHistory(const std::string& workspaceName,
@@ -101,6 +103,8 @@ private:
     std::function<void(const std::string&)> onDeleteWorkspace_;
     std::function<void(const std::string&)> onWorkspaceSwitched_;
     std::function<void(const std::string&, const std::string&, bool)> onWorkspaceLineAppended_;
+    std::function<bool(const std::string&)> onExportWorkspace_;
+    std::function<bool(const std::string&)> onImportWorkspace_;
 
     std::string activeDocumentPath_;
     // Used once to force-select a tab after workspace/document changes.
@@ -189,7 +193,7 @@ private:
     UiTheme currentTheme_ = UiTheme::Dark;
     bool themeApplyPending_ = false;
     bool rendererFullscreen_ = false;
-    bool focusEditorRequested_ = false;
+    int focusEditorRequestFramesRemaining_ = 0;
 
     std::string welcomeMarkdown_;
     std::string guideMarkdown_;
