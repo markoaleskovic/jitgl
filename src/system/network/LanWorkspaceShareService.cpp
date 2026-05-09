@@ -487,19 +487,17 @@ namespace {
         (void)SetSocketOption(sock, SOL_SOCKET, SO_REUSEPORT, enable);
 #endif
 
-        auto bindOnPort = [&](uint16_t port) {
-            sockaddr_in bindAddress{};
-            bindAddress.sin_family = AF_INET;
-            bindAddress.sin_port = htons(port);
-            bindAddress.sin_addr.s_addr = INADDR_ANY;
-            return bind(sock,
-                        reinterpret_cast<sockaddr*>(&bindAddress),
-                        static_cast<SocketLen>(sizeof(bindAddress))) == 0;
-        };
-
-        if (!bindOnPort(kPreferredTransferPort) && !bindOnPort(0)) {
+        sockaddr_in bindAddress{};
+        bindAddress.sin_family = AF_INET;
+        bindAddress.sin_port = htons(kPreferredTransferPort);
+        bindAddress.sin_addr.s_addr = INADDR_ANY;
+        if (bind(sock,
+                 reinterpret_cast<sockaddr*>(&bindAddress),
+                 static_cast<SocketLen>(sizeof(bindAddress))) != 0) {
             CloseNativeSocket(sock);
-            result.error = "Failed to bind TCP transfer socket.";
+            result.error = "Failed to bind TCP transfer socket on port " +
+                           std::to_string(kPreferredTransferPort) +
+                           " (port may already be in use).";
             return result;
         }
 
@@ -923,7 +921,7 @@ std::optional<std::string> LanWorkspaceShareService::FetchWorkspacePackage(const
         diagnostics_.outgoingFetchAttempts += 1;
         diagnostics_.nowSeconds = NowSeconds();
     }
-    if (offer.offerId.empty() || offer.senderIpAddress.empty() || offer.transferPort == 0) {
+    if (offer.offerId.empty() || offer.transferPort == 0) {
         std::scoped_lock lock(stateMutex_);
         diagnostics_.outgoingFetchFailures += 1;
         diagnostics_.lastError = "Fetch failed: invalid offer metadata.";
@@ -931,107 +929,132 @@ std::optional<std::string> LanWorkspaceShareService::FetchWorkspacePackage(const
         return std::nullopt;
     }
 
-    const NativeSocket nativeSock = socket(AF_INET, SOCK_STREAM, 0);
-    if (nativeSock == kInvalidSocket) {
-        std::scoped_lock lock(stateMutex_);
-        diagnostics_.outgoingFetchFailures += 1;
-        diagnostics_.lastError = "Fetch failed: unable to create TCP socket.";
-        diagnostics_.nowSeconds = NowSeconds();
-        return std::nullopt;
-    }
-    SocketHandle sock = ToSocketHandle(nativeSock);
-    ConfigureSocketTimeouts(sock, 4000);
+    struct Endpoint {
+        std::string ipAddress;
+        uint16_t transferPort = 0;
+    };
 
-    sockaddr_in serverAddress{};
-    serverAddress.sin_family = AF_INET;
-    serverAddress.sin_port = htons(offer.transferPort);
-    if (inet_pton(AF_INET, offer.senderIpAddress.c_str(), &serverAddress.sin_addr) != 1) {
-        CloseSocketHandle(&sock);
-        std::scoped_lock lock(stateMutex_);
-        diagnostics_.outgoingFetchFailures += 1;
-        diagnostics_.lastError = "Fetch failed: sender IP address is invalid.";
-        diagnostics_.nowSeconds = NowSeconds();
-        return std::nullopt;
-    }
+    std::vector<Endpoint> candidates;
+    candidates.push_back(Endpoint{ offer.senderIpAddress, offer.transferPort });
 
-    if (connect(ToNativeSocket(sock),
-                reinterpret_cast<sockaddr*>(&serverAddress),
-                static_cast<SocketLen>(sizeof(serverAddress))) != 0) {
-        CloseSocketHandle(&sock);
-        std::scoped_lock lock(stateMutex_);
-        diagnostics_.outgoingFetchFailures += 1;
-        diagnostics_.lastError = "Fetch failed: TCP connect to sender failed.";
-        diagnostics_.nowSeconds = NowSeconds();
-        return std::nullopt;
-    }
-
-    const std::string request = std::string(kProtocolPrefix) + "|GET|" + offer.offerId + "\n";
-    if (!SendAll(ToNativeSocket(sock), request.data(), request.size())) {
-        CloseSocketHandle(&sock);
-        std::scoped_lock lock(stateMutex_);
-        diagnostics_.outgoingFetchFailures += 1;
-        diagnostics_.lastError = "Fetch failed: request send failed.";
-        diagnostics_.nowSeconds = NowSeconds();
-        return std::nullopt;
-    }
-
-    std::string responseLine;
-    if (!RecvLine(ToNativeSocket(sock), &responseLine, kMaxControlLineBytes)) {
-        CloseSocketHandle(&sock);
-        std::scoped_lock lock(stateMutex_);
-        diagnostics_.outgoingFetchFailures += 1;
-        diagnostics_.lastError = "Fetch failed: no response from sender.";
-        diagnostics_.nowSeconds = NowSeconds();
-        return std::nullopt;
-    }
-
-    const std::vector<std::string> response = SplitPipeDelimited(responseLine);
-    if (response.size() < 2 || response[0] != kProtocolPrefix || response[1] != "OK") {
-        CloseSocketHandle(&sock);
-        std::scoped_lock lock(stateMutex_);
-        diagnostics_.outgoingFetchFailures += 1;
-        diagnostics_.lastError = "Fetch failed: sender returned error response.";
-        diagnostics_.nowSeconds = NowSeconds();
-        return std::nullopt;
-    }
-    if (response.size() != 3) {
-        CloseSocketHandle(&sock);
-        std::scoped_lock lock(stateMutex_);
-        diagnostics_.outgoingFetchFailures += 1;
-        diagnostics_.lastError = "Fetch failed: malformed sender response.";
-        diagnostics_.nowSeconds = NowSeconds();
-        return std::nullopt;
-    }
-
-    std::size_t payloadSize = 0;
-    if (!ParseSize(response[2], &payloadSize) || payloadSize == 0 || payloadSize > kMaxPackageBytes) {
-        CloseSocketHandle(&sock);
-        std::scoped_lock lock(stateMutex_);
-        diagnostics_.outgoingFetchFailures += 1;
-        diagnostics_.lastError = "Fetch failed: payload size is invalid.";
-        diagnostics_.nowSeconds = NowSeconds();
-        return std::nullopt;
-    }
-
-    std::string payload;
-    payload.resize(payloadSize);
-    if (!RecvAll(ToNativeSocket(sock), payload.data(), payloadSize)) {
-        CloseSocketHandle(&sock);
-        std::scoped_lock lock(stateMutex_);
-        diagnostics_.outgoingFetchFailures += 1;
-        diagnostics_.lastError = "Fetch failed: payload receive interrupted.";
-        diagnostics_.nowSeconds = NowSeconds();
-        return std::nullopt;
-    }
-
-    CloseSocketHandle(&sock);
     {
         std::scoped_lock lock(stateMutex_);
-        diagnostics_.outgoingFetchSuccesses += 1;
-        diagnostics_.lastError.clear();
+        if (!offer.senderId.empty()) {
+            if (auto peerIt = peersById_.find(offer.senderId); peerIt != peersById_.end()) {
+                const uint16_t peerPort = (peerIt->second.transferPort != 0) ? peerIt->second.transferPort : offer.transferPort;
+                candidates.push_back(Endpoint{ peerIt->second.ipAddress, peerPort });
+            }
+        }
+    }
+
+    std::vector<Endpoint> endpoints;
+    endpoints.reserve(candidates.size());
+    std::unordered_set<std::string> seenEndpoints;
+    for (const auto& candidate : candidates) {
+        if (candidate.ipAddress.empty() || candidate.transferPort == 0) {
+            continue;
+        }
+        const std::string endpointKey = candidate.ipAddress + ":" + std::to_string(candidate.transferPort);
+        if (seenEndpoints.insert(endpointKey).second) {
+            endpoints.push_back(candidate);
+        }
+    }
+
+    if (endpoints.empty()) {
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.outgoingFetchFailures += 1;
+        diagnostics_.lastError = "Fetch failed: no valid sender endpoints available.";
+        diagnostics_.nowSeconds = NowSeconds();
+        return std::nullopt;
+    }
+
+    std::string lastFailureReason = "Fetch failed: no response from any sender endpoint.";
+    for (const auto& endpoint : endpoints) {
+        const std::string endpointLabel = endpoint.ipAddress + ":" + std::to_string(endpoint.transferPort);
+
+        const NativeSocket nativeSock = socket(AF_INET, SOCK_STREAM, 0);
+        if (nativeSock == kInvalidSocket) {
+            lastFailureReason = "Fetch failed: unable to create TCP socket.";
+            continue;
+        }
+        SocketHandle sock = ToSocketHandle(nativeSock);
+        ConfigureSocketTimeouts(sock, 4000);
+
+        sockaddr_in serverAddress{};
+        serverAddress.sin_family = AF_INET;
+        serverAddress.sin_port = htons(endpoint.transferPort);
+        if (inet_pton(AF_INET, endpoint.ipAddress.c_str(), &serverAddress.sin_addr) != 1) {
+            CloseSocketHandle(&sock);
+            lastFailureReason = "Fetch failed: sender endpoint IP is invalid (" + endpointLabel + ").";
+            continue;
+        }
+
+        if (connect(ToNativeSocket(sock),
+                    reinterpret_cast<sockaddr*>(&serverAddress),
+                    static_cast<SocketLen>(sizeof(serverAddress))) != 0) {
+            CloseSocketHandle(&sock);
+            lastFailureReason = "Fetch failed: TCP connect to sender failed (" + endpointLabel + ").";
+            continue;
+        }
+
+        const std::string request = std::string(kProtocolPrefix) + "|GET|" + offer.offerId + "\n";
+        if (!SendAll(ToNativeSocket(sock), request.data(), request.size())) {
+            CloseSocketHandle(&sock);
+            lastFailureReason = "Fetch failed: request send failed (" + endpointLabel + ").";
+            continue;
+        }
+
+        std::string responseLine;
+        if (!RecvLine(ToNativeSocket(sock), &responseLine, kMaxControlLineBytes)) {
+            CloseSocketHandle(&sock);
+            lastFailureReason = "Fetch failed: no response from sender (" + endpointLabel + ").";
+            continue;
+        }
+
+        const std::vector<std::string> response = SplitPipeDelimited(responseLine);
+        if (response.size() < 2 || response[0] != kProtocolPrefix || response[1] != "OK") {
+            CloseSocketHandle(&sock);
+            lastFailureReason = "Fetch failed: sender returned error response (" + endpointLabel + ").";
+            continue;
+        }
+        if (response.size() != 3) {
+            CloseSocketHandle(&sock);
+            lastFailureReason = "Fetch failed: malformed sender response (" + endpointLabel + ").";
+            continue;
+        }
+
+        std::size_t payloadSize = 0;
+        if (!ParseSize(response[2], &payloadSize) || payloadSize == 0 || payloadSize > kMaxPackageBytes) {
+            CloseSocketHandle(&sock);
+            lastFailureReason = "Fetch failed: payload size is invalid (" + endpointLabel + ").";
+            continue;
+        }
+
+        std::string payload;
+        payload.resize(payloadSize);
+        if (!RecvAll(ToNativeSocket(sock), payload.data(), payloadSize)) {
+            CloseSocketHandle(&sock);
+            lastFailureReason = "Fetch failed: payload receive interrupted (" + endpointLabel + ").";
+            continue;
+        }
+
+        CloseSocketHandle(&sock);
+        {
+            std::scoped_lock lock(stateMutex_);
+            diagnostics_.outgoingFetchSuccesses += 1;
+            diagnostics_.lastError.clear();
+            diagnostics_.nowSeconds = NowSeconds();
+        }
+        return payload;
+    }
+
+    {
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.outgoingFetchFailures += 1;
+        diagnostics_.lastError = std::move(lastFailureReason);
         diagnostics_.nowSeconds = NowSeconds();
     }
-    return payload;
+    return std::nullopt;
 }
 
 void LanWorkspaceShareService::NetworkLoop() {

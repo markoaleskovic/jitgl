@@ -571,6 +571,10 @@ void EditorUI::SetWorkspaceShareDecisionCallback(std::function<void(const std::s
     onWorkspaceShareDecision_ = std::move(cb);
 }
 
+void EditorUI::SetRequestFirewallAccessCallback(std::function<void()> cb) {
+    onRequestFirewallAccess_ = std::move(cb);
+}
+
 void EditorUI::SetNetworkPeers(std::vector<NetworkPeer> peers) {
     networkPeers_ = std::move(peers);
 
@@ -1517,6 +1521,31 @@ void EditorUI::DrawNetworkDiagnosticsWindow() {
         ImGui::TextUnformatted("Last Error: -");
     } else {
         ImGui::TextWrapped("Last Error: %s", networkDiagnostics_.lastError.c_str());
+    }
+
+    ImGui::Separator();
+    if (ImGui::Button("Allow LAN Ports Through Firewall...")) {
+        openFirewallAccessPopup_ = true;
+    }
+    if (openFirewallAccessPopup_) {
+        ImGui::OpenPopup("Allow LAN Firewall Access");
+        openFirewallAccessPopup_ = false;
+    }
+    if (ImGui::BeginPopupModal("Allow LAN Firewall Access", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextWrapped("Allow this app to automatically open LAN sharing ports (UDP 39541, TCP 39542) "
+                           "in your system firewall?");
+        ImGui::Separator();
+        if (ImGui::Button("Allow")) {
+            if (onRequestFirewallAccess_) {
+                onRequestFirewallAccess_();
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
     }
 
     if (ImGui::BeginTable("NetworkPeersDiagnosticsTable", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {

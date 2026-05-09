@@ -139,6 +139,7 @@ private:
     void UpdateLanShareUiState();
     void HandleShareWorkspaceRequest(const std::vector<std::string>& targetPeerIds, bool shareToAll);
     void HandleWorkspaceShareDecision(const std::string& offerId, bool accepted);
+    void HandleRequestFirewallAccess();
     bool ImportWorkspacePackage(const std::string& packageData, const std::string& sourceHint);
     std::string BuildCompileSourceForWorkspace(const std::string& workspaceName) const;
     void QueueCompileForWorkspace(const std::string& workspaceName, double nowSeconds, bool immediate);

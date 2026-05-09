@@ -121,6 +121,7 @@ public:
     void SetImportWorkspaceCallback(std::function<bool(const std::string&)> cb);
     void SetShareWorkspaceCallback(std::function<void(const std::vector<std::string>&, bool)> cb);
     void SetWorkspaceShareDecisionCallback(std::function<void(const std::string&, bool)> cb);
+    void SetRequestFirewallAccessCallback(std::function<void()> cb);
     void SetWorkspaces(const std::vector<std::string>& workspaceNames, const std::string& activeWorkspace);
     void SetActiveWorkspace(const std::string& workspaceName);
     void SetWorkspaceOutputHistory(const std::string& workspaceName,
@@ -172,6 +173,7 @@ private:
     std::function<bool(const std::string&)> onImportWorkspace_;
     std::function<void(const std::vector<std::string>&, bool)> onShareWorkspace_;
     std::function<void(const std::string&, bool)> onWorkspaceShareDecision_;
+    std::function<void()> onRequestFirewallAccess_;
 
     std::vector<NetworkPeer> networkPeers_;
     NetworkDiagnostics networkDiagnostics_;
@@ -180,6 +182,7 @@ private:
     bool openShareWorkspacePopup_ = false;
     bool workspaceSharePromptOpen_ = false;
     bool showNetworkDiagnostics_ = false;
+    bool openFirewallAccessPopup_ = false;
 
     std::string activeDocumentPath_;
     // Used once to force-select a tab after workspace/document changes.

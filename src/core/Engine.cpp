@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <iostream>
@@ -19,6 +20,17 @@
 #include <sstream>
 #include <utility>
 #include <vector>
+#if defined(_WIN32)
+#define NOMINMAX
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <limits.h>
+#include <unistd.h>
+#endif
+#if defined(__linux__) || defined(__APPLE__)
+#include <sys/wait.h>
+#endif
 
 namespace {
 #ifndef JIT_PROJECT_BINARY_DIR
@@ -99,6 +111,100 @@ namespace {
         }
 
         return !vertexShaderOut->empty() && !fragmentShaderOut->empty();
+    }
+
+    std::string QuoteForPosixShell(const std::string& value) {
+        std::string quoted = "'";
+        for (const char c : value) {
+            if (c == '\'') {
+                quoted += "'\"'\"'";
+            } else {
+                quoted.push_back(c);
+            }
+        }
+        quoted += "'";
+        return quoted;
+    }
+
+    std::string EscapeForAppleScriptDoubleQuoted(const std::string& value) {
+        std::string escaped;
+        escaped.reserve(value.size() * 2);
+        for (const char c : value) {
+            if (c == '\\' || c == '"') {
+                escaped.push_back('\\');
+            }
+            escaped.push_back(c);
+        }
+        return escaped;
+    }
+
+    std::string EscapeForPowerShellSingleQuoted(const std::string& value) {
+        std::string escaped;
+        escaped.reserve(value.size() * 2);
+        for (const char c : value) {
+            escaped.push_back(c);
+            if (c == '\'') {
+                escaped.push_back('\'');
+            }
+        }
+        return escaped;
+    }
+
+    std::string CurrentExecutablePath() {
+#if defined(_WIN32)
+        std::array<char, MAX_PATH> buffer{};
+        const DWORD length = GetModuleFileNameA(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+        if (length == 0 || length >= buffer.size()) {
+            return {};
+        }
+        return std::string(buffer.data(), length);
+#elif defined(__APPLE__)
+        uint32_t size = 0;
+        (void)_NSGetExecutablePath(nullptr, &size);
+        if (size == 0) {
+            return {};
+        }
+        std::vector<char> raw(size + 1, '\0');
+        if (_NSGetExecutablePath(raw.data(), &size) != 0) {
+            return {};
+        }
+        std::array<char, PATH_MAX> resolved{};
+        if (realpath(raw.data(), resolved.data()) != nullptr) {
+            return std::string(resolved.data());
+        }
+        return std::string(raw.data());
+#else
+        std::error_code ec;
+        const auto exePath = std::filesystem::read_symlink("/proc/self/exe", ec);
+        if (ec) {
+            return {};
+        }
+        return exePath.string();
+#endif
+    }
+
+#if defined(__linux__) || defined(__APPLE__)
+    int NormalizeSystemExitCode(int status) {
+        if (status == -1) {
+            return -1;
+        }
+        if (WIFEXITED(status)) {
+            return WEXITSTATUS(status);
+        }
+        if (WIFSIGNALED(status)) {
+            return 128 + WTERMSIG(status);
+        }
+        return status;
+    }
+#endif
+
+    int RunShellCommand(const std::string& command) {
+        const int status = std::system(command.c_str());
+#if defined(__linux__) || defined(__APPLE__)
+        return NormalizeSystemExitCode(status);
+#else
+        return status;
+#endif
     }
 
     std::string escapeForCStringLiteral(const std::string& text) {
@@ -344,6 +450,9 @@ bool Engine::InitUI() {
     });
     ui_->SetWorkspaceShareDecisionCallback([this](const std::string& offerId, bool accepted) {
         HandleWorkspaceShareDecision(offerId, accepted);
+    });
+    ui_->SetRequestFirewallAccessCallback([this]() {
+        HandleRequestFirewallAccess();
     });
 
     return true;
@@ -1336,8 +1445,13 @@ void Engine::HandleWorkspaceShareDecision(const std::string& offerId, bool accep
 
     auto packageData = lanShare_->FetchWorkspacePackage(offer);
     if (!packageData.has_value()) {
+        const auto diagnostics = lanShare_->SnapshotDiagnostics();
+        std::string errorSuffix;
+        if (!diagnostics.lastError.empty()) {
+            errorSuffix = " Reason: " + diagnostics.lastError;
+        }
         ui_->AddLogOutput("[Network Error] Failed to receive workspace '" + offer.workspaceName +
-                          "' from '" + offer.senderName + "'.");
+                          "' from '" + offer.senderName + "'." + errorSuffix);
         return;
     }
 
@@ -1347,6 +1461,118 @@ void Engine::HandleWorkspaceShareDecision(const std::string& offerId, bool accep
     }
 
     ui_->AddLogOutput("[Network] Loaded workspace '" + offer.workspaceName + "' from '" + offer.senderName + "'.");
+}
+
+void Engine::HandleRequestFirewallAccess() {
+    if (!ui_) {
+        return;
+    }
+
+#if defined(__linux__)
+    ui_->AddLogOutput("[Network] Requesting administrator permission to open UDP 39541 and TCP 39542...");
+
+    if (RunShellCommand("command -v pkexec >/dev/null 2>&1") != 0) {
+        ui_->AddLogOutput("[Network Error] 'pkexec' is not available. Install polkit to enable automatic firewall setup.");
+        return;
+    }
+
+    const std::string command =
+        "pkexec sh -lc '"
+        "if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then "
+        "firewall-cmd --add-port=39541/udp >/dev/null && "
+        "firewall-cmd --add-port=39542/tcp >/dev/null && "
+        "firewall-cmd --permanent --add-port=39541/udp >/dev/null && "
+        "firewall-cmd --permanent --add-port=39542/tcp >/dev/null && "
+        "firewall-cmd --reload >/dev/null; "
+        "exit $?; "
+        "fi; "
+        "if command -v ufw >/dev/null 2>&1; then "
+        "ufw allow 39541/udp >/dev/null && "
+        "ufw allow 39542/tcp >/dev/null; "
+        "exit $?; "
+        "fi; "
+        "if command -v nft >/dev/null 2>&1 && nft list table inet filter >/dev/null 2>&1; then "
+        "nft add rule inet filter input udp dport 39541 accept >/dev/null 2>&1 || true; "
+        "nft add rule inet filter input tcp dport 39542 accept >/dev/null 2>&1 || true; "
+        "exit 0; "
+        "fi; "
+        "exit 125'";
+
+    const int exitCode = RunShellCommand(command);
+    if (exitCode == 0) {
+        ui_->AddLogOutput("[Network] Firewall ports opened: UDP 39541, TCP 39542.");
+        return;
+    }
+    if (exitCode == 125) {
+        ui_->AddLogOutput("[Network Error] No supported firewall manager detected (firewalld/ufw/nftables).");
+        return;
+    }
+    if (exitCode == 126 || exitCode == 127) {
+        ui_->AddLogOutput("[Network Error] Firewall setup was cancelled or blocked by policy.");
+        return;
+    }
+    ui_->AddLogOutput("[Network Error] Automatic firewall setup failed (exit code " + std::to_string(exitCode) + ").");
+#elif defined(_WIN32)
+    ui_->AddLogOutput("[Network] Requesting administrator permission to open UDP 39541 and TCP 39542...");
+
+    const std::string elevatedScript =
+        "netsh advfirewall firewall add rule name='JITGL LAN UDP 39541' dir=in action=allow protocol=UDP localport=39541 profile=private | Out-Null; "
+        "netsh advfirewall firewall add rule name='JITGL LAN TCP 39542' dir=in action=allow protocol=TCP localport=39542 profile=private | Out-Null; "
+        "exit $LASTEXITCODE";
+    const std::string escapedElevatedScript = EscapeForPowerShellSingleQuoted(elevatedScript);
+    const std::string command =
+        "powershell -NoProfile -ExecutionPolicy Bypass -Command \""
+        "try { "
+        "$p = Start-Process -FilePath 'powershell' -Verb RunAs -Wait -PassThru "
+        "-ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-Command','" + escapedElevatedScript + "'); "
+        "if ($null -eq $p) { exit 1 } else { exit $p.ExitCode } "
+        "} catch { exit 126 }\"";
+
+    const int exitCode = RunShellCommand(command);
+    if (exitCode == 0) {
+        ui_->AddLogOutput("[Network] Windows Firewall rules added for UDP 39541 and TCP 39542.");
+        return;
+    }
+    if (exitCode == 126) {
+        ui_->AddLogOutput("[Network Error] Firewall setup was cancelled or blocked by policy.");
+        return;
+    }
+    ui_->AddLogOutput("[Network Error] Automatic firewall setup failed (exit code " + std::to_string(exitCode) + ").");
+#elif defined(__APPLE__)
+    ui_->AddLogOutput("[Network] Requesting administrator permission to allow this app through macOS firewall...");
+
+    if (RunShellCommand("test -x /usr/libexec/ApplicationFirewall/socketfilterfw") != 0) {
+        ui_->AddLogOutput("[Network Error] macOS firewall helper not found: /usr/libexec/ApplicationFirewall/socketfilterfw");
+        return;
+    }
+
+    const std::string executablePath = CurrentExecutablePath();
+    if (executablePath.empty()) {
+        ui_->AddLogOutput("[Network Error] Failed to resolve application executable path.");
+        return;
+    }
+
+    const std::string quotedExecutable = QuoteForPosixShell(executablePath);
+    const std::string shellScript =
+        "/usr/libexec/ApplicationFirewall/socketfilterfw --add " + quotedExecutable + " >/dev/null 2>&1; "
+        "/usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp " + quotedExecutable + " >/dev/null 2>&1";
+    const std::string appleScriptCommand =
+        "osascript -e \"do shell script \\\"" + EscapeForAppleScriptDoubleQuoted(shellScript) +
+        "\\\" with administrator privileges\"";
+
+    const int exitCode = RunShellCommand(appleScriptCommand);
+    if (exitCode == 0) {
+        ui_->AddLogOutput("[Network] macOS firewall updated to allow this app (UDP/TCP LAN sharing).");
+        return;
+    }
+    if (exitCode == 1 || exitCode == 126 || exitCode == 127) {
+        ui_->AddLogOutput("[Network Error] Firewall setup was cancelled or blocked by policy.");
+        return;
+    }
+    ui_->AddLogOutput("[Network Error] Automatic firewall setup failed (exit code " + std::to_string(exitCode) + ").");
+#else
+    ui_->AddLogOutput("[Network] Automatic firewall configuration is not implemented for this operating system.");
+#endif
 }
 
 void Engine::HandleCompileFailure(const CompileResult& result) {
