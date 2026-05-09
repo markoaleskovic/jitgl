@@ -41,6 +41,7 @@ namespace {
 
     constexpr uint16_t kDiscoveryPort = 39541;
     constexpr uint16_t kPreferredTransferPort = 39542;
+    constexpr std::string_view kDiscoveryMulticastAddress = "239.255.43.21";
     constexpr std::string_view kProtocolPrefix = "JITGL_LAN_V1";
     constexpr double kHelloIntervalSeconds = 1.5;
     constexpr double kPeerTimeoutSeconds = 6.0;
@@ -243,6 +244,18 @@ namespace {
         if (bind(sock, reinterpret_cast<sockaddr*>(&bindAddress), static_cast<SocketLen>(sizeof(bindAddress))) != 0) {
             CloseNativeSocket(sock);
             return kInvalidSocketHandle;
+        }
+
+        ip_mreq multicastRequest{};
+        if (inet_pton(AF_INET, kDiscoveryMulticastAddress.data(), &multicastRequest.imr_multiaddr) == 1) {
+            multicastRequest.imr_interface.s_addr = htonl(INADDR_ANY);
+            (void)SetSocketOption(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, multicastRequest);
+
+            unsigned char multicastLoopback = 1;
+            (void)SetSocketOption(sock, IPPROTO_IP, IP_MULTICAST_LOOP, multicastLoopback);
+
+            unsigned char multicastTtl = 1;
+            (void)SetSocketOption(sock, IPPROTO_IP, IP_MULTICAST_TTL, multicastTtl);
         }
 
         return ToSocketHandle(sock);
@@ -514,6 +527,11 @@ bool LanWorkspaceShareService::ShareWorkspacePackage(const std::string& workspac
         if (shareToAll) {
             broadcastPacket = OutboundUdpPacket{ message, "", true };
             pendingUdpPackets_.push_back(std::move(broadcastPacket));
+            pendingUdpPackets_.push_back(OutboundUdpPacket{
+                message,
+                std::string(kDiscoveryMulticastAddress),
+                false
+            });
             return true;
         }
 
@@ -805,6 +823,7 @@ void LanWorkspaceShareService::SendHelloBroadcast() {
     const std::string message = std::string(kProtocolPrefix) + "|HELLO|" + localPeerId_ + "|" +
                                 SanitizeField(localDisplayName_) + "|" + std::to_string(transferPort);
     (void)SendUdpPacket(udpSocket_, message, "", true);
+    (void)SendUdpPacket(udpSocket_, message, std::string(kDiscoveryMulticastAddress), false);
 }
 
 void LanWorkspaceShareService::PruneExpiredState(double nowSeconds) {
