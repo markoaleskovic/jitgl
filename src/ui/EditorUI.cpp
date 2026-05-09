@@ -1451,6 +1451,7 @@ void EditorUI::DrawNetworkDiagnosticsWindow() {
             ImGui::Text("Directed Broadcast Target: %s", directedBroadcast.c_str());
         }
     }
+    ImGui::Text("Unicast Probe Targets: %zu", networkDiagnostics_.unicastProbeTargetCount);
 
     const double nowSeconds = networkDiagnostics_.nowSeconds;
     const double helloSentAge = AgeSeconds(nowSeconds, networkDiagnostics_.lastHelloSentSeconds);

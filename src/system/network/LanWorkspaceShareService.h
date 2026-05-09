@@ -46,6 +46,7 @@ struct LanNetworkDiagnostics {
     std::string lastUdpSenderIp;
     std::vector<std::string> localIpv4Addresses;
     std::vector<std::string> directedBroadcastAddresses;
+    std::size_t unicastProbeTargetCount = 0;
 
     double nowSeconds = 0.0;
     double lastUdpSentSeconds = 0.0;
@@ -125,6 +126,8 @@ private:
     std::unordered_map<std::string, SharedOfferPayload> sharedPayloadsByOfferId_;
     std::vector<std::string> localIpv4Addresses_;
     std::vector<std::string> directedBroadcastTargets_;
+    std::vector<std::string> unicastProbeTargets_;
+    std::size_t unicastProbeCursor_ = 0;
     LanNetworkDiagnostics diagnostics_;
     std::atomic<std::uint64_t> offerCounter_{ 1 };
     std::atomic<std::uint32_t> activeClientHandlers_{ 0 };

@@ -54,6 +54,8 @@ namespace {
     constexpr std::size_t kMaxUdpPacketBytes = 1400;
     constexpr std::size_t kMaxControlLineBytes = 512;
     constexpr std::size_t kMaxPackageBytes = 20u * 1024u * 1024u;
+    constexpr std::size_t kMaxUnicastProbeTargets = 512;
+    constexpr std::size_t kUnicastProbeBatchSize = 8;
 
     struct UdpDiscoverySocketResult {
         SocketHandle socket = kInvalidSocketHandle;
@@ -71,6 +73,7 @@ namespace {
     struct InterfaceDiscoveryResult {
         std::vector<std::string> localIpv4Addresses;
         std::vector<std::string> directedBroadcastAddresses;
+        std::vector<std::string> unicastProbeTargets;
     };
 
     NativeSocket ToNativeSocket(SocketHandle socketHandle) {
@@ -262,6 +265,7 @@ namespace {
         InterfaceDiscoveryResult result;
         std::unordered_set<std::string> seenLocal;
         std::unordered_set<std::string> seenBroadcast;
+        std::unordered_set<std::string> seenProbeTargets;
 
 #if defined(_WIN32)
         ULONG adapterBufferSize = 16u * 1024u;
@@ -297,6 +301,7 @@ namespace {
                     const ULONG prefixLength = std::min<ULONG>(unicast->OnLinkPrefixLength, 32u);
                     const std::uint32_t ipHost = ntohl(ipAddress.s_addr);
                     const std::uint32_t maskHost = (prefixLength == 0) ? 0u : (0xFFFFFFFFu << (32u - prefixLength));
+                    const std::uint32_t networkHost = ipHost & maskHost;
                     const std::uint32_t broadcastHost = (ipHost & maskHost) | (~maskHost);
                     in_addr broadcastAddress{};
                     broadcastAddress.s_addr = htonl(broadcastHost);
@@ -306,6 +311,33 @@ namespace {
                         seenBroadcast.insert(broadcastIp).second) {
                         result.directedBroadcastAddresses.push_back(broadcastIp);
                     }
+
+                    const std::uint64_t hostCount = static_cast<std::uint64_t>(broadcastHost - networkHost + 1u);
+                    if (hostCount > 2u && hostCount <= kMaxUnicastProbeTargets + 2u) {
+                        for (std::uint32_t host = networkHost + 1u; host < broadcastHost; ++host) {
+                            if (host == ipHost) {
+                                continue;
+                            }
+                            in_addr targetAddress{};
+                            targetAddress.s_addr = htonl(host);
+                            const std::string targetIp = IPv4ToString(targetAddress);
+                            if (targetIp.empty()) {
+                                continue;
+                            }
+                            if (seenProbeTargets.insert(targetIp).second) {
+                                result.unicastProbeTargets.push_back(targetIp);
+                                if (result.unicastProbeTargets.size() >= kMaxUnicastProbeTargets) {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if (result.unicastProbeTargets.size() >= kMaxUnicastProbeTargets) {
+                        break;
+                    }
+                }
+                if (result.unicastProbeTargets.size() >= kMaxUnicastProbeTargets) {
+                    break;
                 }
             }
         }
@@ -346,12 +378,45 @@ namespace {
                 }
 
                 if (hasBroadcast) {
+                    std::uint32_t networkHost = 0;
+                    std::uint32_t broadcastHost = 0;
+                    std::uint32_t ipHost = ntohl(ipAddress.s_addr);
                     const std::string broadcastIp = IPv4ToString(broadcastAddress);
                     if (!broadcastIp.empty() &&
                         broadcastIp != "255.255.255.255" &&
                         seenBroadcast.insert(broadcastIp).second) {
                         result.directedBroadcastAddresses.push_back(broadcastIp);
                     }
+
+                    if (entry->ifa_netmask != nullptr && entry->ifa_netmask->sa_family == AF_INET) {
+                        const auto* maskSockAddr = reinterpret_cast<const sockaddr_in*>(entry->ifa_netmask);
+                        const std::uint32_t maskHost = ntohl(maskSockAddr->sin_addr.s_addr);
+                        networkHost = ipHost & maskHost;
+                        broadcastHost = (ipHost & maskHost) | (~maskHost);
+                        const std::uint64_t hostCount = static_cast<std::uint64_t>(broadcastHost - networkHost + 1u);
+                        if (hostCount > 2u && hostCount <= kMaxUnicastProbeTargets + 2u) {
+                            for (std::uint32_t host = networkHost + 1u; host < broadcastHost; ++host) {
+                                if (host == ipHost) {
+                                    continue;
+                                }
+                                in_addr targetAddress{};
+                                targetAddress.s_addr = htonl(host);
+                                const std::string targetIp = IPv4ToString(targetAddress);
+                                if (targetIp.empty()) {
+                                    continue;
+                                }
+                                if (seenProbeTargets.insert(targetIp).second) {
+                                    result.unicastProbeTargets.push_back(targetIp);
+                                    if (result.unicastProbeTargets.size() >= kMaxUnicastProbeTargets) {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if (result.unicastProbeTargets.size() >= kMaxUnicastProbeTargets) {
+                    break;
                 }
             }
             freeifaddrs(interfaces);
@@ -360,6 +425,7 @@ namespace {
 
         std::ranges::sort(result.localIpv4Addresses);
         std::ranges::sort(result.directedBroadcastAddresses);
+        std::ranges::sort(result.unicastProbeTargets);
         return result;
     }
 
@@ -572,8 +638,11 @@ bool LanWorkspaceShareService::Start() {
         diagnostics_.discoveryMulticastAddress = std::string(kDiscoveryMulticastAddress);
         localIpv4Addresses_ = interfaces.localIpv4Addresses;
         directedBroadcastTargets_ = interfaces.directedBroadcastAddresses;
+        unicastProbeTargets_ = interfaces.unicastProbeTargets;
+        unicastProbeCursor_ = 0;
         diagnostics_.localIpv4Addresses = localIpv4Addresses_;
         diagnostics_.directedBroadcastAddresses = directedBroadcastTargets_;
+        diagnostics_.unicastProbeTargetCount = unicastProbeTargets_.size();
 #if defined(_WIN32)
         diagnostics_.winsockInitialized = winsockInitialized_;
 #endif
@@ -694,6 +763,10 @@ void LanWorkspaceShareService::Stop() {
     incomingOffers_.clear();
     pendingUdpPackets_.clear();
     sharedPayloadsByOfferId_.clear();
+    localIpv4Addresses_.clear();
+    directedBroadcastTargets_.clear();
+    unicastProbeTargets_.clear();
+    unicastProbeCursor_ = 0;
     diagnostics_.serviceRunning = false;
     diagnostics_.udpSocketBound = false;
     diagnostics_.tcpSocketBound = false;
@@ -702,6 +775,9 @@ void LanWorkspaceShareService::Stop() {
     diagnostics_.pendingIncomingOffers = 0;
     diagnostics_.pendingOutgoingPackets = 0;
     diagnostics_.cachedSharedPayloads = 0;
+    diagnostics_.localIpv4Addresses.clear();
+    diagnostics_.directedBroadcastAddresses.clear();
+    diagnostics_.unicastProbeTargetCount = 0;
     diagnostics_.nowSeconds = NowSeconds();
 
 #if defined(_WIN32)
@@ -758,6 +834,7 @@ LanNetworkDiagnostics LanWorkspaceShareService::SnapshotDiagnostics() const {
     snapshot.cachedSharedPayloads = sharedPayloadsByOfferId_.size();
     snapshot.localIpv4Addresses = localIpv4Addresses_;
     snapshot.directedBroadcastAddresses = directedBroadcastTargets_;
+    snapshot.unicastProbeTargetCount = unicastProbeTargets_.size();
     return snapshot;
 }
 
@@ -1239,6 +1316,7 @@ void LanWorkspaceShareService::SendHelloBroadcast() {
     } else {
         failedCount += 1;
     }
+
     for (const auto& directedBroadcastTarget : directedBroadcastTargets_) {
         if (directedBroadcastTarget.empty()) {
             continue;
@@ -1248,6 +1326,24 @@ void LanWorkspaceShareService::SendHelloBroadcast() {
         } else {
             failedCount += 1;
         }
+    }
+
+    const std::size_t probeCount = unicastProbeTargets_.size();
+    if (probeCount > 0) {
+        const std::size_t batchSize = std::min(kUnicastProbeBatchSize, probeCount);
+        for (std::size_t i = 0; i < batchSize; ++i) {
+            const std::size_t index = (unicastProbeCursor_ + i) % probeCount;
+            const std::string& targetIp = unicastProbeTargets_[index];
+            if (targetIp.empty()) {
+                continue;
+            }
+            if (SendUdpPacket(udpSocket_, message, targetIp, false)) {
+                sentCount += 1;
+            } else {
+                failedCount += 1;
+            }
+        }
+        unicastProbeCursor_ = (unicastProbeCursor_ + batchSize) % probeCount;
     }
 
     std::scoped_lock lock(stateMutex_);

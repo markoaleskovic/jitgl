@@ -1230,6 +1230,7 @@ void Engine::UpdateLanShareUiState() {
     diagnostics.lastUdpSenderIp = snapshot.lastUdpSenderIp;
     diagnostics.localIpv4Addresses = snapshot.localIpv4Addresses;
     diagnostics.directedBroadcastAddresses = snapshot.directedBroadcastAddresses;
+    diagnostics.unicastProbeTargetCount = snapshot.unicastProbeTargetCount;
     diagnostics.nowSeconds = snapshot.nowSeconds;
     diagnostics.lastUdpSentSeconds = snapshot.lastUdpSentSeconds;
     diagnostics.lastUdpReceivedSeconds = snapshot.lastUdpReceivedSeconds;

@@ -66,6 +66,7 @@ public:
         std::string lastUdpSenderIp;
         std::vector<std::string> localIpv4Addresses;
         std::vector<std::string> directedBroadcastAddresses;
+        std::size_t unicastProbeTargetCount = 0;
 
         double nowSeconds = 0.0;
         double lastUdpSentSeconds = 0.0;
