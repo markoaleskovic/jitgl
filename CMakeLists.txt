@@ -60,6 +60,13 @@ FetchContent_Declare(text_editor
 )
 FetchContent_MakeAvailable(text_editor)
 
+# ── imgui_markdown ──────────────────────────────────────────────────────────
+FetchContent_Declare(imgui_markdown
+    URL https://github.com/enkisoftware/imgui_markdown/archive/refs/heads/main.tar.gz
+    EXCLUDE_FROM_ALL
+)
+FetchContent_MakeAvailable(imgui_markdown)
+
 # ── LLVM + Clang ─────────────────────────────────────────────────────────────
 find_package(LLVM REQUIRED CONFIG)
 find_package(Clang REQUIRED CONFIG)
@@ -109,6 +116,7 @@ target_include_directories(jit_ide PRIVATE
         ${LLVM_INCLUDE_DIRS}
         ${CLANG_INCLUDE_DIRS}
         ${text_editor_SOURCE_DIR}
+        ${imgui_markdown_SOURCE_DIR}
         $<TARGET_PROPERTY:glad_gl_core_33,INTERFACE_INCLUDE_DIRECTORIES>
 )
 

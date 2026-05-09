@@ -10,6 +10,7 @@
 #include <cmath>
 #include <fstream>
 #include <ranges>
+#include <sstream>
 
 namespace {
     constexpr double AUTOSAVE_DEBOUNCE_SECONDS = 0.05;
@@ -212,7 +213,16 @@ void EditorUI::SetupLightTheme() const {
 
 // style end
 
-EditorUI::EditorUI() : window(nullptr), activeWorkspaceName_(FALLBACK_WORKSPACE_NAME) {}
+EditorUI::EditorUI() : window(nullptr), activeWorkspaceName_(FALLBACK_WORKSPACE_NAME) {
+    markdownConfig_.linkCallback = [](ImGui::MarkdownLinkCallbackData data) {
+        // No links for now, but required by API
+    };
+    markdownConfig_.tooltipCallback = nullptr;
+    markdownConfig_.imageCallback = nullptr;
+    markdownConfig_.userData = this;
+    markdownConfig_.formatFlags = ImGuiMarkdownFormatFlags_GithubStyle;
+    markdownConfig_.formatCallback = MarkdownFormatCallback;
+}
 
 EditorUI::~EditorUI() {
     Shutdown();
@@ -310,6 +320,10 @@ void EditorUI::ReloadFontAtlas(float dpiScale, bool recreateTexture) {
         font = io.Fonts->AddFontDefault();
     }
 
+    fontH1_ = io.Fonts->AddFontFromFileTTF(FONT_PATH, pixelSize * 1.5f, &fontConfig);
+    fontH2_ = io.Fonts->AddFontFromFileTTF(FONT_PATH, pixelSize * 1.3f, &fontConfig);
+    fontH3_ = io.Fonts->AddFontFromFileTTF(FONT_PATH, pixelSize * 1.1f, &fontConfig);
+
     io.FontDefault = font;
     io.FontGlobalScale = 1.0f;
     io.Fonts->Build();
@@ -321,6 +335,7 @@ void EditorUI::ReloadFontAtlas(float dpiScale, bool recreateTexture) {
 
 void EditorUI::Init(GLFWwindow *win) {
     window = win;
+    LoadMarkdownFiles();
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -646,78 +661,10 @@ void EditorUI::DrawWelcomePopup() {
         return;
     }
 
-    const bool lightTheme = IsLightTheme();
-    const ImVec4 titleColor = lightTheme ? ImVec4(0.10f, 0.39f, 0.78f, 1.0f)
-                                         : ImVec4(0.38f, 0.78f, 1.0f, 1.0f);
-    const ImVec4 sectionColor = lightTheme ? ImVec4(0.58f, 0.42f, 0.16f, 1.0f)
-                                           : ImVec4(0.94f, 0.75f, 0.37f, 1.0f);
-    const ImVec4 keyColor = lightTheme ? ImVec4(0.14f, 0.44f, 0.79f, 1.0f)
-                                       : ImVec4(0.62f, 0.89f, 1.0f, 1.0f);
-    const ImVec4 noteColor = lightTheme ? ImVec4(0.20f, 0.47f, 0.25f, 1.0f)
-                                        : ImVec4(0.73f, 0.86f, 0.73f, 1.0f);
-
     const float footerReserve = ImGui::GetFrameHeightWithSpacing() * 2.5f;
     if (ImGui::BeginChild("WelcomeScrollableContent", ImVec2(0.0f, -footerReserve), false,
                           ImGuiWindowFlags_AlwaysVerticalScrollbar)) {
-        auto bulletWrapped = [] (const char* text) {
-            ImGui::Bullet();
-            ImGui::SameLine();
-            ImGui::PushTextWrapPos(0.0f);
-            ImGui::TextUnformatted(text);
-            ImGui::PopTextWrapPos();
-        };
-
-        ImGui::TextColored(titleColor, "JITGL");
-        ImGui::TextWrapped("Live C++ + GLSL playground with per-workspace runtime state.");
-        ImGui::Separator();
-
-        ImGui::TextColored(sectionColor, "How It Works");
-        bulletWrapped("Each workspace has two files: scene.cpp and shader.glsl.");
-        bulletWrapped("scene.cpp is JIT-compiled C++ and drives frame updates/rendering.");
-        bulletWrapped("shader.glsl contains your GPU shaders and is hot-swapped with scene.cpp.");
-        bulletWrapped("Edits auto-save and hot-reload while preserving workspace-specific state arrays.");
-        ImGui::Separator();
-
-        ImGui::TextColored(sectionColor, "Shortcuts");
-        if (ImGui::BeginTable("WelcomeShortcuts", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp)) {
-            ImGui::TableSetupColumn("Shortcut", ImGuiTableColumnFlags_WidthFixed, 180.0f);
-            ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthStretch);
-
-            auto drawShortcutRow = [&](const char* combo, const char* action) {
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                ImGui::TextColored(keyColor, "%s", combo);
-                ImGui::TableSetColumnIndex(1);
-                ImGui::PushTextWrapPos(0.0f);
-                ImGui::TextUnformatted(action);
-                ImGui::PopTextWrapPos();
-            };
-
-            drawShortcutRow("Ctrl+Tab", "Switch active editor file (scene.cpp <-> shader.glsl)");
-            drawShortcutRow("Ctrl+`", "Cycle to next workspace");
-            drawShortcutRow("Ctrl+N", "Open Create Workspace dialog");
-            drawShortcutRow("Ctrl+T", "Toggle UI theme (dark/light)");
-            drawShortcutRow("Ctrl+1..9", "Jump directly to workspace 1..9");
-            drawShortcutRow("Ctrl+0", "Jump directly to workspace 10");
-            drawShortcutRow("Ctrl++ / Ctrl+-", "Increase / decrease UI DPI scale");
-            ImGui::EndTable();
-        }
-        ImGui::Separator();
-
-        ImGui::TextColored(sectionColor, "scene.cpp Compile Requirements");
-        bulletWrapped("Compiled as C++20 with engine/OpenGL helpers pre-injected.");
-        bulletWrapped("Define at least one entry point with extern \"C\": init, update, renderFrame, shutdown.");
-        bulletWrapped("Use EngineContext* ctx signature for those entry points.");
-        bulletWrapped("Shader access macros are injected: JIT_WORKSPACE_VERTEX_SHADER, JIT_WORKSPACE_FRAGMENT_SHADER, JIT_WORKSPACE_SHADER_HASH.");
-
-        ImGui::TextColored(sectionColor, "shader.glsl Compile Requirements");
-        bulletWrapped("Must include both sections: #type vertex and #type fragment.");
-        bulletWrapped("Each section must compile as GLSL (default templates use #version 330 core).");
-        bulletWrapped("Keep uniforms and usage aligned with scene.cpp logic.");
-
-        ImGui::Spacing();
-        ImGui::TextColored(noteColor, "Tip: workspace labels are indexed (1:, 2:, ...), matching Ctrl+number switching.");
-        ImGui::TextColored(noteColor, "Need deeper runtime details? Open Help -> Runtime State Guide.");
+        DrawMarkdown(welcomeMarkdown_, IsLightTheme());
     }
     ImGui::EndChild();
 
@@ -762,79 +709,10 @@ void EditorUI::DrawRuntimeGuidePopup() {
         return;
     }
 
-    const bool lightTheme = IsLightTheme();
-    const ImVec4 titleColor = lightTheme ? ImVec4(0.10f, 0.39f, 0.78f, 1.0f)
-                                         : ImVec4(0.54f, 0.86f, 1.0f, 1.0f);
-    const ImVec4 sectionColor = lightTheme ? ImVec4(0.58f, 0.42f, 0.16f, 1.0f)
-                                           : ImVec4(0.94f, 0.75f, 0.37f, 1.0f);
-    const ImVec4 noteColor = lightTheme ? ImVec4(0.20f, 0.47f, 0.25f, 1.0f)
-                                        : ImVec4(0.73f, 0.86f, 0.73f, 1.0f);
-    const ImVec4 codeBgColor = lightTheme ? ImVec4(0.88f, 0.89f, 0.91f, 1.0f)
-                                          : ImVec4(0.09f, 0.10f, 0.12f, 1.0f);
-
     const float footerReserve = ImGui::GetFrameHeightWithSpacing() * 2.1f;
     if (ImGui::BeginChild("RuntimeGuideScrollableContent", ImVec2(0.0f, -footerReserve), false,
                           ImGuiWindowFlags_AlwaysVerticalScrollbar)) {
-        auto bulletWrapped = [] (const char* text) {
-            ImGui::Bullet();
-            ImGui::SameLine();
-            ImGui::PushTextWrapPos(0.0f);
-            ImGui::TextUnformatted(text);
-            ImGui::PopTextWrapPos();
-        };
-
-        auto codeBlock = [codeBgColor] (const char* id, const char* code) {
-            ImGui::PushStyleColor(ImGuiCol_ChildBg, codeBgColor);
-            ImGui::BeginChild(id, ImVec2(0.0f, 78.0f), true, ImGuiWindowFlags_NoScrollbar);
-            ImGui::TextUnformatted(code);
-            ImGui::EndChild();
-            ImGui::PopStyleColor();
-        };
-
-        ImGui::TextColored(titleColor, "Runtime State Guide");
-        ImGui::TextWrapped("This explains why the default workspace code caches program handles, uniform locations, and shader hashes in STATE_I().");
-        ImGui::Separator();
-
-        ImGui::TextColored(sectionColor, "Why STATE_I Exists");
-        bulletWrapped("Your JIT code is recompiled/reloaded often, but EngineContext state arrays persist across reloads and workspace switches.");
-        bulletWrapped("STATE_I(index) and STATE_F(index) are stable per-workspace storage for values your code needs between frames.");
-        bulletWrapped("Without this storage, expensive setup work (shader compile/link, uniform lookups) would repeat unnecessarily.");
-        ImGui::Separator();
-
-        ImGui::TextColored(sectionColor, "What These Lines Do");
-        codeBlock("RuntimeGuideCodeStore",
-                  "STATE_I(0) = (uint32_t)program;\n"
-                  "STATE_I(1) = (uint32_t)glGetUniformLocation(program, \"uTime\");\n"
-                  "STATE_I(3) = JIT_WORKSPACE_SHADER_HASH;");
-        bulletWrapped("STATE_I(0): stores the linked OpenGL program handle for reuse.");
-        bulletWrapped("STATE_I(1): stores the uTime uniform location so you do not query it every frame.");
-        bulletWrapped("STATE_I(3): stores the shader hash that was used to build the cached program.");
-        ImGui::Separator();
-
-        ImGui::TextColored(sectionColor, "Why init() Reads These Values");
-        codeBlock("RuntimeGuideCodeLoad",
-                  "GLuint currentProgram = (GLuint)STATE_I(0);\n"
-                  "const uint32_t cachedShaderHash = STATE_I(3);");
-        bulletWrapped("currentProgram tells you whether a valid program already exists.");
-        bulletWrapped("cachedShaderHash tells you whether shader.glsl changed since the cached program was built.");
-        bulletWrapped("If hash changed (or no program exists), you rebuild once in init(); otherwise you reuse the existing program.");
-        ImGui::Separator();
-
-        ImGui::TextColored(sectionColor, "Why This Pattern Is Needed");
-        bulletWrapped("JIT compilation is frequent; GPU program creation is relatively expensive.");
-        bulletWrapped("Hash-based caching avoids unnecessary recompiles while still hot-reloading correctly when shader source changes.");
-        bulletWrapped("Persistent per-workspace state gives smooth iteration and keeps runtime behavior deterministic.");
-        ImGui::Separator();
-
-        ImGui::TextColored(sectionColor, "Other Useful Details");
-        bulletWrapped("Export entry points with extern \"C\" so symbol lookup can find init/update/renderFrame/shutdown.");
-        bulletWrapped("Use a documented index map in your scene.cpp comments to avoid collisions (e.g. 0=program, 1=uTime, 3=hash).");
-        bulletWrapped("Use STATE_F for persistent float values (timers, parameters, interpolation state).");
-        bulletWrapped("If glGetUniformLocation returns -1, the uniform may be optimized out or misnamed.");
-        bulletWrapped("Auto-injected shader macros are JIT_WORKSPACE_VERTEX_SHADER, JIT_WORKSPACE_FRAGMENT_SHADER, JIT_WORKSPACE_SHADER_HASH.");
-
-        ImGui::Spacing();
-        ImGui::TextColored(noteColor, "Open this anytime from Help -> Runtime State Guide.");
+        DrawMarkdown(guideMarkdown_, IsLightTheme());
     }
     ImGui::EndChild();
 
@@ -848,6 +726,115 @@ void EditorUI::DrawRuntimeGuidePopup() {
     }
 
     ImGui::EndPopup();
+}
+
+void EditorUI::DrawMarkdown(const std::string& markdown, bool lightTheme) {
+    SetMarkdownColorsForTheme(lightTheme);
+
+    const ImVec4 codeBg = lightTheme ? ImVec4(0.88f, 0.89f, 0.91f, 1.0f)
+                                     : ImVec4(0.09f, 0.10f, 0.12f, 1.0f);
+    const ImVec4 codeText = lightTheme ? ImVec4(0.13f, 0.43f, 0.13f, 1.0f)
+                                       : ImVec4(0.56f, 0.86f, 0.56f, 1.0f);
+
+    markdownConfig_.headingFormats[0] = { fontH1_, true };
+    markdownConfig_.headingFormats[1] = { fontH2_, true };
+    markdownConfig_.headingFormats[2] = { fontH3_, false };
+
+    auto sections = ParseMarkdownSections(markdown);
+
+    int codeChildId = 0;
+
+    for (const auto& sec : sections) {
+        if (!sec.isCode) {
+            ImGui::Markdown(sec.text.c_str(), sec.text.size(), markdownConfig_);
+        } else {
+            // Measure height: one line per \n
+            int lines = 1;
+            for (char c : sec.text) if (c == '\n') ++lines;
+            float h = ImGui::GetTextLineHeight() * lines
+                    + ImGui::GetStyle().WindowPadding.y * 2.0f;
+
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, codeBg);
+            ImGui::PushStyleColor(ImGuiCol_Text,    codeText);
+            std::string childId = "##code_" + std::to_string(codeChildId++);
+            if (ImGui::BeginChild(childId.c_str(), ImVec2(0.0f, h), true,
+                                  ImGuiWindowFlags_NoScrollbar)) {
+                ImGui::PushTextWrapPos(0.0f);
+                ImGui::TextUnformatted(sec.text.c_str());
+                ImGui::PopTextWrapPos();
+            }
+            ImGui::EndChild();
+            ImGui::PopStyleColor(2);
+            ImGui::Spacing();
+        }
+    }
+}
+
+std::vector<EditorUI::MdSection> EditorUI::ParseMarkdownSections(const std::string& src) {
+    std::vector<MdSection> out;
+    size_t pos = 0;
+    while (pos < src.size()) {
+        size_t fence = src.find("\n```", pos);
+        if (fence == std::string::npos) {
+            out.push_back({ src.substr(pos), false, "" });
+            break;
+        }
+        // prose before fence
+        if (fence > pos)
+            out.push_back({ src.substr(pos, fence - pos), false, "" });
+        // find lang tag on same line
+        size_t lineEnd = src.find('\n', fence + 4);
+        std::string lang = (lineEnd != std::string::npos)
+            ? src.substr(fence + 4, lineEnd - (fence + 4)) : "";
+        // find closing fence
+        size_t closePos = (lineEnd != std::string::npos)
+            ? src.find("\n```", lineEnd) : std::string::npos;
+        if (closePos == std::string::npos) break;
+        std::string code = src.substr(lineEnd + 1, closePos - (lineEnd + 1));
+        out.push_back({ code, true, lang });
+        pos = closePos + 4; // skip past closing ```
+        // skip newline after closing fence
+        if (pos < src.size() && src[pos] == '\n') ++pos;
+    }
+    return out;
+}
+
+void EditorUI::SetMarkdownColorsForTheme(bool lightTheme) {
+    mdColors_ = {
+        // H1 — blue title
+        lightTheme ? ImVec4(0.10f, 0.39f, 0.78f, 1.0f) : ImVec4(0.54f, 0.86f, 1.0f, 1.0f),
+        // H2 — amber section
+        lightTheme ? ImVec4(0.58f, 0.42f, 0.16f, 1.0f) : ImVec4(0.94f, 0.75f, 0.37f, 1.0f),
+        // H3 — same as H2 but slightly muted
+        lightTheme ? ImVec4(0.50f, 0.36f, 0.14f, 1.0f) : ImVec4(0.85f, 0.68f, 0.32f, 1.0f),
+        // separator tint
+        lightTheme ? ImVec4(0.70f, 0.70f, 0.70f, 1.0f) : ImVec4(0.35f, 0.35f, 0.35f, 1.0f),
+    };
+}
+
+void EditorUI::MarkdownFormatCallback(const ImGui::MarkdownFormatInfo& info, bool start) {
+    ImGui::defaultMarkdownFormatCallback(info, start);
+    if (info.type == ImGui::MarkdownFormatType::HEADING) {
+        EditorUI* ui = static_cast<EditorUI*>(info.config->userData);
+        ImVec4 color = (info.level == 1) ? ui->mdColors_.h1
+                     : (info.level == 2) ? ui->mdColors_.h2
+                                         : ui->mdColors_.h3;
+        if (start) ImGui::PushStyleColor(ImGuiCol_Text, color);
+        else        ImGui::PopStyleColor();
+    }
+}
+
+void EditorUI::LoadMarkdownFiles() {
+    auto loadFile = [](const std::string& path) -> std::string {
+        std::ifstream file(path);
+        if (!file.is_open()) return "Failed to load: " + path;
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+        return buffer.str();
+    };
+
+    welcomeMarkdown_ = loadFile("assets/welcome.md");
+    guideMarkdown_ = loadFile("assets/guide.md");
 }
 
 void EditorUI::TriggerChordAction(bool held, bool* chordState, const std::function<void()>& action) {

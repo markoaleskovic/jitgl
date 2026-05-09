@@ -7,6 +7,7 @@
 #include <functional>
 #include <unordered_map>
 #include "TextEditor.h"
+#include "imgui_markdown.h"
 
 struct GLFWwindow;
 
@@ -23,6 +24,16 @@ struct Document {
 
 class EditorUI {
 public:
+    struct MarkdownColors {
+        ImVec4 h1, h2, h3, separator;
+    };
+
+    struct MdSection {
+        std::string text;
+        bool isCode;
+        std::string lang;
+    };
+
     EditorUI();
     ~EditorUI();
 
@@ -58,6 +69,8 @@ public:
 
     void AddConsoleOutput(const std::string& text);
     void AddLogOutput(const std::string& text);
+
+    static void MarkdownFormatCallback(const ImGui::MarkdownFormatInfo& info, bool start);
 
 private:
     enum class UiTheme {
@@ -135,6 +148,8 @@ private:
     std::string ResolveCurrentWorkspaceName();
     void DrawWelcomePopup();
     void DrawRuntimeGuidePopup();
+    void DrawMarkdown(const std::string& markdown, bool lightTheme);
+    void LoadMarkdownFiles();
     void LoadWelcomePreference();
     void SaveWelcomePreference() const;
     void ApplyThemeAndScale(float dpiScale, bool recreateFontTexture);
@@ -171,6 +186,19 @@ private:
     bool focusCreateWorkspaceNameInput_ = false;
     UiTheme currentTheme_ = UiTheme::Dark;
     bool themeApplyPending_ = false;
+
+    std::string welcomeMarkdown_;
+    std::string guideMarkdown_;
+    ImGui::MarkdownConfig markdownConfig_;
+
+    ImFont* fontH1_ = nullptr;
+    ImFont* fontH2_ = nullptr;
+    ImFont* fontH3_ = nullptr;
+
+    std::vector<MdSection> ParseMarkdownSections(const std::string& src);
+
+    MarkdownColors mdColors_;
+    void SetMarkdownColorsForTheme(bool lightTheme);
 
     bool shutdown_ = false;
     bool initialized_ = false;
