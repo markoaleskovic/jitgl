@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 #include <array>
+#include <cstddef>
+#include <cstdint>
 #include <mutex>
 #include <functional>
 #include <unordered_map>
@@ -46,6 +48,49 @@ public:
         std::string senderName;
     };
 
+    struct NetworkDiagnostics {
+        bool serviceRunning = false;
+        bool udpSocketBound = false;
+        bool tcpSocketBound = false;
+        bool multicastJoinAttempted = false;
+        bool multicastJoinSucceeded = false;
+        bool winsockInitialized = false;
+
+        uint16_t discoveryPort = 0;
+        uint16_t transferPort = 0;
+
+        std::string localPeerId;
+        std::string localDisplayName;
+        std::string discoveryMulticastAddress;
+        std::string lastError;
+        std::string lastUdpSenderIp;
+
+        double nowSeconds = 0.0;
+        double lastUdpSentSeconds = 0.0;
+        double lastUdpReceivedSeconds = 0.0;
+        double lastHelloSentSeconds = 0.0;
+        double lastHelloReceivedSeconds = 0.0;
+
+        std::uint64_t udpPacketsSent = 0;
+        std::uint64_t udpPacketsSendFailed = 0;
+        std::uint64_t udpPacketsReceived = 0;
+        std::uint64_t helloSentCount = 0;
+        std::uint64_t helloReceivedCount = 0;
+        std::uint64_t offersSentCount = 0;
+        std::uint64_t offersReceivedCount = 0;
+        std::uint64_t outgoingFetchAttempts = 0;
+        std::uint64_t outgoingFetchSuccesses = 0;
+        std::uint64_t outgoingFetchFailures = 0;
+        std::uint64_t incomingTransferRequests = 0;
+        std::uint64_t incomingTransferSuccesses = 0;
+        std::uint64_t incomingTransferFailures = 0;
+
+        std::size_t peersKnown = 0;
+        std::size_t pendingIncomingOffers = 0;
+        std::size_t pendingOutgoingPackets = 0;
+        std::size_t cachedSharedPayloads = 0;
+    };
+
     EditorUI();
     ~EditorUI();
 
@@ -79,6 +124,7 @@ public:
                                    std::vector<std::string> consoleHistory,
                                    std::vector<std::string> logHistory);
     void SetNetworkPeers(std::vector<NetworkPeer> peers);
+    void SetNetworkDiagnostics(NetworkDiagnostics diagnostics);
     void QueueIncomingWorkspaceShareOffer(IncomingWorkspaceShareOffer offer);
     void SetRendererTexture(unsigned int texture, int width, int height);
     void SetCompilationStatus(bool isCompiling, bool hasError, bool isStalled = false);
@@ -125,10 +171,12 @@ private:
     std::function<void(const std::string&, bool)> onWorkspaceShareDecision_;
 
     std::vector<NetworkPeer> networkPeers_;
+    NetworkDiagnostics networkDiagnostics_;
     std::unordered_map<std::string, bool> selectedNetworkPeers_;
     std::vector<IncomingWorkspaceShareOffer> pendingWorkspaceShareOffers_;
     bool openShareWorkspacePopup_ = false;
     bool workspaceSharePromptOpen_ = false;
+    bool showNetworkDiagnostics_ = false;
 
     std::string activeDocumentPath_;
     // Used once to force-select a tab after workspace/document changes.
@@ -159,6 +207,7 @@ private:
     void OpenShareWorkspacePopupIfRequested();
     void DrawShareWorkspacePopup();
     void DrawIncomingWorkspaceSharePopup();
+    void DrawNetworkDiagnosticsWindow();
     void DrawMenuWorkspaceLabel(const std::vector<std::string>& workspaceNamesSnapshot);
     void ApplyPendingWorkspaceAction(const std::string& pendingWorkspaceDelete,
                                      const std::string& pendingWorkspaceSwitch);

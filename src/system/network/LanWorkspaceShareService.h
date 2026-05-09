@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
@@ -27,6 +28,49 @@ struct LanWorkspaceOffer {
     uint16_t transferPort = 0;
 };
 
+struct LanNetworkDiagnostics {
+    bool serviceRunning = false;
+    bool udpSocketBound = false;
+    bool tcpSocketBound = false;
+    bool multicastJoinAttempted = false;
+    bool multicastJoinSucceeded = false;
+    bool winsockInitialized = false;
+
+    uint16_t discoveryPort = 0;
+    uint16_t transferPort = 0;
+
+    std::string localPeerId;
+    std::string localDisplayName;
+    std::string discoveryMulticastAddress;
+    std::string lastError;
+    std::string lastUdpSenderIp;
+
+    double nowSeconds = 0.0;
+    double lastUdpSentSeconds = 0.0;
+    double lastUdpReceivedSeconds = 0.0;
+    double lastHelloSentSeconds = 0.0;
+    double lastHelloReceivedSeconds = 0.0;
+
+    std::uint64_t udpPacketsSent = 0;
+    std::uint64_t udpPacketsSendFailed = 0;
+    std::uint64_t udpPacketsReceived = 0;
+    std::uint64_t helloSentCount = 0;
+    std::uint64_t helloReceivedCount = 0;
+    std::uint64_t offersSentCount = 0;
+    std::uint64_t offersReceivedCount = 0;
+    std::uint64_t outgoingFetchAttempts = 0;
+    std::uint64_t outgoingFetchSuccesses = 0;
+    std::uint64_t outgoingFetchFailures = 0;
+    std::uint64_t incomingTransferRequests = 0;
+    std::uint64_t incomingTransferSuccesses = 0;
+    std::uint64_t incomingTransferFailures = 0;
+
+    std::size_t peersKnown = 0;
+    std::size_t pendingIncomingOffers = 0;
+    std::size_t pendingOutgoingPackets = 0;
+    std::size_t cachedSharedPayloads = 0;
+};
+
 class LanWorkspaceShareService {
 public:
     LanWorkspaceShareService();
@@ -38,13 +82,14 @@ public:
     std::string LocalDisplayName() const;
     std::vector<LanPeerInfo> SnapshotPeers() const;
     std::vector<LanWorkspaceOffer> DrainIncomingOffers();
+    LanNetworkDiagnostics SnapshotDiagnostics() const;
 
     bool ShareWorkspacePackage(const std::string& workspaceName,
                                const std::string& packageData,
                                const std::vector<std::string>& targetPeerIds,
                                bool shareToAll);
 
-    std::optional<std::string> FetchWorkspacePackage(const LanWorkspaceOffer& offer) const;
+    std::optional<std::string> FetchWorkspacePackage(const LanWorkspaceOffer& offer);
 
 private:
     using SocketHandle = std::intptr_t;
@@ -76,6 +121,7 @@ private:
     std::vector<LanWorkspaceOffer> incomingOffers_;
     std::vector<OutboundUdpPacket> pendingUdpPackets_;
     std::unordered_map<std::string, SharedOfferPayload> sharedPayloadsByOfferId_;
+    LanNetworkDiagnostics diagnostics_;
     std::atomic<std::uint64_t> offerCounter_{ 1 };
     std::atomic<std::uint32_t> activeClientHandlers_{ 0 };
     mutable std::mutex clientHandlerMutex_;

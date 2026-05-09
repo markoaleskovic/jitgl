@@ -41,6 +41,17 @@ namespace {
     std::string BuildWorkspaceDisplayLabel(const std::string& workspaceName, std::size_t index) {
         return std::to_string(index + 1) + ": " + workspaceName;
     }
+
+    double AgeSeconds(double nowSeconds, double eventSeconds) {
+        if (eventSeconds <= 0.0 || nowSeconds <= 0.0 || nowSeconds < eventSeconds) {
+            return -1.0;
+        }
+        return nowSeconds - eventSeconds;
+    }
+
+    const char* YesNo(bool value) {
+        return value ? "Yes" : "No";
+    }
 }
 
 // style start
@@ -425,6 +436,7 @@ void EditorUI::Draw() {
     }
 
     DrawIncomingWorkspaceSharePopup();
+    DrawNetworkDiagnosticsWindow();
     DrawWelcomePopup();
     DrawRuntimeGuidePopup();
 }
@@ -567,6 +579,10 @@ void EditorUI::SetNetworkPeers(std::vector<NetworkPeer> peers) {
                       return std::ranges::none_of(networkPeers_,
                                                   [&](const NetworkPeer& peer) { return peer.id == entry.first; });
                   });
+}
+
+void EditorUI::SetNetworkDiagnostics(NetworkDiagnostics diagnostics) {
+    networkDiagnostics_ = std::move(diagnostics);
 }
 
 void EditorUI::QueueIncomingWorkspaceShareOffer(IncomingWorkspaceShareOffer offer) {
@@ -1163,6 +1179,8 @@ void EditorUI::DrawViewMenu() {
     if (ImGui::MenuItem(IsLightTheme() ? "Switch to Dark Theme" : "Switch to Light Theme", "Ctrl+T")) {
         ToggleTheme();
     }
+    ImGui::Separator();
+    (void)ImGui::MenuItem("Network Diagnostics", nullptr, &showNetworkDiagnostics_);
     ImGui::EndMenu();
 }
 
@@ -1382,6 +1400,128 @@ void EditorUI::DrawIncomingWorkspaceSharePopup() {
     }
 
     ImGui::EndPopup();
+}
+
+void EditorUI::DrawNetworkDiagnosticsWindow() {
+    if (!showNetworkDiagnostics_) {
+        return;
+    }
+
+    if (!ImGui::Begin("Network Diagnostics", &showNetworkDiagnostics_)) {
+        ImGui::End();
+        return;
+    }
+
+    const ImVec4 okColor = IsLightTheme() ? ImVec4(0.16f, 0.56f, 0.24f, 1.0f)
+                                          : ImVec4(0.4f, 1.0f, 0.4f, 1.0f);
+    const ImVec4 badColor = IsLightTheme() ? ImVec4(0.75f, 0.20f, 0.20f, 1.0f)
+                                           : ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
+
+    const auto StatusText = [&](bool value) {
+        ImGui::TextColored(value ? okColor : badColor, "%s", value ? "OK" : "NO");
+    };
+
+    ImGui::Text("Service Running: ");
+    ImGui::SameLine();
+    StatusText(networkDiagnostics_.serviceRunning);
+    ImGui::Text("UDP Discovery Bound: ");
+    ImGui::SameLine();
+    StatusText(networkDiagnostics_.udpSocketBound);
+    ImGui::Text("TCP Transfer Bound: ");
+    ImGui::SameLine();
+    StatusText(networkDiagnostics_.tcpSocketBound);
+    ImGui::Text("Multicast Join Attempted: %s", YesNo(networkDiagnostics_.multicastJoinAttempted));
+    ImGui::Text("Multicast Join Succeeded: %s", YesNo(networkDiagnostics_.multicastJoinSucceeded));
+    ImGui::Text("Discovery Port: %u", static_cast<unsigned int>(networkDiagnostics_.discoveryPort));
+    ImGui::Text("Transfer Port: %u", static_cast<unsigned int>(networkDiagnostics_.transferPort));
+    ImGui::Text("Multicast Group: %s", networkDiagnostics_.discoveryMulticastAddress.c_str());
+    ImGui::Text("Local Name: %s", networkDiagnostics_.localDisplayName.c_str());
+    ImGui::Text("Local Peer ID: %s", networkDiagnostics_.localPeerId.c_str());
+
+    const double nowSeconds = networkDiagnostics_.nowSeconds;
+    const double helloSentAge = AgeSeconds(nowSeconds, networkDiagnostics_.lastHelloSentSeconds);
+    const double helloRecvAge = AgeSeconds(nowSeconds, networkDiagnostics_.lastHelloReceivedSeconds);
+    const double udpSentAge = AgeSeconds(nowSeconds, networkDiagnostics_.lastUdpSentSeconds);
+    const double udpRecvAge = AgeSeconds(nowSeconds, networkDiagnostics_.lastUdpReceivedSeconds);
+
+    ImGui::Separator();
+    if (helloSentAge >= 0.0) {
+        ImGui::Text("Last HELLO Sent: %.2f sec ago", helloSentAge);
+    } else {
+        ImGui::TextUnformatted("Last HELLO Sent: never");
+    }
+    if (helloRecvAge >= 0.0) {
+        ImGui::Text("Last HELLO Received: %.2f sec ago", helloRecvAge);
+    } else {
+        ImGui::TextUnformatted("Last HELLO Received: never");
+    }
+    if (udpSentAge >= 0.0) {
+        ImGui::Text("Last UDP Sent: %.2f sec ago", udpSentAge);
+    } else {
+        ImGui::TextUnformatted("Last UDP Sent: never");
+    }
+    if (udpRecvAge >= 0.0) {
+        ImGui::Text("Last UDP Received: %.2f sec ago", udpRecvAge);
+    } else {
+        ImGui::TextUnformatted("Last UDP Received: never");
+    }
+    ImGui::Text("Last UDP Sender: %s",
+                networkDiagnostics_.lastUdpSenderIp.empty() ? "-" : networkDiagnostics_.lastUdpSenderIp.c_str());
+
+    ImGui::Separator();
+    ImGui::Text("UDP Sent: %llu", static_cast<unsigned long long>(networkDiagnostics_.udpPacketsSent));
+    ImGui::Text("UDP Send Failures: %llu", static_cast<unsigned long long>(networkDiagnostics_.udpPacketsSendFailed));
+    ImGui::Text("UDP Received: %llu", static_cast<unsigned long long>(networkDiagnostics_.udpPacketsReceived));
+    ImGui::Text("HELLO Sent: %llu", static_cast<unsigned long long>(networkDiagnostics_.helloSentCount));
+    ImGui::Text("HELLO Received: %llu", static_cast<unsigned long long>(networkDiagnostics_.helloReceivedCount));
+    ImGui::Text("Offers Sent: %llu", static_cast<unsigned long long>(networkDiagnostics_.offersSentCount));
+    ImGui::Text("Offers Received: %llu", static_cast<unsigned long long>(networkDiagnostics_.offersReceivedCount));
+
+    ImGui::Separator();
+    ImGui::Text("Peers Known: %zu", networkDiagnostics_.peersKnown);
+    ImGui::Text("Peer Entries in UI: %zu", networkPeers_.size());
+    ImGui::Text("Pending Incoming Offers: %zu", networkDiagnostics_.pendingIncomingOffers);
+    ImGui::Text("Pending Outgoing UDP Packets: %zu", networkDiagnostics_.pendingOutgoingPackets);
+    ImGui::Text("Cached Shared Payloads: %zu", networkDiagnostics_.cachedSharedPayloads);
+
+    ImGui::Separator();
+    ImGui::Text("Outgoing Fetch Attempts: %llu", static_cast<unsigned long long>(networkDiagnostics_.outgoingFetchAttempts));
+    ImGui::Text("Outgoing Fetch Successes: %llu", static_cast<unsigned long long>(networkDiagnostics_.outgoingFetchSuccesses));
+    ImGui::Text("Outgoing Fetch Failures: %llu", static_cast<unsigned long long>(networkDiagnostics_.outgoingFetchFailures));
+    ImGui::Text("Incoming Transfer Requests: %llu", static_cast<unsigned long long>(networkDiagnostics_.incomingTransferRequests));
+    ImGui::Text("Incoming Transfer Successes: %llu", static_cast<unsigned long long>(networkDiagnostics_.incomingTransferSuccesses));
+    ImGui::Text("Incoming Transfer Failures: %llu", static_cast<unsigned long long>(networkDiagnostics_.incomingTransferFailures));
+
+#if defined(_WIN32)
+    ImGui::Separator();
+    ImGui::Text("Winsock Initialized: %s", YesNo(networkDiagnostics_.winsockInitialized));
+#endif
+
+    ImGui::Separator();
+    if (networkDiagnostics_.lastError.empty()) {
+        ImGui::TextUnformatted("Last Error: -");
+    } else {
+        ImGui::TextWrapped("Last Error: %s", networkDiagnostics_.lastError.c_str());
+    }
+
+    if (ImGui::BeginTable("NetworkPeersDiagnosticsTable", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+        ImGui::TableSetupColumn("Name");
+        ImGui::TableSetupColumn("IP");
+        ImGui::TableSetupColumn("Peer ID");
+        ImGui::TableHeadersRow();
+        for (const auto& peer : networkPeers_) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted(peer.displayName.c_str());
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextUnformatted(peer.ipAddress.c_str());
+            ImGui::TableSetColumnIndex(2);
+            ImGui::TextUnformatted(peer.id.c_str());
+        }
+        ImGui::EndTable();
+    }
+
+    ImGui::End();
 }
 
 void EditorUI::DrawMenuWorkspaceLabel(const std::vector<std::string>& workspaceNamesSnapshot) {

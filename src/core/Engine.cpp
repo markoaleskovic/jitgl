@@ -1190,7 +1190,10 @@ bool Engine::InitLanShare() {
 
     lanShare_ = std::make_unique<LanWorkspaceShareService>();
     if (!lanShare_->Start()) {
-        lanShare_.reset();
+        const auto diagnostics = lanShare_->SnapshotDiagnostics();
+        if (!diagnostics.lastError.empty()) {
+            ui_->AddLogOutput("[Network Error] " + diagnostics.lastError);
+        }
         return false;
     }
 
@@ -1199,9 +1202,55 @@ bool Engine::InitLanShare() {
 }
 
 void Engine::UpdateLanShareUiState() {
-    if (!lanShare_ || !ui_) {
+    if (!ui_) {
         return;
     }
+
+    if (!lanShare_) {
+        EditorUI::NetworkDiagnostics diagnostics;
+        diagnostics.lastError = "LAN sharing service was not initialized.";
+        ui_->SetNetworkDiagnostics(std::move(diagnostics));
+        return;
+    }
+
+    const auto snapshot = lanShare_->SnapshotDiagnostics();
+    EditorUI::NetworkDiagnostics diagnostics;
+    diagnostics.serviceRunning = snapshot.serviceRunning;
+    diagnostics.udpSocketBound = snapshot.udpSocketBound;
+    diagnostics.tcpSocketBound = snapshot.tcpSocketBound;
+    diagnostics.multicastJoinAttempted = snapshot.multicastJoinAttempted;
+    diagnostics.multicastJoinSucceeded = snapshot.multicastJoinSucceeded;
+    diagnostics.winsockInitialized = snapshot.winsockInitialized;
+    diagnostics.discoveryPort = snapshot.discoveryPort;
+    diagnostics.transferPort = snapshot.transferPort;
+    diagnostics.localPeerId = snapshot.localPeerId;
+    diagnostics.localDisplayName = snapshot.localDisplayName;
+    diagnostics.discoveryMulticastAddress = snapshot.discoveryMulticastAddress;
+    diagnostics.lastError = snapshot.lastError;
+    diagnostics.lastUdpSenderIp = snapshot.lastUdpSenderIp;
+    diagnostics.nowSeconds = snapshot.nowSeconds;
+    diagnostics.lastUdpSentSeconds = snapshot.lastUdpSentSeconds;
+    diagnostics.lastUdpReceivedSeconds = snapshot.lastUdpReceivedSeconds;
+    diagnostics.lastHelloSentSeconds = snapshot.lastHelloSentSeconds;
+    diagnostics.lastHelloReceivedSeconds = snapshot.lastHelloReceivedSeconds;
+    diagnostics.udpPacketsSent = snapshot.udpPacketsSent;
+    diagnostics.udpPacketsSendFailed = snapshot.udpPacketsSendFailed;
+    diagnostics.udpPacketsReceived = snapshot.udpPacketsReceived;
+    diagnostics.helloSentCount = snapshot.helloSentCount;
+    diagnostics.helloReceivedCount = snapshot.helloReceivedCount;
+    diagnostics.offersSentCount = snapshot.offersSentCount;
+    diagnostics.offersReceivedCount = snapshot.offersReceivedCount;
+    diagnostics.outgoingFetchAttempts = snapshot.outgoingFetchAttempts;
+    diagnostics.outgoingFetchSuccesses = snapshot.outgoingFetchSuccesses;
+    diagnostics.outgoingFetchFailures = snapshot.outgoingFetchFailures;
+    diagnostics.incomingTransferRequests = snapshot.incomingTransferRequests;
+    diagnostics.incomingTransferSuccesses = snapshot.incomingTransferSuccesses;
+    diagnostics.incomingTransferFailures = snapshot.incomingTransferFailures;
+    diagnostics.peersKnown = snapshot.peersKnown;
+    diagnostics.pendingIncomingOffers = snapshot.pendingIncomingOffers;
+    diagnostics.pendingOutgoingPackets = snapshot.pendingOutgoingPackets;
+    diagnostics.cachedSharedPayloads = snapshot.cachedSharedPayloads;
+    ui_->SetNetworkDiagnostics(std::move(diagnostics));
 
     std::vector<EditorUI::NetworkPeer> peerViews;
     const auto peers = lanShare_->SnapshotPeers();

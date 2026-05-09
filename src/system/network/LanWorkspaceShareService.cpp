@@ -50,6 +50,19 @@ namespace {
     constexpr std::size_t kMaxControlLineBytes = 512;
     constexpr std::size_t kMaxPackageBytes = 20u * 1024u * 1024u;
 
+    struct UdpDiscoverySocketResult {
+        SocketHandle socket = kInvalidSocketHandle;
+        bool multicastJoinAttempted = false;
+        bool multicastJoinSucceeded = false;
+        std::string error;
+    };
+
+    struct TcpListenSocketResult {
+        SocketHandle socket = kInvalidSocketHandle;
+        uint16_t boundPort = 0;
+        std::string error;
+    };
+
     NativeSocket ToNativeSocket(SocketHandle socketHandle) {
         return static_cast<NativeSocket>(socketHandle);
     }
@@ -227,10 +240,12 @@ namespace {
         return true;
     }
 
-    SocketHandle CreateUdpDiscoverySocket() {
+    UdpDiscoverySocketResult CreateUdpDiscoverySocket() {
+        UdpDiscoverySocketResult result;
         const NativeSocket sock = socket(AF_INET, SOCK_DGRAM, 0);
         if (sock == kInvalidSocket) {
-            return kInvalidSocketHandle;
+            result.error = "Failed to create UDP discovery socket.";
+            return result;
         }
 
         int enable = 1;
@@ -243,13 +258,17 @@ namespace {
         bindAddress.sin_addr.s_addr = INADDR_ANY;
         if (bind(sock, reinterpret_cast<sockaddr*>(&bindAddress), static_cast<SocketLen>(sizeof(bindAddress))) != 0) {
             CloseNativeSocket(sock);
-            return kInvalidSocketHandle;
+            result.error = "Failed to bind UDP discovery socket on port " + std::to_string(kDiscoveryPort) + ".";
+            return result;
         }
 
         ip_mreq multicastRequest{};
         if (inet_pton(AF_INET, kDiscoveryMulticastAddress.data(), &multicastRequest.imr_multiaddr) == 1) {
+            result.multicastJoinAttempted = true;
             multicastRequest.imr_interface.s_addr = htonl(INADDR_ANY);
-            (void)SetSocketOption(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, multicastRequest);
+            if (SetSocketOption(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, multicastRequest) == 0) {
+                result.multicastJoinSucceeded = true;
+            }
 
             unsigned char multicastLoopback = 1;
             (void)SetSocketOption(sock, IPPROTO_IP, IP_MULTICAST_LOOP, multicastLoopback);
@@ -258,17 +277,16 @@ namespace {
             (void)SetSocketOption(sock, IPPROTO_IP, IP_MULTICAST_TTL, multicastTtl);
         }
 
-        return ToSocketHandle(sock);
+        result.socket = ToSocketHandle(sock);
+        return result;
     }
 
-    SocketHandle CreateTcpListenSocket(uint16_t* boundPortOut) {
-        if (boundPortOut == nullptr) {
-            return kInvalidSocketHandle;
-        }
-
+    TcpListenSocketResult CreateTcpListenSocket() {
+        TcpListenSocketResult result;
         const NativeSocket sock = socket(AF_INET, SOCK_STREAM, 0);
         if (sock == kInvalidSocket) {
-            return kInvalidSocketHandle;
+            result.error = "Failed to create TCP transfer socket.";
+            return result;
         }
 
         int enable = 1;
@@ -286,27 +304,32 @@ namespace {
 
         if (!bindOnPort(kPreferredTransferPort) && !bindOnPort(0)) {
             CloseNativeSocket(sock);
-            return kInvalidSocketHandle;
+            result.error = "Failed to bind TCP transfer socket.";
+            return result;
         }
 
         if (listen(sock, 16) != 0) {
             CloseNativeSocket(sock);
-            return kInvalidSocketHandle;
+            result.error = "Failed to listen on TCP transfer socket.";
+            return result;
         }
 
         sockaddr_in boundAddress{};
         SocketLen boundAddressLen = static_cast<SocketLen>(sizeof(boundAddress));
         if (getsockname(sock, reinterpret_cast<sockaddr*>(&boundAddress), &boundAddressLen) != 0) {
             CloseNativeSocket(sock);
-            return kInvalidSocketHandle;
+            result.error = "Failed to query bound TCP transfer port.";
+            return result;
         }
-        *boundPortOut = ntohs(boundAddress.sin_port);
-        if (*boundPortOut == 0) {
+        result.boundPort = ntohs(boundAddress.sin_port);
+        if (result.boundPort == 0) {
             CloseNativeSocket(sock);
-            return kInvalidSocketHandle;
+            result.error = "TCP transfer port resolved to zero.";
+            return result;
         }
 
-        return ToSocketHandle(sock);
+        result.socket = ToSocketHandle(sock);
+        return result;
     }
 
     bool SendUdpPacket(SocketHandle udpSocket,
@@ -370,7 +393,16 @@ namespace {
 
 LanWorkspaceShareService::LanWorkspaceShareService()
     : localPeerId_(GeneratePeerId()),
-      localDisplayName_(HostnameOrDefault()) {}
+      localDisplayName_(HostnameOrDefault()) {
+    std::scoped_lock lock(stateMutex_);
+    diagnostics_.serviceRunning = false;
+    diagnostics_.discoveryPort = kDiscoveryPort;
+    diagnostics_.transferPort = 0;
+    diagnostics_.localPeerId = localPeerId_;
+    diagnostics_.localDisplayName = localDisplayName_;
+    diagnostics_.discoveryMulticastAddress = std::string(kDiscoveryMulticastAddress);
+    diagnostics_.nowSeconds = NowSeconds();
+}
 
 LanWorkspaceShareService::~LanWorkspaceShareService() {
     Stop();
@@ -378,6 +410,8 @@ LanWorkspaceShareService::~LanWorkspaceShareService() {
 
 bool LanWorkspaceShareService::Start() {
     if (running_.load()) {
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.nowSeconds = NowSeconds();
         return true;
     }
 
@@ -385,6 +419,10 @@ bool LanWorkspaceShareService::Start() {
     const bool startedWinsockThisCall = !winsockInitialized_;
     if (startedWinsockThisCall) {
         if (!StartupNetworkStack()) {
+            std::scoped_lock lock(stateMutex_);
+            diagnostics_.lastError = "WSAStartup failed.";
+            diagnostics_.winsockInitialized = false;
+            diagnostics_.nowSeconds = NowSeconds();
             return false;
         }
         winsockInitialized_ = true;
@@ -394,6 +432,18 @@ bool LanWorkspaceShareService::Start() {
 
     {
         std::scoped_lock lock(stateMutex_);
+        diagnostics_ = LanNetworkDiagnostics{};
+        diagnostics_.serviceRunning = false;
+        diagnostics_.discoveryPort = kDiscoveryPort;
+        diagnostics_.transferPort = 0;
+        diagnostics_.localPeerId = localPeerId_;
+        diagnostics_.localDisplayName = localDisplayName_;
+        diagnostics_.discoveryMulticastAddress = std::string(kDiscoveryMulticastAddress);
+#if defined(_WIN32)
+        diagnostics_.winsockInitialized = winsockInitialized_;
+#endif
+        diagnostics_.nowSeconds = NowSeconds();
+
         peersById_.clear();
         seenIncomingOffers_.clear();
         incomingOffers_.clear();
@@ -404,7 +454,15 @@ bool LanWorkspaceShareService::Start() {
     activeClientHandlers_.store(0);
     localTransferPort_.store(0);
 
-    udpSocket_ = CreateUdpDiscoverySocket();
+    const UdpDiscoverySocketResult udpResult = CreateUdpDiscoverySocket();
+    udpSocket_ = udpResult.socket;
+    {
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.multicastJoinAttempted = udpResult.multicastJoinAttempted;
+        diagnostics_.multicastJoinSucceeded = udpResult.multicastJoinSucceeded;
+        diagnostics_.udpSocketBound = IsValidSocket(udpSocket_);
+        diagnostics_.nowSeconds = NowSeconds();
+    }
     if (!IsValidSocket(udpSocket_)) {
 #if defined(_WIN32)
         if (startedWinsockThisCall) {
@@ -412,11 +470,17 @@ bool LanWorkspaceShareService::Start() {
             winsockInitialized_ = false;
         }
 #endif
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.lastError = udpResult.error.empty() ? "UDP discovery initialization failed." : udpResult.error;
+#if defined(_WIN32)
+        diagnostics_.winsockInitialized = winsockInitialized_;
+#endif
+        diagnostics_.nowSeconds = NowSeconds();
         return false;
     }
 
-    uint16_t boundTransferPort = 0;
-    tcpListenSocket_ = CreateTcpListenSocket(&boundTransferPort);
+    const TcpListenSocketResult tcpResult = CreateTcpListenSocket();
+    tcpListenSocket_ = tcpResult.socket;
     if (!IsValidSocket(tcpListenSocket_)) {
         CloseSocketHandle(&udpSocket_);
 #if defined(_WIN32)
@@ -425,12 +489,33 @@ bool LanWorkspaceShareService::Start() {
             winsockInitialized_ = false;
         }
 #endif
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.udpSocketBound = false;
+        diagnostics_.tcpSocketBound = false;
+        diagnostics_.transferPort = 0;
+        diagnostics_.lastError = tcpResult.error.empty() ? "TCP transfer initialization failed." : tcpResult.error;
+#if defined(_WIN32)
+        diagnostics_.winsockInitialized = winsockInitialized_;
+#endif
+        diagnostics_.nowSeconds = NowSeconds();
         return false;
     }
-    localTransferPort_.store(boundTransferPort);
+    localTransferPort_.store(tcpResult.boundPort);
 
     running_.store(true);
     networkThread_ = std::jthread([this](std::stop_token) { NetworkLoop(); });
+    {
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.serviceRunning = true;
+        diagnostics_.udpSocketBound = true;
+        diagnostics_.tcpSocketBound = true;
+        diagnostics_.transferPort = tcpResult.boundPort;
+        diagnostics_.lastError.clear();
+#if defined(_WIN32)
+        diagnostics_.winsockInitialized = winsockInitialized_;
+#endif
+        diagnostics_.nowSeconds = NowSeconds();
+    }
     return true;
 }
 
@@ -442,6 +527,15 @@ void LanWorkspaceShareService::Stop() {
             winsockInitialized_ = false;
         }
 #endif
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.serviceRunning = false;
+        diagnostics_.udpSocketBound = IsValidSocket(udpSocket_);
+        diagnostics_.tcpSocketBound = IsValidSocket(tcpListenSocket_);
+        diagnostics_.transferPort = localTransferPort_.load();
+#if defined(_WIN32)
+        diagnostics_.winsockInitialized = winsockInitialized_;
+#endif
+        diagnostics_.nowSeconds = NowSeconds();
         return;
     }
 
@@ -465,12 +559,22 @@ void LanWorkspaceShareService::Stop() {
     incomingOffers_.clear();
     pendingUdpPackets_.clear();
     sharedPayloadsByOfferId_.clear();
+    diagnostics_.serviceRunning = false;
+    diagnostics_.udpSocketBound = false;
+    diagnostics_.tcpSocketBound = false;
+    diagnostics_.transferPort = 0;
+    diagnostics_.peersKnown = 0;
+    diagnostics_.pendingIncomingOffers = 0;
+    diagnostics_.pendingOutgoingPackets = 0;
+    diagnostics_.cachedSharedPayloads = 0;
+    diagnostics_.nowSeconds = NowSeconds();
 
 #if defined(_WIN32)
     if (winsockInitialized_) {
         CleanupNetworkStack();
         winsockInitialized_ = false;
     }
+    diagnostics_.winsockInitialized = winsockInitialized_;
 #endif
 }
 
@@ -499,7 +603,25 @@ std::vector<LanWorkspaceOffer> LanWorkspaceShareService::DrainIncomingOffers() {
     std::scoped_lock lock(stateMutex_);
     std::vector<LanWorkspaceOffer> offers;
     offers.swap(incomingOffers_);
+    diagnostics_.pendingIncomingOffers = incomingOffers_.size();
+    diagnostics_.nowSeconds = NowSeconds();
     return offers;
+}
+
+LanNetworkDiagnostics LanWorkspaceShareService::SnapshotDiagnostics() const {
+    std::scoped_lock lock(stateMutex_);
+    LanNetworkDiagnostics snapshot = diagnostics_;
+    snapshot.nowSeconds = NowSeconds();
+    snapshot.serviceRunning = running_.load();
+    snapshot.transferPort = localTransferPort_.load();
+#if defined(_WIN32)
+    snapshot.winsockInitialized = winsockInitialized_;
+#endif
+    snapshot.peersKnown = peersById_.size();
+    snapshot.pendingIncomingOffers = incomingOffers_.size();
+    snapshot.pendingOutgoingPackets = pendingUdpPackets_.size();
+    snapshot.cachedSharedPayloads = sharedPayloadsByOfferId_.size();
+    return snapshot;
 }
 
 bool LanWorkspaceShareService::ShareWorkspacePackage(const std::string& workspaceName,
@@ -508,6 +630,9 @@ bool LanWorkspaceShareService::ShareWorkspacePackage(const std::string& workspac
                                                      bool shareToAll) {
     const uint16_t transferPort = localTransferPort_.load();
     if (!running_.load() || workspaceName.empty() || packageData.empty() || transferPort == 0) {
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.lastError = "Share request rejected: LAN service is not ready.";
+        diagnostics_.nowSeconds = NowSeconds();
         return false;
     }
 
@@ -519,6 +644,7 @@ bool LanWorkspaceShareService::ShareWorkspacePackage(const std::string& workspac
     {
         std::scoped_lock lock(stateMutex_);
         sharedPayloadsByOfferId_[offerId] = SharedOfferPayload{ packageData, NowSeconds() };
+        diagnostics_.offersSentCount += 1;
 
         const std::string message = std::string(kProtocolPrefix) + "|OFFER|" + offerId + "|" +
                                     localPeerId_ + "|" + SanitizeField(localDisplayName_) + "|" +
@@ -532,6 +658,10 @@ bool LanWorkspaceShareService::ShareWorkspacePackage(const std::string& workspac
                 std::string(kDiscoveryMulticastAddress),
                 false
             });
+            diagnostics_.pendingOutgoingPackets = pendingUdpPackets_.size();
+            diagnostics_.cachedSharedPayloads = sharedPayloadsByOfferId_.size();
+            diagnostics_.lastError.clear();
+            diagnostics_.nowSeconds = NowSeconds();
             return true;
         }
 
@@ -543,22 +673,45 @@ bool LanWorkspaceShareService::ShareWorkspacePackage(const std::string& workspac
 
         if (targetedPackets.empty()) {
             sharedPayloadsByOfferId_.erase(offerId);
+            if (diagnostics_.offersSentCount > 0) {
+                diagnostics_.offersSentCount -= 1;
+            }
+            diagnostics_.cachedSharedPayloads = sharedPayloadsByOfferId_.size();
+            diagnostics_.lastError = "Share request rejected: no reachable target peers matched selection.";
+            diagnostics_.nowSeconds = NowSeconds();
             return false;
         }
 
         pendingUdpPackets_.insert(pendingUdpPackets_.end(), targetedPackets.begin(), targetedPackets.end());
+        diagnostics_.pendingOutgoingPackets = pendingUdpPackets_.size();
+        diagnostics_.cachedSharedPayloads = sharedPayloadsByOfferId_.size();
+        diagnostics_.lastError.clear();
+        diagnostics_.nowSeconds = NowSeconds();
     }
 
     return true;
 }
 
-std::optional<std::string> LanWorkspaceShareService::FetchWorkspacePackage(const LanWorkspaceOffer& offer) const {
+std::optional<std::string> LanWorkspaceShareService::FetchWorkspacePackage(const LanWorkspaceOffer& offer) {
+    {
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.outgoingFetchAttempts += 1;
+        diagnostics_.nowSeconds = NowSeconds();
+    }
     if (offer.offerId.empty() || offer.senderIpAddress.empty() || offer.transferPort == 0) {
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.outgoingFetchFailures += 1;
+        diagnostics_.lastError = "Fetch failed: invalid offer metadata.";
+        diagnostics_.nowSeconds = NowSeconds();
         return std::nullopt;
     }
 
     const NativeSocket nativeSock = socket(AF_INET, SOCK_STREAM, 0);
     if (nativeSock == kInvalidSocket) {
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.outgoingFetchFailures += 1;
+        diagnostics_.lastError = "Fetch failed: unable to create TCP socket.";
+        diagnostics_.nowSeconds = NowSeconds();
         return std::nullopt;
     }
     SocketHandle sock = ToSocketHandle(nativeSock);
@@ -569,6 +722,10 @@ std::optional<std::string> LanWorkspaceShareService::FetchWorkspacePackage(const
     serverAddress.sin_port = htons(offer.transferPort);
     if (inet_pton(AF_INET, offer.senderIpAddress.c_str(), &serverAddress.sin_addr) != 1) {
         CloseSocketHandle(&sock);
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.outgoingFetchFailures += 1;
+        diagnostics_.lastError = "Fetch failed: sender IP address is invalid.";
+        diagnostics_.nowSeconds = NowSeconds();
         return std::nullopt;
     }
 
@@ -576,34 +733,58 @@ std::optional<std::string> LanWorkspaceShareService::FetchWorkspacePackage(const
                 reinterpret_cast<sockaddr*>(&serverAddress),
                 static_cast<SocketLen>(sizeof(serverAddress))) != 0) {
         CloseSocketHandle(&sock);
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.outgoingFetchFailures += 1;
+        diagnostics_.lastError = "Fetch failed: TCP connect to sender failed.";
+        diagnostics_.nowSeconds = NowSeconds();
         return std::nullopt;
     }
 
     const std::string request = std::string(kProtocolPrefix) + "|GET|" + offer.offerId + "\n";
     if (!SendAll(ToNativeSocket(sock), request.data(), request.size())) {
         CloseSocketHandle(&sock);
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.outgoingFetchFailures += 1;
+        diagnostics_.lastError = "Fetch failed: request send failed.";
+        diagnostics_.nowSeconds = NowSeconds();
         return std::nullopt;
     }
 
     std::string responseLine;
     if (!RecvLine(ToNativeSocket(sock), &responseLine, kMaxControlLineBytes)) {
         CloseSocketHandle(&sock);
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.outgoingFetchFailures += 1;
+        diagnostics_.lastError = "Fetch failed: no response from sender.";
+        diagnostics_.nowSeconds = NowSeconds();
         return std::nullopt;
     }
 
     const std::vector<std::string> response = SplitPipeDelimited(responseLine);
     if (response.size() < 2 || response[0] != kProtocolPrefix || response[1] != "OK") {
         CloseSocketHandle(&sock);
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.outgoingFetchFailures += 1;
+        diagnostics_.lastError = "Fetch failed: sender returned error response.";
+        diagnostics_.nowSeconds = NowSeconds();
         return std::nullopt;
     }
     if (response.size() != 3) {
         CloseSocketHandle(&sock);
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.outgoingFetchFailures += 1;
+        diagnostics_.lastError = "Fetch failed: malformed sender response.";
+        diagnostics_.nowSeconds = NowSeconds();
         return std::nullopt;
     }
 
     std::size_t payloadSize = 0;
     if (!ParseSize(response[2], &payloadSize) || payloadSize == 0 || payloadSize > kMaxPackageBytes) {
         CloseSocketHandle(&sock);
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.outgoingFetchFailures += 1;
+        diagnostics_.lastError = "Fetch failed: payload size is invalid.";
+        diagnostics_.nowSeconds = NowSeconds();
         return std::nullopt;
     }
 
@@ -611,10 +792,20 @@ std::optional<std::string> LanWorkspaceShareService::FetchWorkspacePackage(const
     payload.resize(payloadSize);
     if (!RecvAll(ToNativeSocket(sock), payload.data(), payloadSize)) {
         CloseSocketHandle(&sock);
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.outgoingFetchFailures += 1;
+        diagnostics_.lastError = "Fetch failed: payload receive interrupted.";
+        diagnostics_.nowSeconds = NowSeconds();
         return std::nullopt;
     }
 
     CloseSocketHandle(&sock);
+    {
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.outgoingFetchSuccesses += 1;
+        diagnostics_.lastError.clear();
+        diagnostics_.nowSeconds = NowSeconds();
+    }
     return payload;
 }
 
@@ -702,6 +893,14 @@ void LanWorkspaceShareService::NetworkLoop() {
 void LanWorkspaceShareService::HandleUdpPacket(const std::string& payload,
                                                const std::string& senderIpAddress,
                                                double nowSeconds) {
+    {
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.udpPacketsReceived += 1;
+        diagnostics_.lastUdpReceivedSeconds = nowSeconds;
+        diagnostics_.lastUdpSenderIp = senderIpAddress;
+        diagnostics_.nowSeconds = nowSeconds;
+    }
+
     const std::vector<std::string> fields = SplitPipeDelimited(payload);
     if (fields.size() < 2 || fields[0] != kProtocolPrefix) {
         return;
@@ -723,6 +922,10 @@ void LanWorkspaceShareService::HandleUdpPacket(const std::string& payload,
         peer.ipAddress = senderIpAddress;
         peer.transferPort = transferPort;
         peer.lastSeenSeconds = nowSeconds;
+        diagnostics_.helloReceivedCount += 1;
+        diagnostics_.lastHelloReceivedSeconds = nowSeconds;
+        diagnostics_.peersKnown = peersById_.size();
+        diagnostics_.nowSeconds = nowSeconds;
         return;
     }
 
@@ -757,16 +960,29 @@ void LanWorkspaceShareService::HandleUdpPacket(const std::string& payload,
             fields[5],
             transferPort
         });
+        diagnostics_.offersReceivedCount += 1;
+        diagnostics_.pendingIncomingOffers = incomingOffers_.size();
+        diagnostics_.peersKnown = peersById_.size();
+        diagnostics_.nowSeconds = nowSeconds;
     }
 }
 
 void LanWorkspaceShareService::HandleClientConnection(SocketHandle clientSocket) {
     ConfigureSocketTimeouts(clientSocket, 4000);
     const NativeSocket nativeClientSocket = ToNativeSocket(clientSocket);
+    {
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.incomingTransferRequests += 1;
+        diagnostics_.nowSeconds = NowSeconds();
+    }
 
     std::string requestLine;
     if (!RecvLine(nativeClientSocket, &requestLine, kMaxControlLineBytes)) {
         CloseSocketHandle(&clientSocket);
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.incomingTransferFailures += 1;
+        diagnostics_.lastError = "Incoming transfer failed: request line receive error.";
+        diagnostics_.nowSeconds = NowSeconds();
         return;
     }
 
@@ -775,6 +991,10 @@ void LanWorkspaceShareService::HandleClientConnection(SocketHandle clientSocket)
         static constexpr std::string_view kBadRequest = "JITGL_LAN_V1|ERR|bad_request\n";
         (void)SendAll(nativeClientSocket, kBadRequest.data(), kBadRequest.size());
         CloseSocketHandle(&clientSocket);
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.incomingTransferFailures += 1;
+        diagnostics_.lastError = "Incoming transfer failed: malformed GET request.";
+        diagnostics_.nowSeconds = NowSeconds();
         return;
     }
 
@@ -790,6 +1010,10 @@ void LanWorkspaceShareService::HandleClientConnection(SocketHandle clientSocket)
         static constexpr std::string_view kMissing = "JITGL_LAN_V1|ERR|not_found\n";
         (void)SendAll(nativeClientSocket, kMissing.data(), kMissing.size());
         CloseSocketHandle(&clientSocket);
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.incomingTransferFailures += 1;
+        diagnostics_.lastError = "Incoming transfer failed: requested offer payload not found.";
+        diagnostics_.nowSeconds = NowSeconds();
         return;
     }
 
@@ -797,10 +1021,20 @@ void LanWorkspaceShareService::HandleClientConnection(SocketHandle clientSocket)
     if (!SendAll(nativeClientSocket, header.data(), header.size()) ||
         !SendAll(nativeClientSocket, payload.data(), payload.size())) {
         CloseSocketHandle(&clientSocket);
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.incomingTransferFailures += 1;
+        diagnostics_.lastError = "Incoming transfer failed: payload send error.";
+        diagnostics_.nowSeconds = NowSeconds();
         return;
     }
 
     CloseSocketHandle(&clientSocket);
+    {
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.incomingTransferSuccesses += 1;
+        diagnostics_.lastError.clear();
+        diagnostics_.nowSeconds = NowSeconds();
+    }
 }
 
 void LanWorkspaceShareService::SendPendingUdpPackets() {
@@ -808,10 +1042,32 @@ void LanWorkspaceShareService::SendPendingUdpPackets() {
     {
         std::scoped_lock lock(stateMutex_);
         packets.swap(pendingUdpPackets_);
+        diagnostics_.pendingOutgoingPackets = pendingUdpPackets_.size();
+        diagnostics_.nowSeconds = NowSeconds();
     }
 
+    std::uint64_t sentCount = 0;
+    std::uint64_t failedCount = 0;
+    const double nowSeconds = NowSeconds();
     for (const auto& packet : packets) {
-        (void)SendUdpPacket(udpSocket_, packet.payload, packet.destinationIpAddress, packet.broadcast);
+        if (SendUdpPacket(udpSocket_, packet.payload, packet.destinationIpAddress, packet.broadcast)) {
+            sentCount += 1;
+        } else {
+            failedCount += 1;
+        }
+    }
+
+    if (sentCount > 0 || failedCount > 0) {
+        std::scoped_lock lock(stateMutex_);
+        diagnostics_.udpPacketsSent += sentCount;
+        diagnostics_.udpPacketsSendFailed += failedCount;
+        if (sentCount > 0) {
+            diagnostics_.lastUdpSentSeconds = nowSeconds;
+        }
+        if (failedCount > 0 && diagnostics_.lastError.empty()) {
+            diagnostics_.lastError = "Some queued UDP packets failed to send.";
+        }
+        diagnostics_.nowSeconds = nowSeconds;
     }
 }
 
@@ -822,8 +1078,23 @@ void LanWorkspaceShareService::SendHelloBroadcast() {
     }
     const std::string message = std::string(kProtocolPrefix) + "|HELLO|" + localPeerId_ + "|" +
                                 SanitizeField(localDisplayName_) + "|" + std::to_string(transferPort);
-    (void)SendUdpPacket(udpSocket_, message, "", true);
-    (void)SendUdpPacket(udpSocket_, message, std::string(kDiscoveryMulticastAddress), false);
+    const bool broadcastSent = SendUdpPacket(udpSocket_, message, "", true);
+    const bool multicastSent = SendUdpPacket(udpSocket_, message, std::string(kDiscoveryMulticastAddress), false);
+    const std::uint64_t sentCount = static_cast<std::uint64_t>(broadcastSent) + static_cast<std::uint64_t>(multicastSent);
+    const std::uint64_t failedCount = 2u - sentCount;
+
+    std::scoped_lock lock(stateMutex_);
+    diagnostics_.udpPacketsSent += sentCount;
+    diagnostics_.udpPacketsSendFailed += failedCount;
+    if (sentCount > 0) {
+        diagnostics_.helloSentCount += 1;
+        diagnostics_.lastHelloSentSeconds = NowSeconds();
+        diagnostics_.lastUdpSentSeconds = diagnostics_.lastHelloSentSeconds;
+        diagnostics_.lastError.clear();
+    } else {
+        diagnostics_.lastError = "HELLO announcements failed to send.";
+    }
+    diagnostics_.nowSeconds = NowSeconds();
 }
 
 void LanWorkspaceShareService::PruneExpiredState(double nowSeconds) {
@@ -843,4 +1114,8 @@ void LanWorkspaceShareService::PruneExpiredState(double nowSeconds) {
                   [&](const auto& entry) {
                       return (nowSeconds - entry.second.createdSeconds) > kOfferPayloadTimeoutSeconds;
                   });
+    diagnostics_.peersKnown = peersById_.size();
+    diagnostics_.pendingIncomingOffers = incomingOffers_.size();
+    diagnostics_.cachedSharedPayloads = sharedPayloadsByOfferId_.size();
+    diagnostics_.nowSeconds = nowSeconds;
 }
