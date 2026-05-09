@@ -907,7 +907,12 @@ void EditorUI::HandleGlobalShortcuts() {
                        [this]() { ToggleTheme(); });
     TriggerChordAction(canUseCtrlShortcuts && IsKeyDown(window, GLFW_KEY_F),
                        &ctrlFullscreenChordHeld_,
-                       [this]() { rendererFullscreen_ = !rendererFullscreen_; });
+                       [this]() {
+                           rendererFullscreen_ = !rendererFullscreen_;
+                           if (!rendererFullscreen_) {
+                               focusEditorRequested_ = true;
+                           }
+                       });
 }
 
 void EditorUI::ToggleActiveWorkspaceDocument() {
@@ -1328,6 +1333,12 @@ bool EditorUI::DrawEditorTab(Document& doc,
         return true;
     }
 
+    if (focusEditorRequested_ && doc.filepath == activeDocumentPath_) {
+        // We set the focus to the next item (the child window inside TextEditor::Render)
+        ImGui::SetKeyboardFocusHere();
+        focusEditorRequested_ = false;
+    }
+
     if (!pendingDocumentSelectionPath_.empty() && doc.filepath == pendingDocumentSelectionPath_) {
         *pendingSelectionConsumed = true;
     }
@@ -1402,6 +1413,9 @@ void EditorUI::DrawEditorTabsArea() {
 }
 
 void EditorUI::DrawTextEditorPane() {
+    if (focusEditorRequested_) {
+        ImGui::SetNextWindowFocus();
+    }
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar;
     ImGui::Begin("Code Editor", nullptr, flags);
 

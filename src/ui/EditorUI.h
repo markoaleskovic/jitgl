@@ -189,6 +189,7 @@ private:
     UiTheme currentTheme_ = UiTheme::Dark;
     bool themeApplyPending_ = false;
     bool rendererFullscreen_ = false;
+    bool focusEditorRequested_ = false;
 
     std::string welcomeMarkdown_;
     std::string guideMarkdown_;
