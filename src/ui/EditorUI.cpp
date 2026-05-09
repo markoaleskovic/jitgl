@@ -1437,6 +1437,20 @@ void EditorUI::DrawNetworkDiagnosticsWindow() {
     ImGui::Text("Multicast Group: %s", networkDiagnostics_.discoveryMulticastAddress.c_str());
     ImGui::Text("Local Name: %s", networkDiagnostics_.localDisplayName.c_str());
     ImGui::Text("Local Peer ID: %s", networkDiagnostics_.localPeerId.c_str());
+    if (networkDiagnostics_.localIpv4Addresses.empty()) {
+        ImGui::TextUnformatted("Local IPv4: -");
+    } else {
+        for (const auto& localIp : networkDiagnostics_.localIpv4Addresses) {
+            ImGui::Text("Local IPv4: %s", localIp.c_str());
+        }
+    }
+    if (networkDiagnostics_.directedBroadcastAddresses.empty()) {
+        ImGui::TextUnformatted("Directed Broadcast Targets: -");
+    } else {
+        for (const auto& directedBroadcast : networkDiagnostics_.directedBroadcastAddresses) {
+            ImGui::Text("Directed Broadcast Target: %s", directedBroadcast.c_str());
+        }
+    }
 
     const double nowSeconds = networkDiagnostics_.nowSeconds;
     const double helloSentAge = AgeSeconds(nowSeconds, networkDiagnostics_.lastHelloSentSeconds);

@@ -170,7 +170,7 @@ if(TARGET libclang)
 endif()
 
 if(WIN32)
-    target_link_libraries(jit_ide PRIVATE ws2_32)
+    target_link_libraries(jit_ide PRIVATE ws2_32 iphlpapi)
 endif()
 
 if(UNIX AND NOT APPLE)

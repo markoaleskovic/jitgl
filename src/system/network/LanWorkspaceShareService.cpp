@@ -8,7 +8,9 @@
 #include <limits>
 #include <random>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
+#include <vector>
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -16,8 +18,11 @@
 #endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <iphlpapi.h>
 #else
 #include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 #include <netinet/in.h>
 #include <sys/select.h>
 #include <sys/socket.h>
@@ -61,6 +66,11 @@ namespace {
         SocketHandle socket = kInvalidSocketHandle;
         uint16_t boundPort = 0;
         std::string error;
+    };
+
+    struct InterfaceDiscoveryResult {
+        std::vector<std::string> localIpv4Addresses;
+        std::vector<std::string> directedBroadcastAddresses;
     };
 
     NativeSocket ToNativeSocket(SocketHandle socketHandle) {
@@ -240,6 +250,119 @@ namespace {
         return true;
     }
 
+    std::string IPv4ToString(in_addr address) {
+        std::array<char, INET_ADDRSTRLEN> buffer{};
+        if (inet_ntop(AF_INET, &address, buffer.data(), static_cast<SocketLen>(buffer.size())) == nullptr) {
+            return {};
+        }
+        return std::string(buffer.data());
+    }
+
+    InterfaceDiscoveryResult DiscoverInterfaceTargets() {
+        InterfaceDiscoveryResult result;
+        std::unordered_set<std::string> seenLocal;
+        std::unordered_set<std::string> seenBroadcast;
+
+#if defined(_WIN32)
+        ULONG adapterBufferSize = 16u * 1024u;
+        std::vector<unsigned char> adapterBuffer(adapterBufferSize);
+        auto* adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(adapterBuffer.data());
+        ULONG flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+        ULONG status = GetAdaptersAddresses(AF_INET, flags, nullptr, adapters, &adapterBufferSize);
+        if (status == ERROR_BUFFER_OVERFLOW) {
+            adapterBuffer.resize(adapterBufferSize);
+            adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(adapterBuffer.data());
+            status = GetAdaptersAddresses(AF_INET, flags, nullptr, adapters, &adapterBufferSize);
+        }
+
+        if (status == NO_ERROR) {
+            for (IP_ADAPTER_ADDRESSES* adapter = adapters; adapter != nullptr; adapter = adapter->Next) {
+                if (adapter->OperStatus != IfOperStatusUp || adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK) {
+                    continue;
+                }
+                for (IP_ADAPTER_UNICAST_ADDRESS* unicast = adapter->FirstUnicastAddress;
+                     unicast != nullptr;
+                     unicast = unicast->Next) {
+                    if (unicast->Address.lpSockaddr == nullptr || unicast->Address.lpSockaddr->sa_family != AF_INET) {
+                        continue;
+                    }
+
+                    const auto* sockaddrV4 = reinterpret_cast<sockaddr_in*>(unicast->Address.lpSockaddr);
+                    const in_addr ipAddress = sockaddrV4->sin_addr;
+                    const std::string localIp = IPv4ToString(ipAddress);
+                    if (!localIp.empty() && seenLocal.insert(localIp).second) {
+                        result.localIpv4Addresses.push_back(localIp);
+                    }
+
+                    const ULONG prefixLength = std::min<ULONG>(unicast->OnLinkPrefixLength, 32u);
+                    const std::uint32_t ipHost = ntohl(ipAddress.s_addr);
+                    const std::uint32_t maskHost = (prefixLength == 0) ? 0u : (0xFFFFFFFFu << (32u - prefixLength));
+                    const std::uint32_t broadcastHost = (ipHost & maskHost) | (~maskHost);
+                    in_addr broadcastAddress{};
+                    broadcastAddress.s_addr = htonl(broadcastHost);
+                    const std::string broadcastIp = IPv4ToString(broadcastAddress);
+                    if (!broadcastIp.empty() &&
+                        broadcastIp != "255.255.255.255" &&
+                        seenBroadcast.insert(broadcastIp).second) {
+                        result.directedBroadcastAddresses.push_back(broadcastIp);
+                    }
+                }
+            }
+        }
+#else
+        ifaddrs* interfaces = nullptr;
+        if (getifaddrs(&interfaces) == 0 && interfaces != nullptr) {
+            for (ifaddrs* entry = interfaces; entry != nullptr; entry = entry->ifa_next) {
+                if (entry->ifa_addr == nullptr || entry->ifa_addr->sa_family != AF_INET) {
+                    continue;
+                }
+                const unsigned int flags = entry->ifa_flags;
+                if ((flags & IFF_UP) == 0 || (flags & IFF_LOOPBACK) != 0) {
+                    continue;
+                }
+
+                const auto* address = reinterpret_cast<const sockaddr_in*>(entry->ifa_addr);
+                const in_addr ipAddress = address->sin_addr;
+                const std::string localIp = IPv4ToString(ipAddress);
+                if (!localIp.empty() && seenLocal.insert(localIp).second) {
+                    result.localIpv4Addresses.push_back(localIp);
+                }
+
+                in_addr broadcastAddress{};
+                bool hasBroadcast = false;
+                if ((flags & IFF_BROADCAST) != 0 &&
+                    entry->ifa_broadaddr != nullptr &&
+                    entry->ifa_broadaddr->sa_family == AF_INET) {
+                    const auto* broadcastSockAddr = reinterpret_cast<const sockaddr_in*>(entry->ifa_broadaddr);
+                    broadcastAddress = broadcastSockAddr->sin_addr;
+                    hasBroadcast = true;
+                } else if (entry->ifa_netmask != nullptr && entry->ifa_netmask->sa_family == AF_INET) {
+                    const auto* maskSockAddr = reinterpret_cast<const sockaddr_in*>(entry->ifa_netmask);
+                    const std::uint32_t ipHost = ntohl(ipAddress.s_addr);
+                    const std::uint32_t maskHost = ntohl(maskSockAddr->sin_addr.s_addr);
+                    const std::uint32_t broadcastHost = (ipHost & maskHost) | (~maskHost);
+                    broadcastAddress.s_addr = htonl(broadcastHost);
+                    hasBroadcast = true;
+                }
+
+                if (hasBroadcast) {
+                    const std::string broadcastIp = IPv4ToString(broadcastAddress);
+                    if (!broadcastIp.empty() &&
+                        broadcastIp != "255.255.255.255" &&
+                        seenBroadcast.insert(broadcastIp).second) {
+                        result.directedBroadcastAddresses.push_back(broadcastIp);
+                    }
+                }
+            }
+            freeifaddrs(interfaces);
+        }
+#endif
+
+        std::ranges::sort(result.localIpv4Addresses);
+        std::ranges::sort(result.directedBroadcastAddresses);
+        return result;
+    }
+
     UdpDiscoverySocketResult CreateUdpDiscoverySocket() {
         UdpDiscoverySocketResult result;
         const NativeSocket sock = socket(AF_INET, SOCK_DGRAM, 0);
@@ -250,6 +373,9 @@ namespace {
 
         int enable = 1;
         (void)SetSocketOption(sock, SOL_SOCKET, SO_REUSEADDR, enable);
+#if defined(SO_REUSEPORT)
+        (void)SetSocketOption(sock, SOL_SOCKET, SO_REUSEPORT, enable);
+#endif
         (void)SetSocketOption(sock, SOL_SOCKET, SO_BROADCAST, enable);
 
         sockaddr_in bindAddress{};
@@ -291,6 +417,9 @@ namespace {
 
         int enable = 1;
         (void)SetSocketOption(sock, SOL_SOCKET, SO_REUSEADDR, enable);
+#if defined(SO_REUSEPORT)
+        (void)SetSocketOption(sock, SOL_SOCKET, SO_REUSEPORT, enable);
+#endif
 
         auto bindOnPort = [&](uint16_t port) {
             sockaddr_in bindAddress{};
@@ -430,6 +559,8 @@ bool LanWorkspaceShareService::Start() {
     localDisplayName_ = HostnameOrDefault();
 #endif
 
+    const InterfaceDiscoveryResult interfaces = DiscoverInterfaceTargets();
+
     {
         std::scoped_lock lock(stateMutex_);
         diagnostics_ = LanNetworkDiagnostics{};
@@ -439,6 +570,10 @@ bool LanWorkspaceShareService::Start() {
         diagnostics_.localPeerId = localPeerId_;
         diagnostics_.localDisplayName = localDisplayName_;
         diagnostics_.discoveryMulticastAddress = std::string(kDiscoveryMulticastAddress);
+        localIpv4Addresses_ = interfaces.localIpv4Addresses;
+        directedBroadcastTargets_ = interfaces.directedBroadcastAddresses;
+        diagnostics_.localIpv4Addresses = localIpv4Addresses_;
+        diagnostics_.directedBroadcastAddresses = directedBroadcastTargets_;
 #if defined(_WIN32)
         diagnostics_.winsockInitialized = winsockInitialized_;
 #endif
@@ -621,6 +756,8 @@ LanNetworkDiagnostics LanWorkspaceShareService::SnapshotDiagnostics() const {
     snapshot.pendingIncomingOffers = incomingOffers_.size();
     snapshot.pendingOutgoingPackets = pendingUdpPackets_.size();
     snapshot.cachedSharedPayloads = sharedPayloadsByOfferId_.size();
+    snapshot.localIpv4Addresses = localIpv4Addresses_;
+    snapshot.directedBroadcastAddresses = directedBroadcastTargets_;
     return snapshot;
 }
 
@@ -651,6 +788,7 @@ bool LanWorkspaceShareService::ShareWorkspacePackage(const std::string& workspac
                                     safeWorkspaceName + "|" + std::to_string(transferPort);
 
         if (shareToAll) {
+            std::unordered_set<std::string> uniqueTargets;
             broadcastPacket = OutboundUdpPacket{ message, "", true };
             pendingUdpPackets_.push_back(std::move(broadcastPacket));
             pendingUdpPackets_.push_back(OutboundUdpPacket{
@@ -658,6 +796,16 @@ bool LanWorkspaceShareService::ShareWorkspacePackage(const std::string& workspac
                 std::string(kDiscoveryMulticastAddress),
                 false
             });
+            for (const auto& directedBroadcastTarget : directedBroadcastTargets_) {
+                if (directedBroadcastTarget.empty() || !uniqueTargets.insert(directedBroadcastTarget).second) {
+                    continue;
+                }
+                pendingUdpPackets_.push_back(OutboundUdpPacket{
+                    message,
+                    directedBroadcastTarget,
+                    false
+                });
+            }
             diagnostics_.pendingOutgoingPackets = pendingUdpPackets_.size();
             diagnostics_.cachedSharedPayloads = sharedPayloadsByOfferId_.size();
             diagnostics_.lastError.clear();
@@ -1078,10 +1226,29 @@ void LanWorkspaceShareService::SendHelloBroadcast() {
     }
     const std::string message = std::string(kProtocolPrefix) + "|HELLO|" + localPeerId_ + "|" +
                                 SanitizeField(localDisplayName_) + "|" + std::to_string(transferPort);
-    const bool broadcastSent = SendUdpPacket(udpSocket_, message, "", true);
-    const bool multicastSent = SendUdpPacket(udpSocket_, message, std::string(kDiscoveryMulticastAddress), false);
-    const std::uint64_t sentCount = static_cast<std::uint64_t>(broadcastSent) + static_cast<std::uint64_t>(multicastSent);
-    const std::uint64_t failedCount = 2u - sentCount;
+    std::uint64_t sentCount = 0;
+    std::uint64_t failedCount = 0;
+
+    if (SendUdpPacket(udpSocket_, message, "", true)) {
+        sentCount += 1;
+    } else {
+        failedCount += 1;
+    }
+    if (SendUdpPacket(udpSocket_, message, std::string(kDiscoveryMulticastAddress), false)) {
+        sentCount += 1;
+    } else {
+        failedCount += 1;
+    }
+    for (const auto& directedBroadcastTarget : directedBroadcastTargets_) {
+        if (directedBroadcastTarget.empty()) {
+            continue;
+        }
+        if (SendUdpPacket(udpSocket_, message, directedBroadcastTarget, false)) {
+            sentCount += 1;
+        } else {
+            failedCount += 1;
+        }
+    }
 
     std::scoped_lock lock(stateMutex_);
     diagnostics_.udpPacketsSent += sentCount;

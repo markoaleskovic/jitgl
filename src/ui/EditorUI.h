@@ -64,6 +64,8 @@ public:
         std::string discoveryMulticastAddress;
         std::string lastError;
         std::string lastUdpSenderIp;
+        std::vector<std::string> localIpv4Addresses;
+        std::vector<std::string> directedBroadcastAddresses;
 
         double nowSeconds = 0.0;
         double lastUdpSentSeconds = 0.0;
