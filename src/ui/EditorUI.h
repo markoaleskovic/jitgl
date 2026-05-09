@@ -34,6 +34,18 @@ public:
         std::string lang;
     };
 
+    struct NetworkPeer {
+        std::string id;
+        std::string displayName;
+        std::string ipAddress;
+    };
+
+    struct IncomingWorkspaceShareOffer {
+        std::string offerId;
+        std::string workspaceName;
+        std::string senderName;
+    };
+
     EditorUI();
     ~EditorUI();
 
@@ -59,11 +71,15 @@ public:
     void SetWorkspaceLineAppendedCallback(std::function<void(const std::string&, const std::string&, bool)> cb);
     void SetExportWorkspaceCallback(std::function<bool(const std::string&)> cb);
     void SetImportWorkspaceCallback(std::function<bool(const std::string&)> cb);
+    void SetShareWorkspaceCallback(std::function<void(const std::vector<std::string>&, bool)> cb);
+    void SetWorkspaceShareDecisionCallback(std::function<void(const std::string&, bool)> cb);
     void SetWorkspaces(const std::vector<std::string>& workspaceNames, const std::string& activeWorkspace);
     void SetActiveWorkspace(const std::string& workspaceName);
     void SetWorkspaceOutputHistory(const std::string& workspaceName,
                                    std::vector<std::string> consoleHistory,
                                    std::vector<std::string> logHistory);
+    void SetNetworkPeers(std::vector<NetworkPeer> peers);
+    void QueueIncomingWorkspaceShareOffer(IncomingWorkspaceShareOffer offer);
     void SetRendererTexture(unsigned int texture, int width, int height);
     void SetCompilationStatus(bool isCompiling, bool hasError, bool isStalled = false);
     void SetupDarkTheme() const;
@@ -105,6 +121,14 @@ private:
     std::function<void(const std::string&, const std::string&, bool)> onWorkspaceLineAppended_;
     std::function<bool(const std::string&)> onExportWorkspace_;
     std::function<bool(const std::string&)> onImportWorkspace_;
+    std::function<void(const std::vector<std::string>&, bool)> onShareWorkspace_;
+    std::function<void(const std::string&, bool)> onWorkspaceShareDecision_;
+
+    std::vector<NetworkPeer> networkPeers_;
+    std::unordered_map<std::string, bool> selectedNetworkPeers_;
+    std::vector<IncomingWorkspaceShareOffer> pendingWorkspaceShareOffers_;
+    bool openShareWorkspacePopup_ = false;
+    bool workspaceSharePromptOpen_ = false;
 
     std::string activeDocumentPath_;
     // Used once to force-select a tab after workspace/document changes.
@@ -132,6 +156,9 @@ private:
     void DrawHelpMenu();
     void OpenCreateWorkspacePopupIfRequested();
     void DrawCreateWorkspacePopup();
+    void OpenShareWorkspacePopupIfRequested();
+    void DrawShareWorkspacePopup();
+    void DrawIncomingWorkspaceSharePopup();
     void DrawMenuWorkspaceLabel(const std::vector<std::string>& workspaceNamesSnapshot);
     void ApplyPendingWorkspaceAction(const std::string& pendingWorkspaceDelete,
                                      const std::string& pendingWorkspaceSwitch);

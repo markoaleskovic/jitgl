@@ -239,6 +239,46 @@ namespace {
         return payload;
     }
 
+    std::optional<ImportedWorkspacePayload> ParseWorkspacePackage(std::istream* stream) {
+        if (stream == nullptr) {
+            return std::nullopt;
+        }
+
+        std::string line;
+        if (!ReadTrimmedLine(stream, &line)) {
+            return std::nullopt;
+        }
+
+        if (line == kWorkspaceExportMagicV2) {
+            return ParseWorkspacePayloadV2(stream);
+        }
+        if (line == kWorkspaceExportMagicV1) {
+            return ParseWorkspacePayloadV1(stream);
+        }
+        return std::nullopt;
+    }
+
+    std::optional<std::string> BuildWorkspacePackageData(const std::string& workspaceName,
+                                                         const std::string& cppSource,
+                                                         const std::string& shaderSource) {
+        if (workspaceName.empty()) {
+            return std::nullopt;
+        }
+
+        std::ostringstream out;
+        out << kWorkspaceExportMagicV2 << '\n';
+        out << kWorkspaceNamePrefixV2 << workspaceName << '\n';
+        out << kCppSizePrefix << cppSource.size() << '\n';
+        out << kShaderSizePrefix << shaderSource.size() << '\n';
+        out << '\n';
+        out.write(cppSource.data(), static_cast<std::streamsize>(cppSource.size()));
+        out.write(shaderSource.data(), static_cast<std::streamsize>(shaderSource.size()));
+        if (!out.good()) {
+            return std::nullopt;
+        }
+        return out.str();
+    }
+
     std::string DefaultSceneTemplate() {
         return R"(// Workspace C++ entry points:
 // init(), update(), renderFrame(), shutdown()
@@ -670,15 +710,8 @@ bool WorkspaceManager::AppendLogFileLine(const std::string& logPath, const std::
 }
 
 bool WorkspaceManager::ExportWorkspace(const std::string& workspaceName, const std::string& targetPath) const {
-    auto descriptor = GetWorkspace(workspaceName);
-    if (!descriptor) {
-        return false;
-    }
-
-    auto cppSource = ReadFile(descriptor->cppPath);
-    auto shaderSource = ReadFile(descriptor->shaderPath);
-
-    if (!cppSource || !shaderSource) {
+    auto packageData = ExportWorkspacePackage(workspaceName);
+    if (!packageData.has_value()) {
         return false;
     }
 
@@ -691,14 +724,7 @@ bool WorkspaceManager::ExportWorkspace(const std::string& workspaceName, const s
     if (!file.is_open()) {
         return false;
     }
-
-    file << kWorkspaceExportMagicV2 << '\n';
-    file << kWorkspaceNamePrefixV2 << workspaceName << '\n';
-    file << kCppSizePrefix << cppSource->size() << '\n';
-    file << kShaderSizePrefix << shaderSource->size() << '\n';
-    file << '\n';
-    file.write(cppSource->data(), static_cast<std::streamsize>(cppSource->size()));
-    file.write(shaderSource->data(), static_cast<std::streamsize>(shaderSource->size()));
+    file.write(packageData->data(), static_cast<std::streamsize>(packageData->size()));
 
     return file.good();
 }
@@ -709,25 +735,42 @@ std::optional<std::string> WorkspaceManager::ImportWorkspace(const std::string& 
         return std::nullopt;
     }
 
-    std::string line;
-    if (!ReadTrimmedLine(&file, &line)) {
+    const std::string packageData((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    if (packageData.empty()) {
         return std::nullopt;
     }
 
-    std::optional<ImportedWorkspacePayload> payload;
-    if (line == kWorkspaceExportMagicV2) {
-        payload = ParseWorkspacePayloadV2(&file);
-    } else if (line == kWorkspaceExportMagicV1) {
-        payload = ParseWorkspacePayloadV1(&file);
-    } else {
+    return ImportWorkspacePackage(packageData, fs::path(sourcePath).stem().string());
+}
+
+std::optional<std::string> WorkspaceManager::ExportWorkspacePackage(const std::string& workspaceName) const {
+    auto descriptor = GetWorkspace(workspaceName);
+    if (!descriptor) {
         return std::nullopt;
     }
+
+    auto cppSource = ReadFile(descriptor->cppPath);
+    auto shaderSource = ReadFile(descriptor->shaderPath);
+    if (!cppSource || !shaderSource) {
+        return std::nullopt;
+    }
+
+    return BuildWorkspacePackageData(workspaceName, *cppSource, *shaderSource);
+}
+
+std::optional<std::string> WorkspaceManager::ImportWorkspacePackage(const std::string& packageData,
+                                                                    const std::string& sourceHint) const {
+    if (packageData.empty()) {
+        return std::nullopt;
+    }
+
+    std::istringstream stream(packageData);
+    auto payload = ParseWorkspacePackage(&stream);
     if (!payload.has_value()) {
         return std::nullopt;
     }
 
-    const std::string fallbackName = fs::path(sourcePath).stem().string();
-    const std::string requestedName = payload->workspaceName.empty() ? fallbackName : payload->workspaceName;
+    const std::string requestedName = payload->workspaceName.empty() ? sourceHint : payload->workspaceName;
     std::string importBaseName = SanitizeWorkspaceName(requestedName);
     if (importBaseName.empty()) {
         importBaseName = kImportedWorkspaceFallbackName;

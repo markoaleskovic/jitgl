@@ -16,6 +16,7 @@
 #include "ui/EditorUI.h"
 #include "runtime/EngineContext.h"
 #include "jit/JitEngine.h"
+#include "system/network/LanWorkspaceShareService.h"
 
 struct GLFWwindow;
 class FileWatcher;
@@ -41,6 +42,7 @@ private:
 
     std::unique_ptr<ConsoleRedirectSession> consoleRedirect_;
     std::unique_ptr<WorkspaceManager> workspaceManager_;
+    std::unique_ptr<LanWorkspaceShareService> lanShare_;
 
     // Main-thread runtime state
     EngineContext ctx_;
@@ -66,6 +68,7 @@ private:
     std::vector<std::string> workspaceOrder_;
     std::unordered_map<std::string, std::string> fileToWorkspace_;
     std::unordered_map<std::string, bool> workspaceDirty_;
+    std::unordered_map<std::string, LanWorkspaceOffer> pendingLanOffersById_;
 
     std::unordered_map<std::string, std::string> latestSources_;
     // Per-workspace "earliest compile time" used for debounce/backoff scheduling.
@@ -132,6 +135,11 @@ private:
     void SwitchToWorkspace(const std::string& workspaceName, bool focusCppDocument);
     bool ExportActiveWorkspace(const std::string& targetPath) const;
     bool ImportWorkspace(const std::string& sourcePath);
+    bool InitLanShare();
+    void UpdateLanShareUiState();
+    void HandleShareWorkspaceRequest(const std::vector<std::string>& targetPeerIds, bool shareToAll);
+    void HandleWorkspaceShareDecision(const std::string& offerId, bool accepted);
+    bool ImportWorkspacePackage(const std::string& packageData, const std::string& sourceHint);
     std::string BuildCompileSourceForWorkspace(const std::string& workspaceName) const;
     void QueueCompileForWorkspace(const std::string& workspaceName, double nowSeconds, bool immediate);
     void UpdateWorkspaceSourceFromDocument(const std::string& workspaceName,

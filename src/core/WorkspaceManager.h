@@ -50,6 +50,9 @@ public:
 
     bool ExportWorkspace(const std::string& workspaceName, const std::string& targetPath) const;
     std::optional<std::string> ImportWorkspace(const std::string& sourcePath) const;
+    std::optional<std::string> ExportWorkspacePackage(const std::string& workspaceName) const;
+    std::optional<std::string> ImportWorkspacePackage(const std::string& packageData,
+                                                      const std::string& sourceHint = {}) const;
 
 private:
     std::optional<WorkspaceDescriptor> BuildDescriptor(const std::string& workspaceName) const;

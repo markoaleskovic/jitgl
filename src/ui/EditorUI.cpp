@@ -18,6 +18,7 @@ namespace {
     constexpr const char* GLSL_VERSION = "#version 330 core";
     constexpr std::size_t MAX_CONSOLE_LINES = 2000;
     constexpr std::size_t MAX_LOG_LINES = 2000;
+    constexpr std::size_t MAX_PENDING_SHARE_OFFERS = 64;
     constexpr const char* FONT_PATH = "assets/JetBrainsMono-Regular.ttf";
     constexpr float BASE_FONT_SIZE = 16.0f;
     constexpr const char* FALLBACK_WORKSPACE_NAME = "default";
@@ -423,6 +424,7 @@ void EditorUI::Draw() {
         DrawConsolePane();
     }
 
+    DrawIncomingWorkspaceSharePopup();
     DrawWelcomePopup();
     DrawRuntimeGuidePopup();
 }
@@ -547,6 +549,40 @@ void EditorUI::SetExportWorkspaceCallback(std::function<bool(const std::string&)
 
 void EditorUI::SetImportWorkspaceCallback(std::function<bool(const std::string&)> cb) {
     onImportWorkspace_ = std::move(cb);
+}
+
+void EditorUI::SetShareWorkspaceCallback(std::function<void(const std::vector<std::string>&, bool)> cb) {
+    onShareWorkspace_ = std::move(cb);
+}
+
+void EditorUI::SetWorkspaceShareDecisionCallback(std::function<void(const std::string&, bool)> cb) {
+    onWorkspaceShareDecision_ = std::move(cb);
+}
+
+void EditorUI::SetNetworkPeers(std::vector<NetworkPeer> peers) {
+    networkPeers_ = std::move(peers);
+
+    std::erase_if(selectedNetworkPeers_,
+                  [this](const auto& entry) {
+                      return std::ranges::none_of(networkPeers_,
+                                                  [&](const NetworkPeer& peer) { return peer.id == entry.first; });
+                  });
+}
+
+void EditorUI::QueueIncomingWorkspaceShareOffer(IncomingWorkspaceShareOffer offer) {
+    if (offer.offerId.empty()) {
+        return;
+    }
+    const bool alreadyQueued = std::ranges::any_of(pendingWorkspaceShareOffers_,
+                                                    [&](const IncomingWorkspaceShareOffer& existing) {
+                                                        return existing.offerId == offer.offerId;
+                                                    });
+    if (!alreadyQueued) {
+        if (pendingWorkspaceShareOffers_.size() >= MAX_PENDING_SHARE_OFFERS) {
+            pendingWorkspaceShareOffers_.erase(pendingWorkspaceShareOffers_.begin());
+        }
+        pendingWorkspaceShareOffers_.push_back(std::move(offer));
+    }
 }
 
 void EditorUI::SetWorkspaces(const std::vector<std::string>& workspaceNames, const std::string& activeWorkspace) {
@@ -1044,6 +1080,9 @@ void EditorUI::DrawFileMenu(const std::vector<std::string>& workspaceNamesSnapsh
 
     (void)ImGui::MenuItem("Save", "Ctrl+S");
     ImGui::Separator();
+    if (ImGui::MenuItem("Share Workspace...")) {
+        openShareWorkspacePopup_ = true;
+    }
     if (ImGui::MenuItem("Export Workspace...")) {
         const std::string currentWorkspace = ResolveCurrentWorkspaceName();
         const std::string defaultExportFilename = currentWorkspace + ".jws";
@@ -1216,6 +1255,135 @@ void EditorUI::DrawCreateWorkspacePopup() {
     ImGui::EndPopup();
 }
 
+void EditorUI::OpenShareWorkspacePopupIfRequested() {
+    if (!openShareWorkspacePopup_) {
+        return;
+    }
+
+    openShareWorkspacePopup_ = false;
+    selectedNetworkPeers_.clear();
+    ImGui::OpenPopup("Share Workspace");
+}
+
+void EditorUI::DrawShareWorkspacePopup() {
+    const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowViewport(mainViewport->ID);
+    ImGui::SetNextWindowPos(mainViewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    const ImGuiWindowFlags sharePopupFlags = ImGuiWindowFlags_AlwaysAutoResize |
+                                             ImGuiWindowFlags_NoResize |
+                                             ImGuiWindowFlags_NoMove;
+    if (!ImGui::BeginPopupModal("Share Workspace", nullptr, sharePopupFlags)) {
+        return;
+    }
+
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return;
+    }
+
+    ImGui::TextUnformatted("Choose computers on your LAN to share the active workspace.");
+    ImGui::Separator();
+
+    if (networkPeers_.empty()) {
+        ImGui::TextDisabled("No peers discovered yet.");
+    } else if (ImGui::BeginChild("ShareWorkspacePeerList", ImVec2(420.0f, 180.0f), true)) {
+        for (const auto& peer : networkPeers_) {
+            bool selected = selectedNetworkPeers_[peer.id];
+            const std::string label = peer.displayName + " (" + peer.ipAddress + ")";
+            if (ImGui::Checkbox(label.c_str(), &selected)) {
+                selectedNetworkPeers_[peer.id] = selected;
+            }
+        }
+        ImGui::EndChild();
+    }
+
+    std::vector<std::string> selectedPeerIds;
+    selectedPeerIds.reserve(selectedNetworkPeers_.size());
+    for (const auto& entry : selectedNetworkPeers_) {
+        if (entry.second) {
+            selectedPeerIds.push_back(entry.first);
+        }
+    }
+
+    if (selectedPeerIds.empty()) {
+        ImGui::BeginDisabled();
+    }
+    if (ImGui::Button("Share Selected")) {
+        if (onShareWorkspace_) {
+            onShareWorkspace_(selectedPeerIds, false);
+        }
+        ImGui::CloseCurrentPopup();
+    }
+    if (selectedPeerIds.empty()) {
+        ImGui::EndDisabled();
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Share To All")) {
+        if (onShareWorkspace_) {
+            onShareWorkspace_({}, true);
+        }
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel")) {
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
+}
+
+void EditorUI::DrawIncomingWorkspaceSharePopup() {
+    if (pendingWorkspaceShareOffers_.empty()) {
+        workspaceSharePromptOpen_ = false;
+        return;
+    }
+
+    if (!workspaceSharePromptOpen_) {
+        ImGui::OpenPopup("Incoming Workspace Share");
+        workspaceSharePromptOpen_ = true;
+    }
+
+    const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowViewport(mainViewport->ID);
+    ImGui::SetNextWindowPos(mainViewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    const ImGuiWindowFlags incomingPopupFlags = ImGuiWindowFlags_AlwaysAutoResize |
+                                                ImGuiWindowFlags_NoResize |
+                                                ImGuiWindowFlags_NoMove;
+    if (!ImGui::BeginPopupModal("Incoming Workspace Share", nullptr, incomingPopupFlags)) {
+        return;
+    }
+
+    const IncomingWorkspaceShareOffer offer = pendingWorkspaceShareOffers_.front();
+    ImGui::Text("Load workspace '%s' from '%s'?",
+                offer.workspaceName.c_str(),
+                offer.senderName.c_str());
+    ImGui::Separator();
+
+    if (ImGui::Button("Load")) {
+        if (onWorkspaceShareDecision_) {
+            onWorkspaceShareDecision_(offer.offerId, true);
+        }
+        pendingWorkspaceShareOffers_.erase(pendingWorkspaceShareOffers_.begin());
+        workspaceSharePromptOpen_ = false;
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Decline")) {
+        if (onWorkspaceShareDecision_) {
+            onWorkspaceShareDecision_(offer.offerId, false);
+        }
+        pendingWorkspaceShareOffers_.erase(pendingWorkspaceShareOffers_.begin());
+        workspaceSharePromptOpen_ = false;
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
+}
+
 void EditorUI::DrawMenuWorkspaceLabel(const std::vector<std::string>& workspaceNamesSnapshot) {
     std::string currentWorkspace;
     {
@@ -1310,6 +1478,8 @@ void EditorUI::DrawMenuBar() {
     DrawHelpMenu();
     OpenCreateWorkspacePopupIfRequested();
     DrawCreateWorkspacePopup();
+    OpenShareWorkspacePopupIfRequested();
+    DrawShareWorkspacePopup();
 
     DrawMenuWorkspaceLabel(workspaceNamesSnapshot);
     ApplyPendingWorkspaceAction(pendingWorkspaceDelete, pendingWorkspaceSwitch);

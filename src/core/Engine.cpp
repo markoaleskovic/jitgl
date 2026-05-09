@@ -127,6 +127,9 @@ bool Engine::Init() {
     if (!InitUI()) return false;
     if (!InitJIT()) return false;
     if (!InitWatcher()) return false;
+    if (!InitLanShare()) {
+        ui_->AddLogOutput("[Network] LAN workspace sharing is unavailable.");
+    }
 
     lastTime_ = glfwGetTime();
     ui_->AddLogOutput("[Engine] Initialized successfully.");
@@ -335,6 +338,12 @@ bool Engine::InitUI() {
     });
     ui_->SetImportWorkspaceCallback([this](const std::string& path) {
         return ImportWorkspace(path);
+    });
+    ui_->SetShareWorkspaceCallback([this](const std::vector<std::string>& targetPeerIds, bool shareToAll) {
+        HandleShareWorkspaceRequest(targetPeerIds, shareToAll);
+    });
+    ui_->SetWorkspaceShareDecisionCallback([this](const std::string& offerId, bool accepted) {
+        HandleWorkspaceShareDecision(offerId, accepted);
     });
 
     return true;
@@ -1150,6 +1159,144 @@ bool Engine::ImportWorkspace(const std::string& sourcePath) {
     return false;
 }
 
+bool Engine::ImportWorkspacePackage(const std::string& packageData, const std::string& sourceHint) {
+    if (!workspaceManager_) {
+        return false;
+    }
+
+    auto importedName = workspaceManager_->ImportWorkspacePackage(packageData, sourceHint);
+    if (!importedName) {
+        return false;
+    }
+
+    auto descriptor = workspaceManager_->GetWorkspace(*importedName);
+    if (!descriptor) {
+        return false;
+    }
+
+    if (!RegisterWorkspace(*descriptor)) {
+        return false;
+    }
+
+    SyncWorkspaceUiState();
+    SwitchToWorkspace(*importedName, true);
+    return true;
+}
+
+bool Engine::InitLanShare() {
+    if (!ui_ || !workspaceManager_) {
+        return false;
+    }
+
+    lanShare_ = std::make_unique<LanWorkspaceShareService>();
+    if (!lanShare_->Start()) {
+        lanShare_.reset();
+        return false;
+    }
+
+    ui_->AddLogOutput("[Network] LAN sharing active as '" + lanShare_->LocalDisplayName() + "'.");
+    return true;
+}
+
+void Engine::UpdateLanShareUiState() {
+    if (!lanShare_ || !ui_) {
+        return;
+    }
+
+    std::vector<EditorUI::NetworkPeer> peerViews;
+    const auto peers = lanShare_->SnapshotPeers();
+    peerViews.reserve(peers.size());
+    for (const auto& peer : peers) {
+        peerViews.push_back(EditorUI::NetworkPeer{
+            peer.id,
+            peer.displayName,
+            peer.ipAddress
+        });
+    }
+    ui_->SetNetworkPeers(std::move(peerViews));
+
+    const auto incomingOffers = lanShare_->DrainIncomingOffers();
+    for (const auto& offer : incomingOffers) {
+        if (pendingLanOffersById_.contains(offer.offerId)) {
+            continue;
+        }
+        pendingLanOffersById_[offer.offerId] = offer;
+        ui_->QueueIncomingWorkspaceShareOffer(EditorUI::IncomingWorkspaceShareOffer{
+            offer.offerId,
+            offer.workspaceName,
+            offer.senderName
+        });
+    }
+}
+
+void Engine::HandleShareWorkspaceRequest(const std::vector<std::string>& targetPeerIds, bool shareToAll) {
+    if (!lanShare_ || !workspaceManager_) {
+        ui_->AddLogOutput("[Network Error] LAN sharing service is not running.");
+        return;
+    }
+    if (activeWorkspaceName_.empty()) {
+        ui_->AddLogOutput("[Network Error] No active workspace selected.");
+        return;
+    }
+    if (!shareToAll && targetPeerIds.empty()) {
+        ui_->AddLogOutput("[Network Error] No target computers selected.");
+        return;
+    }
+
+    auto packageData = workspaceManager_->ExportWorkspacePackage(activeWorkspaceName_);
+    if (!packageData.has_value()) {
+        ui_->AddLogOutput("[Network Error] Failed to package workspace '" + activeWorkspaceName_ + "' for sharing.");
+        return;
+    }
+
+    const bool shared = lanShare_->ShareWorkspacePackage(activeWorkspaceName_, *packageData, targetPeerIds, shareToAll);
+    if (!shared) {
+        ui_->AddLogOutput("[Network Error] Failed to send workspace share offer.");
+        return;
+    }
+
+    if (shareToAll) {
+        ui_->AddLogOutput("[Network] Shared workspace '" + activeWorkspaceName_ + "' to all discovered computers.");
+    } else {
+        ui_->AddLogOutput("[Network] Shared workspace '" + activeWorkspaceName_ +
+                          "' to " + std::to_string(targetPeerIds.size()) + " selected computer(s).");
+    }
+}
+
+void Engine::HandleWorkspaceShareDecision(const std::string& offerId, bool accepted) {
+    auto offerIt = pendingLanOffersById_.find(offerId);
+    if (offerIt == pendingLanOffersById_.end()) {
+        return;
+    }
+
+    const LanWorkspaceOffer offer = offerIt->second;
+    pendingLanOffersById_.erase(offerIt);
+
+    if (!accepted) {
+        ui_->AddLogOutput("[Network] Declined workspace '" + offer.workspaceName + "' from '" + offer.senderName + "'.");
+        return;
+    }
+
+    if (!lanShare_) {
+        ui_->AddLogOutput("[Network Error] LAN sharing service is not running.");
+        return;
+    }
+
+    auto packageData = lanShare_->FetchWorkspacePackage(offer);
+    if (!packageData.has_value()) {
+        ui_->AddLogOutput("[Network Error] Failed to receive workspace '" + offer.workspaceName +
+                          "' from '" + offer.senderName + "'.");
+        return;
+    }
+
+    if (!ImportWorkspacePackage(*packageData, offer.workspaceName)) {
+        ui_->AddLogOutput("[Network Error] Failed to import received workspace '" + offer.workspaceName + "'.");
+        return;
+    }
+
+    ui_->AddLogOutput("[Network] Loaded workspace '" + offer.workspaceName + "' from '" + offer.senderName + "'.");
+}
+
 void Engine::HandleCompileFailure(const CompileResult& result) {
     ui_->AddLogOutput("[JIT] Compile failed for workspace '" + result.workspaceName +
                       "'. Keeping previous program.");
@@ -1300,6 +1447,7 @@ void Engine::Run() {
         }
 
         RenderSceneToTexture();
+        UpdateLanShareUiState();
 
         ui_->NewFrame();
         ui_->Draw();
@@ -1327,6 +1475,12 @@ void Engine::Shutdown() {
         watcher_->Stop();
         watcher_.reset();
     }
+
+    if (lanShare_) {
+        lanShare_->Stop();
+        lanShare_.reset();
+    }
+    pendingLanOffersById_.clear();
 
     bool detachedCompileThread = false;
     if (compileThreadRunning_) {

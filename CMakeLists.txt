@@ -116,6 +116,7 @@ add_executable(jit_ide
     ${text_editor_SOURCE_DIR}/TextEditor.cpp
         src/core/WorkspaceManager.cpp
         src/system/ConsoleRedirectSession.cpp
+        src/system/network/LanWorkspaceShareService.cpp
 )
 
 target_include_directories(jit_ide PRIVATE
@@ -166,6 +167,10 @@ set_target_properties(jit_ide PROPERTIES ENABLE_EXPORTS TRUE)
 # Only needed if you use ASTDiffer. Kept here as a safety net.
 if(TARGET libclang)
     target_link_libraries(jit_ide PRIVATE libclang)
+endif()
+
+if(WIN32)
+    target_link_libraries(jit_ide PRIVATE ws2_32)
 endif()
 
 if(UNIX AND NOT APPLE)
