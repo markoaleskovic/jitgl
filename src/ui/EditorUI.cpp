@@ -23,6 +23,7 @@ namespace {
     constexpr float BASE_FONT_SIZE = 16.0f;
     constexpr const char* FALLBACK_WORKSPACE_NAME = "default";
     constexpr const char* WELCOME_PREFS_FILE = ".jitgl_welcome_prefs";
+    constexpr const char* SHOWCASE_PREFS_FILE = ".jitgl_showcase_prefs";
     constexpr double DPI_APPLY_MIN_INTERVAL_SECONDS = 0.08;
 
     const ImVec4 kEditorPaneBgColor = ImVec4(0.12f, 0.12f, 0.12f, 1.00f);
@@ -265,6 +266,30 @@ void EditorUI::SaveWelcomePreference() const {
     outFile << (showWelcomeOnStartup_ ? "hide=0\n" : "hide=1\n");
 }
 
+void EditorUI::LoadShowcasePreference() {
+    loadShowcaseWorkspaceOnStartup_ = true;
+
+    std::ifstream inFile(SHOWCASE_PREFS_FILE, std::ios::binary);
+    if (!inFile.is_open()) {
+        return;
+    }
+
+    std::string value;
+    std::getline(inFile, value);
+    if (value == "startup=0") {
+        loadShowcaseWorkspaceOnStartup_ = false;
+    }
+}
+
+void EditorUI::SaveShowcasePreference() const {
+    std::ofstream outFile(SHOWCASE_PREFS_FILE, std::ios::trunc | std::ios::binary);
+    if (!outFile.is_open()) {
+        return;
+    }
+
+    outFile << (loadShowcaseWorkspaceOnStartup_ ? "startup=1\n" : "startup=0\n");
+}
+
 void EditorUI::ApplyEditorPalette(Document& doc) const {
     if (currentTheme_ == UiTheme::Light) {
         auto palette = TextEditor::GetLightPalette();
@@ -381,9 +406,13 @@ void EditorUI::Init(GLFWwindow *win) {
     ImGui_ImplOpenGL3_Init(GLSL_VERSION);
 
     LoadWelcomePreference();
+    LoadShowcasePreference();
     openWelcomePopupRequested_ = showWelcomeOnStartup_;
     welcomePopupOpenedThisSession_ = false;
     doNotShowWelcomeAgain_ = false;
+    openShowcaseGuidePopupRequested_ = loadShowcaseWorkspaceOnStartup_;
+    showcaseGuidePopupOpenedThisSession_ = false;
+    disableShowcaseStartupFromGuide_ = !loadShowcaseWorkspaceOnStartup_;
 
     initialized_ = true;
     shutdown_ = false;
@@ -435,9 +464,11 @@ void EditorUI::Draw() {
         DrawConsolePane();
     }
 
+    DrawUniformsTab();
     DrawIncomingWorkspaceSharePopup();
     DrawNetworkDiagnosticsWindow();
     DrawWelcomePopup();
+    DrawShowcaseGuidePopup();
     DrawRuntimeGuidePopup();
 }
 
@@ -697,6 +728,26 @@ void EditorUI::SetCompilationStatus(bool isCompiling, bool hasError, bool isStal
     isStalled_ = isStalled;
 }
 
+void EditorUI::SetUniformValues(std::vector<UniformValue> values) {
+    uniformValues_ = std::move(values);
+}
+
+void EditorUI::SetUniformEditCallback(std::function<void(const UniformEditCommand&)> cb) {
+    onUniformEdit_ = std::move(cb);
+}
+
+void EditorUI::SetUniformJsonSnapshotCallback(std::function<std::string()> cb) {
+    onUniformJsonSnapshot_ = std::move(cb);
+}
+
+void EditorUI::SetLoadShowcaseWorkspaceCallback(std::function<void()> cb) {
+    onLoadShowcaseWorkspace_ = std::move(cb);
+}
+
+bool EditorUI::ShouldLoadShowcaseWorkspaceOnStartup() const {
+    return loadShowcaseWorkspaceOnStartup_;
+}
+
 void EditorUI::SetDpiScale(float newScale) {
     // Clamp the scale to prevent the UI from becoming unreadably small or impossibly large
     if (newScale < 0.5f) newScale = 0.5f;
@@ -795,6 +846,62 @@ void EditorUI::DrawRuntimeGuidePopup() {
     if (ImGui::Button("Close", ImVec2(closeButtonWidth, 0.0f))) {
         openRuntimeGuidePopupRequested_ = false;
         runtimeGuidePopupOpenedThisSession_ = false;
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
+}
+
+void EditorUI::DrawShowcaseGuidePopup() {
+    if (openShowcaseGuidePopupRequested_ && !showcaseGuidePopupOpenedThisSession_) {
+        disableShowcaseStartupFromGuide_ = !loadShowcaseWorkspaceOnStartup_;
+        ImGui::OpenPopup("Showcase Workspace Guide");
+        showcaseGuidePopupOpenedThisSession_ = true;
+    }
+
+    if (showcaseGuidePopupOpenedThisSession_ && !ImGui::IsPopupOpen("Showcase Workspace Guide")) {
+        openShowcaseGuidePopupRequested_ = false;
+        showcaseGuidePopupOpenedThisSession_ = false;
+        return;
+    }
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowViewport(viewport->ID);
+    ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(940.0f, 740.0f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(760.0f, 560.0f),
+                                        ImVec2(viewport->WorkSize.x * 0.96f, viewport->WorkSize.y * 0.96f));
+
+    const ImGuiWindowFlags popupFlags =
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking;
+    if (!ImGui::BeginPopupModal("Showcase Workspace Guide", nullptr, popupFlags)) {
+        return;
+    }
+
+    const float footerReserve = ImGui::GetFrameHeightWithSpacing() * 2.8f;
+    if (ImGui::BeginChild("ShowcaseGuideScrollableContent", ImVec2(0.0f, -footerReserve), false,
+                          ImGuiWindowFlags_AlwaysVerticalScrollbar)) {
+        DrawMarkdown(showcaseGuideMarkdown_, IsLightTheme());
+    }
+    ImGui::EndChild();
+
+    ImGui::Separator();
+    ImGui::Checkbox("Disable showcase workspace + guide on startup", &disableShowcaseStartupFromGuide_);
+
+    if (ImGui::Button("Load Showcase Workspace Now")) {
+        if (onLoadShowcaseWorkspace_) {
+            onLoadShowcaseWorkspace_();
+        }
+    }
+
+    const float closeButtonWidth = 100.0f;
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - closeButtonWidth);
+    if (ImGui::Button("Continue", ImVec2(closeButtonWidth, 0.0f))) {
+        loadShowcaseWorkspaceOnStartup_ = !disableShowcaseStartupFromGuide_;
+        SaveShowcasePreference();
+        openShowcaseGuidePopupRequested_ = false;
+        showcaseGuidePopupOpenedThisSession_ = false;
         ImGui::CloseCurrentPopup();
     }
 
@@ -908,6 +1015,7 @@ void EditorUI::LoadMarkdownFiles() {
 
     welcomeMarkdown_ = loadFile("assets/welcome.md");
     guideMarkdown_ = loadFile("assets/guide.md");
+    showcaseGuideMarkdown_ = loadFile("assets/showcase_guide.md");
 }
 
 void EditorUI::TriggerChordAction(bool held, bool* chordState, const std::function<void()>& action) {
@@ -1184,6 +1292,7 @@ void EditorUI::DrawViewMenu() {
         ToggleTheme();
     }
     ImGui::Separator();
+    (void)ImGui::MenuItem("Uniform Controls", nullptr, &showUniformControlsPanel_);
     (void)ImGui::MenuItem("Network Diagnostics", nullptr, &showNetworkDiagnostics_);
     ImGui::EndMenu();
 }
@@ -1200,6 +1309,27 @@ void EditorUI::DrawHelpMenu() {
     if (ImGui::MenuItem("Runtime State Guide")) {
         openRuntimeGuidePopupRequested_ = true;
         runtimeGuidePopupOpenedThisSession_ = false;
+    }
+    if (ImGui::MenuItem("Showcase Guide")) {
+        openShowcaseGuidePopupRequested_ = true;
+        showcaseGuidePopupOpenedThisSession_ = false;
+    }
+    bool startupEnabled = loadShowcaseWorkspaceOnStartup_;
+    if (ImGui::MenuItem("Enable Showcase Startup", nullptr, &startupEnabled)) {
+        loadShowcaseWorkspaceOnStartup_ = startupEnabled;
+        SaveShowcasePreference();
+        if (loadShowcaseWorkspaceOnStartup_) {
+            openShowcaseGuidePopupRequested_ = true;
+            showcaseGuidePopupOpenedThisSession_ = false;
+            if (onLoadShowcaseWorkspace_) {
+                onLoadShowcaseWorkspace_();
+            }
+        }
+    }
+    if (ImGui::MenuItem("Load Showcase Workspace Now")) {
+        if (onLoadShowcaseWorkspace_) {
+            onLoadShowcaseWorkspace_();
+        }
     }
     ImGui::EndMenu();
 }
@@ -2003,6 +2133,336 @@ void EditorUI::DrawRendererTab() {
     }
 
     ImGui::EndTabItem();
+}
+
+void EditorUI::DrawUniformsTab() {
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float margin = 12.0f;
+    const float topOffset = rendererFullscreen_ ? margin : 40.0f;
+
+    ImGui::SetNextWindowViewport(viewport->ID);
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - margin,
+                                   viewport->WorkPos.y + topOffset),
+                            ImGuiCond_Always,
+                            ImVec2(1.0f, 0.0f));
+
+    const ImGuiWindowFlags toggleFlags = ImGuiWindowFlags_NoDecoration |
+                                         ImGuiWindowFlags_AlwaysAutoResize |
+                                         ImGuiWindowFlags_NoSavedSettings |
+                                         ImGuiWindowFlags_NoDocking |
+                                         ImGuiWindowFlags_NoNav;
+
+    float toggleHeight = 0.0f;
+    if (ImGui::Begin("UniformControlsToggle", nullptr, toggleFlags)) {
+        const char* buttonLabel = showUniformControlsPanel_ ? "Hide Uniforms" : "Show Uniforms";
+        if (ImGui::Button(buttonLabel)) {
+            showUniformControlsPanel_ = !showUniformControlsPanel_;
+        }
+        toggleHeight = ImGui::GetWindowSize().y;
+    }
+    ImGui::End();
+
+    if (!showUniformControlsPanel_) {
+        return;
+    }
+
+    bool panelOpen = showUniformControlsPanel_;
+    ImGui::SetNextWindowViewport(viewport->ID);
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - margin,
+                                   viewport->WorkPos.y + topOffset + toggleHeight + 8.0f),
+                            ImGuiCond_Always,
+                            ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.86f);
+
+    const ImGuiWindowFlags panelFlags = ImGuiWindowFlags_NoDocking |
+                                        ImGuiWindowFlags_NoSavedSettings |
+                                        ImGuiWindowFlags_AlwaysAutoResize;
+    if (!ImGui::Begin("Uniform Controls", &panelOpen, panelFlags)) {
+        showUniformControlsPanel_ = panelOpen;
+        ImGui::End();
+        return;
+    }
+
+    auto submitEdit = [this](const UniformEditCommand& command) {
+        if (onUniformEdit_) {
+            onUniformEdit_(command);
+        }
+    };
+
+    auto defaultScalarForRange = [](float minValue, float maxValue) {
+        if (maxValue < minValue) {
+            std::swap(minValue, maxValue);
+        }
+        if (0.0f < minValue) {
+            return minValue;
+        }
+        if (0.0f > maxValue) {
+            return maxValue;
+        }
+        return 0.0f;
+    };
+
+    auto valueToClipboardText = [](const UniformValue& value) {
+        std::ostringstream out;
+        switch (value.desc.type) {
+            case UniformType::Float:
+                out << value.f;
+                break;
+            case UniformType::Int:
+                out << value.i;
+                break;
+            case UniformType::Bool:
+                out << (value.b ? "true" : "false");
+                break;
+            case UniformType::Vec2:
+                out << "[" << value.v[0] << ", " << value.v[1] << "]";
+                break;
+            case UniformType::Vec3:
+                out << "[" << value.v[0] << ", " << value.v[1] << ", " << value.v[2] << "]";
+                break;
+            case UniformType::Vec4:
+                out << "[" << value.v[0] << ", " << value.v[1] << ", " << value.v[2] << ", " << value.v[3] << "]";
+                break;
+        }
+        return out.str();
+    };
+
+    auto drawUniformWidget = [&](std::size_t index) {
+        UniformValue& value = uniformValues_[index];
+        const std::string widgetLabel = value.desc.label.empty() ? value.desc.name : value.desc.label;
+        const bool fineAdjust = ImGui::GetIO().KeyAlt;
+        const float dragStep = value.desc.step > 0.0f ? value.desc.step : 0.01f;
+
+        ImGui::PushID(value.desc.name.c_str());
+
+        bool changed = false;
+        switch (value.desc.type) {
+            case UniformType::Float: {
+                float edited = value.f;
+                if (fineAdjust || value.desc.step > 0.0f) {
+                    changed = ImGui::DragFloat(widgetLabel.c_str(),
+                                               &edited,
+                                               dragStep,
+                                               value.desc.rangeMin,
+                                               value.desc.rangeMax);
+                } else {
+                    changed = ImGui::SliderFloat(widgetLabel.c_str(), &edited, value.desc.rangeMin, value.desc.rangeMax);
+                }
+                if (changed) {
+                    value.f = edited;
+                    UniformEditCommand command;
+                    command.action = UniformEditAction::SetFloat;
+                    command.name = value.desc.name;
+                    command.floatValue = value.f;
+                    submitEdit(command);
+                }
+                break;
+            }
+            case UniformType::Int: {
+                if (value.desc.widget == UniformWidgetHint::Toggle) {
+                    bool checked = (value.i != 0);
+                    changed = ImGui::Checkbox(widgetLabel.c_str(), &checked);
+                    if (changed) {
+                        value.i = checked ? 1 : 0;
+                        UniformEditCommand command;
+                        command.action = UniformEditAction::SetBool;
+                        command.name = value.desc.name;
+                        command.boolValue = checked;
+                        submitEdit(command);
+                    }
+                } else {
+                    int edited = value.i;
+                    changed = ImGui::SliderInt(widgetLabel.c_str(),
+                                               &edited,
+                                               static_cast<int>(value.desc.rangeMin),
+                                               static_cast<int>(value.desc.rangeMax));
+                    if (changed) {
+                        value.i = edited;
+                        UniformEditCommand command;
+                        command.action = UniformEditAction::SetInt;
+                        command.name = value.desc.name;
+                        command.intValue = value.i;
+                        submitEdit(command);
+                    }
+                }
+                break;
+            }
+            case UniformType::Bool: {
+                bool edited = value.b;
+                changed = ImGui::Checkbox(widgetLabel.c_str(), &edited);
+                if (changed) {
+                    value.b = edited;
+                    UniformEditCommand command;
+                    command.action = UniformEditAction::SetBool;
+                    command.name = value.desc.name;
+                    command.boolValue = value.b;
+                    submitEdit(command);
+                }
+                break;
+            }
+            case UniformType::Vec2: {
+                std::array<float, 4> edited = value.v;
+                if (fineAdjust || value.desc.step > 0.0f) {
+                    changed = ImGui::DragFloat2(widgetLabel.c_str(),
+                                                edited.data(),
+                                                dragStep,
+                                                value.desc.rangeMin,
+                                                value.desc.rangeMax);
+                } else {
+                    changed = ImGui::SliderFloat2(widgetLabel.c_str(),
+                                                  edited.data(),
+                                                  value.desc.rangeMin,
+                                                  value.desc.rangeMax);
+                }
+                if (changed) {
+                    value.v = edited;
+                    UniformEditCommand command;
+                    command.action = UniformEditAction::SetVec;
+                    command.name = value.desc.name;
+                    command.vecValue = value.v;
+                    command.components = 2;
+                    submitEdit(command);
+                }
+                break;
+            }
+            case UniformType::Vec3: {
+                std::array<float, 4> edited = value.v;
+                if (value.desc.widget == UniformWidgetHint::Color) {
+                    changed = ImGui::ColorEdit3(widgetLabel.c_str(), edited.data(), ImGuiColorEditFlags_Float);
+                } else if (fineAdjust || value.desc.step > 0.0f) {
+                    changed = ImGui::DragFloat3(widgetLabel.c_str(),
+                                                edited.data(),
+                                                dragStep,
+                                                value.desc.rangeMin,
+                                                value.desc.rangeMax);
+                } else {
+                    changed = ImGui::SliderFloat3(widgetLabel.c_str(),
+                                                  edited.data(),
+                                                  value.desc.rangeMin,
+                                                  value.desc.rangeMax);
+                }
+                if (changed) {
+                    value.v = edited;
+                    UniformEditCommand command;
+                    command.action = UniformEditAction::SetVec;
+                    command.name = value.desc.name;
+                    command.vecValue = value.v;
+                    command.components = 3;
+                    submitEdit(command);
+                }
+                break;
+            }
+            case UniformType::Vec4: {
+                std::array<float, 4> edited = value.v;
+                if (value.desc.widget == UniformWidgetHint::Color) {
+                    changed = ImGui::ColorEdit4(widgetLabel.c_str(), edited.data(), ImGuiColorEditFlags_Float);
+                } else if (fineAdjust || value.desc.step > 0.0f) {
+                    changed = ImGui::DragFloat4(widgetLabel.c_str(),
+                                                edited.data(),
+                                                dragStep,
+                                                value.desc.rangeMin,
+                                                value.desc.rangeMax);
+                } else {
+                    changed = ImGui::SliderFloat4(widgetLabel.c_str(),
+                                                  edited.data(),
+                                                  value.desc.rangeMin,
+                                                  value.desc.rangeMax);
+                }
+                if (changed) {
+                    value.v = edited;
+                    UniformEditCommand command;
+                    command.action = UniformEditAction::SetVec;
+                    command.name = value.desc.name;
+                    command.vecValue = value.v;
+                    command.components = 4;
+                    submitEdit(command);
+                }
+                break;
+            }
+        }
+
+        if (ImGui::BeginPopupContextItem("UniformContextMenu")) {
+            if (ImGui::MenuItem("Reset")) {
+                UniformEditCommand resetCommand;
+                resetCommand.action = UniformEditAction::ResetOne;
+                resetCommand.name = value.desc.name;
+                submitEdit(resetCommand);
+
+                const float defaultScalar = defaultScalarForRange(value.desc.rangeMin, value.desc.rangeMax);
+                value.f = defaultScalar;
+                value.i = static_cast<int>(std::lround(defaultScalar));
+                value.b = false;
+                value.v = { defaultScalar, defaultScalar, defaultScalar, defaultScalar };
+            }
+            if (ImGui::MenuItem("Copy Value")) {
+                const std::string valueText = valueToClipboardText(value);
+                ImGui::SetClipboardText(valueText.c_str());
+            }
+            ImGui::EndPopup();
+        }
+
+        ImGui::PopID();
+    };
+
+    std::vector<std::string> groupOrder;
+    std::unordered_map<std::string, std::vector<std::size_t>> groupedIndices;
+    std::vector<std::size_t> ungroupedIndices;
+    bool hasVisibleUniform = false;
+
+    for (std::size_t i = 0; i < uniformValues_.size(); ++i) {
+        const UniformValue& value = uniformValues_[i];
+        if (value.desc.hidden) {
+            continue;
+        }
+        hasVisibleUniform = true;
+        if (value.desc.group.empty()) {
+            ungroupedIndices.push_back(i);
+            continue;
+        }
+        if (!groupedIndices.contains(value.desc.group)) {
+            groupOrder.push_back(value.desc.group);
+        }
+        groupedIndices[value.desc.group].push_back(i);
+    }
+
+    if (!hasVisibleUniform) {
+        ImGui::TextDisabled("No discoverable uniforms in shader.glsl.");
+    } else {
+        for (const auto& groupName : groupOrder) {
+            ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_DefaultOpen;
+            if (ImGui::CollapsingHeader(groupName.c_str(), flags)) {
+                for (const std::size_t index : groupedIndices[groupName]) {
+                    drawUniformWidget(index);
+                }
+            }
+        }
+        for (const std::size_t index : ungroupedIndices) {
+            drawUniformWidget(index);
+        }
+    }
+
+    ImGui::Separator();
+    if (ImGui::Button("Reset All")) {
+        UniformEditCommand resetAllCommand;
+        resetAllCommand.action = UniformEditAction::ResetAll;
+        submitEdit(resetAllCommand);
+        for (auto& value : uniformValues_) {
+            const float defaultScalar = defaultScalarForRange(value.desc.rangeMin, value.desc.rangeMax);
+            value.f = defaultScalar;
+            value.i = static_cast<int>(std::lround(defaultScalar));
+            value.b = false;
+            value.v = { defaultScalar, defaultScalar, defaultScalar, defaultScalar };
+        }
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("Copy JSON")) {
+        const std::string json = onUniformJsonSnapshot_ ? onUniformJsonSnapshot_() : std::string("{}\n");
+        ImGui::SetClipboardText(json.c_str());
+    }
+
+    showUniformControlsPanel_ = panelOpen;
+    ImGui::End();
 }
 
 void EditorUI::DrawConsoleTab(const std::string& currentWorkspace) {

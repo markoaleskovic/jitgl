@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include "TextEditor.h"
 #include "imgui_markdown.h"
+#include "uniform/UniformControls.h"
 
 struct GLFWwindow;
 
@@ -132,6 +133,11 @@ public:
     void QueueIncomingWorkspaceShareOffer(IncomingWorkspaceShareOffer offer);
     void SetRendererTexture(unsigned int texture, int width, int height);
     void SetCompilationStatus(bool isCompiling, bool hasError, bool isStalled = false);
+    void SetUniformValues(std::vector<UniformValue> values);
+    void SetUniformEditCallback(std::function<void(const UniformEditCommand&)> cb);
+    void SetUniformJsonSnapshotCallback(std::function<std::string()> cb);
+    void SetLoadShowcaseWorkspaceCallback(std::function<void()> cb);
+    bool ShouldLoadShowcaseWorkspaceOnStartup() const;
     void SetupDarkTheme() const;
     void SetupLightTheme() const;
 
@@ -194,6 +200,10 @@ private:
     bool isCompiling_ = false;
     bool hasCompileError_ = false;
     bool isStalled_ = false;
+    std::vector<UniformValue> uniformValues_;
+    std::function<void(const UniformEditCommand&)> onUniformEdit_;
+    std::function<std::string()> onUniformJsonSnapshot_;
+    std::function<void()> onLoadShowcaseWorkspace_;
     bool openCreateWorkspacePopup_ = false;
     std::array<char, 128> newWorkspaceNameBuffer_{};
 
@@ -229,15 +239,19 @@ private:
                        bool* pendingSelectionConsumed);
     void AutosaveDirtyDocuments(double currentTime);
     void DrawRendererTab();
+    void DrawUniformsTab();
     void DrawConsoleTab(const std::string& currentWorkspace);
     void DrawLogsTab(const std::string& currentWorkspace);
     std::string ResolveCurrentWorkspaceName();
     void DrawWelcomePopup();
+    void DrawShowcaseGuidePopup();
     void DrawRuntimeGuidePopup();
     void DrawMarkdown(const std::string& markdown, bool lightTheme);
     void LoadMarkdownFiles();
     void LoadWelcomePreference();
     void SaveWelcomePreference() const;
+    void LoadShowcasePreference();
+    void SaveShowcasePreference() const;
     void ApplyThemeAndScale(float dpiScale, bool recreateFontTexture);
     void ToggleTheme();
     void ApplyEditorPalette(Document& doc) const;
@@ -271,13 +285,19 @@ private:
     bool doNotShowWelcomeAgain_ = false;
     bool openRuntimeGuidePopupRequested_ = false;
     bool runtimeGuidePopupOpenedThisSession_ = false;
+    bool loadShowcaseWorkspaceOnStartup_ = true;
+    bool openShowcaseGuidePopupRequested_ = false;
+    bool showcaseGuidePopupOpenedThisSession_ = false;
+    bool disableShowcaseStartupFromGuide_ = false;
     bool focusCreateWorkspaceNameInput_ = false;
     UiTheme currentTheme_ = UiTheme::Dark;
     bool themeApplyPending_ = false;
+    bool showUniformControlsPanel_ = true;
     bool rendererFullscreen_ = false;
     int focusEditorRequestFramesRemaining_ = 0;
 
     std::string welcomeMarkdown_;
+    std::string showcaseGuideMarkdown_;
     std::string guideMarkdown_;
     ImGui::MarkdownConfig markdownConfig_;
 

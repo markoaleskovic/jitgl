@@ -16,16 +16,19 @@ namespace fs = std::filesystem;
 namespace {
     constexpr const char* kSceneFilename = "scene.cpp";
     constexpr const char* kShaderFilename = "shader.glsl";
+    constexpr const char* kUniformsFilename = "uniforms.json";
     constexpr const char* kConsoleLogFilename = "console.log";
     constexpr const char* kEngineLogFilename = "engine.log";
     constexpr const char* kDefaultWorkspaceName = "default";
     constexpr const char* kWorkspaceExportExtension = ".jws";
     constexpr const char* kWorkspaceExportMagicV1 = "JIT_WORKSPACE_V1";
     constexpr const char* kWorkspaceExportMagicV2 = "JIT_WORKSPACE_V2";
+    constexpr const char* kWorkspaceExportMagicV3 = "JIT_WORKSPACE_V3";
     constexpr const char* kWorkspaceNamePrefixV1 = "NAME: ";
     constexpr const char* kWorkspaceNamePrefixV2 = "NAME:";
     constexpr const char* kCppSizePrefix = "CPP_SIZE:";
     constexpr const char* kShaderSizePrefix = "SHADER_SIZE:";
+    constexpr const char* kUniformsSizePrefix = "UNIFORMS_SIZE:";
     constexpr const char* kImportedWorkspaceFallbackName = "workspace";
     constexpr std::size_t kMaxImportedSourceBytes = 8u * 1024u * 1024u;
 
@@ -33,6 +36,7 @@ namespace {
         std::string workspaceName;
         std::string cppSource;
         std::string shaderSource;
+        std::string uniformsSource;
     };
 
     void TrimTrailingCarriageReturn(std::string* line) {
@@ -184,6 +188,7 @@ namespace {
         if (!payload.shaderSource.empty() && payload.shaderSource.back() == '\n') {
             payload.shaderSource.pop_back();
         }
+        payload.uniformsSource = "{}\n";
 
         if (payload.workspaceName.empty()) {
             return std::nullopt;
@@ -235,6 +240,72 @@ namespace {
                 return std::nullopt;
             }
         }
+        payload.uniformsSource = "{}\n";
+
+        return payload;
+    }
+
+    std::optional<ImportedWorkspacePayload> ParseWorkspacePayloadV3(std::istream* stream) {
+        if (stream == nullptr) {
+            return std::nullopt;
+        }
+
+        ImportedWorkspacePayload payload;
+        std::size_t cppSize = 0;
+        std::size_t shaderSize = 0;
+        std::size_t uniformsSize = 0;
+
+        std::string line;
+        if (!ReadTrimmedLine(stream, &line) || !line.starts_with(kWorkspaceNamePrefixV2)) {
+            return std::nullopt;
+        }
+        payload.workspaceName = line.substr(std::char_traits<char>::length(kWorkspaceNamePrefixV2));
+
+        if (!ReadTrimmedLine(stream, &line) || !ParseSizeField(line, kCppSizePrefix, &cppSize)) {
+            return std::nullopt;
+        }
+        if (!ReadTrimmedLine(stream, &line) || !ParseSizeField(line, kShaderSizePrefix, &shaderSize)) {
+            return std::nullopt;
+        }
+        if (!ReadTrimmedLine(stream, &line) || !ParseSizeField(line, kUniformsSizePrefix, &uniformsSize)) {
+            return std::nullopt;
+        }
+        if (cppSize > kMaxImportedSourceBytes ||
+            shaderSize > kMaxImportedSourceBytes ||
+            uniformsSize > kMaxImportedSourceBytes) {
+            return std::nullopt;
+        }
+
+        if (!ReadTrimmedLine(stream, &line) || !line.empty()) {
+            return std::nullopt;
+        }
+
+        payload.cppSource.resize(cppSize);
+        if (cppSize > 0) {
+            stream->read(payload.cppSource.data(), static_cast<std::streamsize>(cppSize));
+            if (static_cast<std::size_t>(stream->gcount()) != cppSize) {
+                return std::nullopt;
+            }
+        }
+
+        payload.shaderSource.resize(shaderSize);
+        if (shaderSize > 0) {
+            stream->read(payload.shaderSource.data(), static_cast<std::streamsize>(shaderSize));
+            if (static_cast<std::size_t>(stream->gcount()) != shaderSize) {
+                return std::nullopt;
+            }
+        }
+
+        payload.uniformsSource.resize(uniformsSize);
+        if (uniformsSize > 0) {
+            stream->read(payload.uniformsSource.data(), static_cast<std::streamsize>(uniformsSize));
+            if (static_cast<std::size_t>(stream->gcount()) != uniformsSize) {
+                return std::nullopt;
+            }
+        }
+        if (payload.uniformsSource.empty()) {
+            payload.uniformsSource = "{}\n";
+        }
 
         return payload;
     }
@@ -249,6 +320,9 @@ namespace {
             return std::nullopt;
         }
 
+        if (line == kWorkspaceExportMagicV3) {
+            return ParseWorkspacePayloadV3(stream);
+        }
         if (line == kWorkspaceExportMagicV2) {
             return ParseWorkspacePayloadV2(stream);
         }
@@ -260,19 +334,22 @@ namespace {
 
     std::optional<std::string> BuildWorkspacePackageData(const std::string& workspaceName,
                                                          const std::string& cppSource,
-                                                         const std::string& shaderSource) {
+                                                         const std::string& shaderSource,
+                                                         const std::string& uniformsSource) {
         if (workspaceName.empty()) {
             return std::nullopt;
         }
 
         std::ostringstream out;
-        out << kWorkspaceExportMagicV2 << '\n';
+        out << kWorkspaceExportMagicV3 << '\n';
         out << kWorkspaceNamePrefixV2 << workspaceName << '\n';
         out << kCppSizePrefix << cppSource.size() << '\n';
         out << kShaderSizePrefix << shaderSource.size() << '\n';
+        out << kUniformsSizePrefix << uniformsSource.size() << '\n';
         out << '\n';
         out.write(cppSource.data(), static_cast<std::streamsize>(cppSource.size()));
         out.write(shaderSource.data(), static_cast<std::streamsize>(shaderSource.size()));
+        out.write(uniformsSource.data(), static_cast<std::streamsize>(uniformsSource.size()));
         if (!out.good()) {
             return std::nullopt;
         }
@@ -618,6 +695,7 @@ std::optional<WorkspaceDescriptor> WorkspaceManager::BuildDescriptor(const std::
     descriptor.directory = workspaceDir.string();
     descriptor.cppPath = (workspaceDir / kSceneFilename).string();
     descriptor.shaderPath = (workspaceDir / kShaderFilename).string();
+    descriptor.uniformsPath = (workspaceDir / kUniformsFilename).string();
     descriptor.consoleLogPath = (workspaceDir / kConsoleLogFilename).string();
     descriptor.engineLogPath = (workspaceDir / kEngineLogFilename).string();
     return descriptor;
@@ -661,6 +739,15 @@ bool WorkspaceManager::EnsureWorkspaceScaffold(const WorkspaceDescriptor& descri
         if (!engineLog.is_open()) {
             return false;
         }
+    }
+
+    ec.clear();
+    if (!fs::exists(descriptor.uniformsPath, ec) || ec) {
+        std::ofstream uniformsFile(descriptor.uniformsPath, std::ios::trunc | std::ios::binary);
+        if (!uniformsFile.is_open()) {
+            return false;
+        }
+        uniformsFile << "{}\n";
     }
 
     return true;
@@ -751,11 +838,15 @@ std::optional<std::string> WorkspaceManager::ExportWorkspacePackage(const std::s
 
     auto cppSource = ReadFile(descriptor->cppPath);
     auto shaderSource = ReadFile(descriptor->shaderPath);
+    auto uniformsSource = ReadFile(descriptor->uniformsPath);
     if (!cppSource || !shaderSource) {
         return std::nullopt;
     }
+    if (!uniformsSource.has_value()) {
+        uniformsSource = std::string("{}\n");
+    }
 
-    return BuildWorkspacePackageData(workspaceName, *cppSource, *shaderSource);
+    return BuildWorkspacePackageData(workspaceName, *cppSource, *shaderSource, *uniformsSource);
 }
 
 std::optional<std::string> WorkspaceManager::ImportWorkspacePackage(const std::string& packageData,
@@ -787,7 +878,9 @@ std::optional<std::string> WorkspaceManager::ImportWorkspacePackage(const std::s
     }
 
     if (!SaveFile(descriptor->cppPath, payload->cppSource) ||
-        !SaveFile(descriptor->shaderPath, payload->shaderSource)) {
+        !SaveFile(descriptor->shaderPath, payload->shaderSource) ||
+        !SaveFile(descriptor->uniformsPath, payload->uniformsSource.empty() ? std::string("{}\n")
+                                                                             : payload->uniformsSource)) {
         return std::nullopt;
     }
 

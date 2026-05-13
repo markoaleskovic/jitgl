@@ -112,6 +112,8 @@ add_executable(jit_ide
     src/core/Engine.cpp
     src/ui/EditorUI.cpp
     src/jit/JitEngine.cpp
+    src/uniform/UniformParser.cpp
+    src/uniform/UniformRegistry.cpp
     src/watcher/FileWatcher.cpp
     ${text_editor_SOURCE_DIR}/TextEditor.cpp
         src/core/WorkspaceManager.cpp

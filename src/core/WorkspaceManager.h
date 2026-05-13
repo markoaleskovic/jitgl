@@ -21,6 +21,7 @@ struct WorkspaceDescriptor {
     std::string directory;
     std::string cppPath;
     std::string shaderPath;
+    std::string uniformsPath;
     std::string consoleLogPath;
     std::string engineLogPath;
 };

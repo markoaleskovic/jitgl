@@ -16,6 +16,8 @@
 #include "ui/EditorUI.h"
 #include "runtime/EngineContext.h"
 #include "jit/JitEngine.h"
+#include "uniform/UniformControls.h"
+#include "uniform/UniformRegistry.h"
 #include "system/network/LanWorkspaceShareService.h"
 
 struct GLFWwindow;
@@ -53,13 +55,17 @@ private:
         std::string directory;
         std::string cppPath;
         std::string shaderPath;
+        std::string uniformsPath;
         std::string consoleLogPath;
         std::string engineLogPath;
         std::string cppSource;
         std::string shaderSource;
+        UniformRegistry uniforms;
         std::array<uint32_t, 64> stateI{};
         std::array<float, 64> stateF{};
         void* userData = nullptr;
+        unsigned int vao = 0;
+        unsigned int vbo = 0;
         double accumulatedActiveSeconds = 0.0;
         double activeClockStartSeconds = -1.0;
     };
@@ -71,6 +77,7 @@ private:
     std::unordered_map<std::string, LanWorkspaceOffer> pendingLanOffersById_;
 
     std::unordered_map<std::string, std::string> latestSources_;
+    std::unordered_map<std::string, std::vector<UniformDescriptor>> latestUniformDescriptors_;
     // Per-workspace "earliest compile time" used for debounce/backoff scheduling.
     std::unordered_map<std::string, double> pendingCompilesAt_;
     std::unordered_map<std::string, double> ignoreWatcherUntil_;
@@ -94,12 +101,14 @@ private:
         std::string sourceName;
         std::string source;
         std::size_t sourceHash = 0;
+        std::vector<UniformDescriptor> uniformDescriptors;
     };
 
     struct CompileResult {
         std::string workspaceName;
         std::shared_ptr<JitProgram> program;
         std::size_t sourceHash = 0;
+        std::vector<UniformDescriptor> uniformDescriptors;
     };
 
     struct CompileFailureState {
@@ -135,8 +144,10 @@ private:
     void SwitchToWorkspace(const std::string& workspaceName, bool focusCppDocument);
     bool ExportActiveWorkspace(const std::string& targetPath) const;
     bool ImportWorkspace(const std::string& sourcePath);
+    bool LoadShowcaseWorkspaceFromAssets(bool focusWorkspace);
     bool InitLanShare();
     void UpdateLanShareUiState();
+    void HandleLoadShowcaseWorkspaceRequest();
     void HandleShareWorkspaceRequest(const std::vector<std::string>& targetPeerIds, bool shareToAll);
     void HandleWorkspaceShareDecision(const std::string& offerId, bool accepted);
     void HandleRequestFirewallAccess();
@@ -149,7 +160,10 @@ private:
     std::string WorkspaceForPath(const std::string& filepath) const;
     bool ActiveWorkspaceHasCompileError() const;
     void SaveActiveWorkspaceRuntimeState();
+    void PersistWorkspaceUniformState(const std::string& workspaceName) const;
     void LoadWorkspaceRuntimeState(const std::string& workspaceName);
+    void HandleUniformEditCommand(const UniformEditCommand& command);
+    std::string ActiveWorkspaceUniformStateJson() const;
 
     void ResetJIT();
     void CompletePendingJITReset();
@@ -158,7 +172,11 @@ private:
 
     void HandleDocumentEdited(const std::string& filepath, const std::string& content);
     void HandleActiveDocumentChanged(const std::string& filepath, const std::string& content);
-    void QueueCompile(const std::string& workspaceName, const std::string& source, double nowSeconds, bool immediate);
+    void QueueCompile(const std::string& workspaceName,
+                      const std::string& source,
+                      std::vector<UniformDescriptor> uniformDescriptors,
+                      double nowSeconds,
+                      bool immediate);
     std::vector<std::string> CollectDueCompiles(double nowSeconds) const;
     InFlightStatus EvaluateInFlightStatus(double nowSeconds, bool includeQueuedJobs);
     void EnqueueDueCompiles(const std::vector<std::string>& duePaths);
@@ -170,9 +188,13 @@ private:
     bool ActivateProgramForWorkspace(const std::string& workspaceName);
     void InitializeProgramIfNeeded(const std::shared_ptr<JitProgram>& program);
     void ShutdownProgramIfInitialized(const std::shared_ptr<JitProgram>& program);
+    bool EnsureWorkspaceGeometry(WorkspaceState* workspace);
+    void ReleaseWorkspaceGeometry(WorkspaceState* workspace);
+    void ActivateWorkspaceGeometry(const std::string& workspaceName);
 
     bool EnsureSceneRenderTarget(int width, int height);
     void DestroySceneRenderTarget();
+    void ApplyActiveWorkspaceUniforms();
     void RenderSceneToTexture();
 
     bool InitWindow();

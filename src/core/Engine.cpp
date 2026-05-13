@@ -5,6 +5,7 @@
 #include "core/WorkspaceManager.h"
 #include "runtime/EngineContext.h"
 #include "jit/JitEngine.h"
+#include "uniform/UniformParser.h"
 
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
@@ -14,12 +15,20 @@
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <functional>
+#include <iomanip>
 #include <iostream>
+#include <limits>
+#include <optional>
 #include <ranges>
 #include <sstream>
 #include <utility>
 #include <vector>
+#if defined(__linux__) || defined(__APPLE__)
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 #if defined(_WIN32)
 #define NOMINMAX
 #include <windows.h>
@@ -36,6 +45,9 @@ namespace {
 #ifndef JIT_PROJECT_BINARY_DIR
 #define JIT_PROJECT_BINARY_DIR "."
 #endif
+#ifndef JIT_PROJECT_SOURCE_DIR
+#define JIT_PROJECT_SOURCE_DIR "."
+#endif
 
     constexpr int WINDOW_WIDTH = 1280;
     constexpr int WINDOW_HEIGHT = 720;
@@ -46,12 +58,81 @@ namespace {
 
     constexpr const char* WORKSPACE_DIR = JIT_PROJECT_BINARY_DIR "/workspace";
     constexpr const char* PREAMBLE_PATH = JIT_PROJECT_BINARY_DIR "/runtime/engine.hpp";
+    constexpr const char* SHOWCASE_WORKSPACE_NAME = "showcase";
+    constexpr const char* SHOWCASE_SCENE_ASSET_PATH = JIT_PROJECT_BINARY_DIR "/assets/showcase_scene.cpp";
+    constexpr const char* SHOWCASE_SHADER_ASSET_PATH = JIT_PROJECT_BINARY_DIR "/assets/showcase_shader.glsl";
+    constexpr const char* SHOWCASE_UNIFORMS_ASSET_PATH = JIT_PROJECT_BINARY_DIR "/assets/showcase_uniforms.json";
+    constexpr const char* SHOWCASE_SCENE_ASSET_FALLBACK_PATH = JIT_PROJECT_SOURCE_DIR "/assets/showcase_scene.cpp";
+    constexpr const char* SHOWCASE_SHADER_ASSET_FALLBACK_PATH = JIT_PROJECT_SOURCE_DIR "/assets/showcase_shader.glsl";
+    constexpr const char* SHOWCASE_UNIFORMS_ASSET_FALLBACK_PATH = JIT_PROJECT_SOURCE_DIR "/assets/showcase_uniforms.json";
 
     constexpr double MIN_DEBOUNCE_SECONDS = 0.15;
     constexpr double MAX_DEBOUNCE_SECONDS = 1.95;
     constexpr double DEBOUNCE_STEP_SECONDS = 0.2;
     constexpr double WATCHER_IGNORE_SECONDS = 1.0;
     constexpr double ERROR_HISTORY_SECONDS = 5.0;
+    constexpr std::array<float, 12> FULLSCREEN_QUAD_VERTICES = {
+        -1.f, -1.f, 1.f, -1.f, 1.f, 1.f,
+        -1.f, -1.f, 1.f, 1.f, -1.f, 1.f,
+    };
+    constexpr bool VERBOSE_WORKSPACE_DEBUG = true;
+
+    void DebugLog(const std::string& text) {
+        if (!VERBOSE_WORKSPACE_DEBUG) {
+            return;
+        }
+#if defined(__linux__) || defined(__APPLE__)
+        static int ttyFd = -2;
+        if (ttyFd == -2) {
+            ttyFd = open("/dev/tty", O_WRONLY | O_CLOEXEC);
+        }
+        if (ttyFd < 0) {
+            return;
+        }
+
+        const std::string line = "[JITGL DBG] " + text + '\n';
+        (void)write(ttyFd, line.data(), line.size());
+#elif defined(_WIN32)
+        const std::string line = "[JITGL DBG] " + text + '\n';
+        OutputDebugStringA(line.c_str());
+#endif
+    }
+
+    std::string FormatStateSlice(const std::array<uint32_t, 64>& stateI,
+                                 const std::array<float, 64>& stateF) {
+        std::ostringstream out;
+        out << "stateI={";
+        for (int i = 0; i < 7; ++i) {
+            if (i > 0) {
+                out << ",";
+            }
+            out << stateI[static_cast<std::size_t>(i)];
+        }
+        out << "} stateF={";
+        for (int i = 0; i < 4; ++i) {
+            if (i > 0) {
+                out << ",";
+            }
+            out << std::fixed << std::setprecision(3) << stateF[static_cast<std::size_t>(i)];
+        }
+        out << "}";
+        return out.str();
+    }
+
+    std::optional<std::string> LoadTextFile(const std::string& path) {
+        std::ifstream file(path, std::ios::binary);
+        if (!file.is_open()) {
+            return std::nullopt;
+        }
+        return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    }
+
+    std::optional<std::string> LoadTextFileWithFallback(const char* primaryPath, const char* fallbackPath) {
+        if (auto content = LoadTextFile(primaryPath); content.has_value()) {
+            return content;
+        }
+        return LoadTextFile(fallbackPath);
+    }
 
     std::string trim(std::string value) {
         while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) {
@@ -362,6 +443,92 @@ unsigned int Engine::CreateShaderProgram(const char* vsSource, const char* fsSou
     return p;
 }
 
+bool Engine::EnsureWorkspaceGeometry(WorkspaceState* workspace) {
+    if (workspace == nullptr) {
+        return false;
+    }
+
+    DebugLog("EnsureWorkspaceGeometry(name=" + workspace->name +
+             ", vao=" + std::to_string(workspace->vao) +
+             ", vbo=" + std::to_string(workspace->vbo) + ")");
+
+    if (workspace->vao == 0 || glIsVertexArray(workspace->vao) == GL_FALSE) {
+        if (workspace->vao != 0) {
+            glDeleteVertexArrays(1, &workspace->vao);
+            workspace->vao = 0;
+        }
+        glGenVertexArrays(1, &workspace->vao);
+    }
+    if (workspace->vbo == 0 || glIsBuffer(workspace->vbo) == GL_FALSE) {
+        if (workspace->vbo != 0) {
+            glDeleteBuffers(1, &workspace->vbo);
+            workspace->vbo = 0;
+        }
+        glGenBuffers(1, &workspace->vbo);
+    }
+
+    if (workspace->vao == 0 || workspace->vbo == 0) {
+        return false;
+    }
+
+    glBindVertexArray(workspace->vao);
+    glBindBuffer(GL_ARRAY_BUFFER, workspace->vbo);
+    glBufferData(GL_ARRAY_BUFFER,
+                 static_cast<GLsizeiptr>(sizeof(FULLSCREEN_QUAD_VERTICES)),
+                 FULLSCREEN_QUAD_VERTICES.data(),
+                 GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    DebugLog("EnsureWorkspaceGeometry OK(name=" + workspace->name +
+             ", vao=" + std::to_string(workspace->vao) +
+             ", vbo=" + std::to_string(workspace->vbo) + ")");
+    return true;
+}
+
+void Engine::ReleaseWorkspaceGeometry(WorkspaceState* workspace) {
+    if (workspace == nullptr) {
+        return;
+    }
+
+    DebugLog("ReleaseWorkspaceGeometry(name=" + workspace->name +
+             ", vao=" + std::to_string(workspace->vao) +
+             ", vbo=" + std::to_string(workspace->vbo) + ")");
+
+    if (workspace->vbo != 0) {
+        glDeleteBuffers(1, &workspace->vbo);
+        workspace->vbo = 0;
+    }
+    if (workspace->vao != 0) {
+        glDeleteVertexArrays(1, &workspace->vao);
+        workspace->vao = 0;
+    }
+}
+
+void Engine::ActivateWorkspaceGeometry(const std::string& workspaceName) {
+    auto workspaceIt = workspaces_.find(workspaceName);
+    if (workspaceIt == workspaces_.end()) {
+        DebugLog("ActivateWorkspaceGeometry missing workspace '" + workspaceName + "'");
+        return;
+    }
+
+    if (!EnsureWorkspaceGeometry(&workspaceIt->second)) {
+        ctx_.vao = 0;
+        ctx_.vbo = 0;
+        ui_->AddLogOutput("[Renderer Error] Failed to initialize workspace geometry for '" + workspaceName + "'.");
+        return;
+    }
+
+    ctx_.vao = workspaceIt->second.vao;
+    ctx_.vbo = workspaceIt->second.vbo;
+    DebugLog("ActivateWorkspaceGeometry(name=" + workspaceName +
+             ", ctx.vao=" + std::to_string(ctx_.vao) +
+             ", ctx.vbo=" + std::to_string(ctx_.vbo) +
+             ", isVAO=" + std::to_string(ctx_.vao != 0 && glIsVertexArray(ctx_.vao) == GL_TRUE) +
+             ", isVBO=" + std::to_string(ctx_.vbo != 0 && glIsBuffer(ctx_.vbo) == GL_TRUE) + ")");
+}
+
 bool Engine::InitGL() {
     if (!gladLoadGL(glfwGetProcAddress)) {
         std::cerr << "GLAD init failed\n";
@@ -373,19 +540,6 @@ bool Engine::InitGL() {
     glfwGetFramebufferSize(window_, &w, &h);
     ctx_.width = w;
     ctx_.height = h;
-
-    const std::array<float, 12> quadVerts = {
-        -1.f, -1.f, 1.f, -1.f, 1.f, 1.f,
-        -1.f, -1.f, 1.f, 1.f, -1.f, 1.f,
-    };
-    glGenVertexArrays(1, &ctx_.vao);
-    glGenBuffers(1, &ctx_.vbo);
-    glBindVertexArray(ctx_.vao);
-    glBindBuffer(GL_ARRAY_BUFFER, ctx_.vbo);
-    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(sizeof(quadVerts)), quadVerts.data(), GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
-    glBindVertexArray(0);
 
     // Provide a default shader so the user has something working out-of-the-box
     const char* vs = R"(
@@ -453,6 +607,15 @@ bool Engine::InitUI() {
     });
     ui_->SetRequestFirewallAccessCallback([this]() {
         HandleRequestFirewallAccess();
+    });
+    ui_->SetUniformEditCallback([this](const UniformEditCommand& command) {
+        HandleUniformEditCommand(command);
+    });
+    ui_->SetUniformJsonSnapshotCallback([this]() {
+        return ActiveWorkspaceUniformStateJson();
+    });
+    ui_->SetLoadShowcaseWorkspaceCallback([this]() {
+        HandleLoadShowcaseWorkspaceRequest();
     });
 
     return true;
@@ -562,6 +725,29 @@ void Engine::SaveActiveWorkspaceRuntimeState() {
     std::ranges::copy(ctx_.state_i, workspace.stateI.begin());
     std::ranges::copy(ctx_.state_f, workspace.stateF.begin());
     workspace.userData = ctx_.userData;
+    DebugLog("SaveActiveWorkspaceRuntimeState(name=" + activeWorkspaceName_ +
+             ", ctx.vao=" + std::to_string(ctx_.vao) +
+             ", ctx.vbo=" + std::to_string(ctx_.vbo) +
+             ", " + FormatStateSlice(workspace.stateI, workspace.stateF) + ")");
+}
+
+void Engine::PersistWorkspaceUniformState(const std::string& workspaceName) const {
+    if (!workspaceManager_ || workspaceName.empty()) {
+        return;
+    }
+
+    const auto workspaceIt = workspaces_.find(workspaceName);
+    if (workspaceIt == workspaces_.end()) {
+        return;
+    }
+
+    const auto& workspace = workspaceIt->second;
+    if (workspace.uniformsPath.empty()) {
+        return;
+    }
+
+    const std::string json = workspace.uniforms.SerializeToJson();
+    (void)workspaceManager_->SaveFile(workspace.uniformsPath, json);
 }
 
 void Engine::LoadWorkspaceRuntimeState(const std::string& workspaceName) {
@@ -574,6 +760,44 @@ void Engine::LoadWorkspaceRuntimeState(const std::string& workspaceName) {
     std::ranges::copy(workspace.stateI, std::begin(ctx_.state_i));
     std::ranges::copy(workspace.stateF, std::begin(ctx_.state_f));
     ctx_.userData = workspace.userData;
+    DebugLog("LoadWorkspaceRuntimeState(name=" + workspaceName +
+             ", workspace.vao=" + std::to_string(workspace.vao) +
+             ", workspace.vbo=" + std::to_string(workspace.vbo) +
+             ", " + FormatStateSlice(workspace.stateI, workspace.stateF) + ")");
+}
+
+void Engine::HandleUniformEditCommand(const UniformEditCommand& command) {
+    if (activeWorkspaceName_.empty()) {
+        return;
+    }
+
+    auto workspaceIt = workspaces_.find(activeWorkspaceName_);
+    if (workspaceIt == workspaces_.end()) {
+        return;
+    }
+
+    if (!workspaceIt->second.uniforms.ApplyEdit(command)) {
+        DebugLog("UniformEdit rejected(workspace=" + activeWorkspaceName_ +
+                 ", name=" + command.name +
+                 ", action=" + std::to_string(static_cast<int>(command.action)) + ")");
+        return;
+    }
+    DebugLog("UniformEdit applied(workspace=" + activeWorkspaceName_ +
+             ", name=" + command.name +
+             ", action=" + std::to_string(static_cast<int>(command.action)) + ")");
+}
+
+std::string Engine::ActiveWorkspaceUniformStateJson() const {
+    if (activeWorkspaceName_.empty()) {
+        return "{}\n";
+    }
+
+    const auto workspaceIt = workspaces_.find(activeWorkspaceName_);
+    if (workspaceIt == workspaces_.end()) {
+        return "{}\n";
+    }
+
+    return workspaceIt->second.uniforms.SerializeToJson();
 }
 
 void Engine::UpdateWorkspaceSourceFromDocument(const std::string& workspaceName,
@@ -632,11 +856,21 @@ std::string Engine::BuildCompileSourceForWorkspace(const std::string& workspaceN
 }
 
 void Engine::QueueCompileForWorkspace(const std::string& workspaceName, double nowSeconds, bool immediate) {
+    auto workspaceIt = workspaces_.find(workspaceName);
+    if (workspaceIt == workspaces_.end()) {
+        return;
+    }
+
     const std::string generatedSource = BuildCompileSourceForWorkspace(workspaceName);
     if (generatedSource.empty()) {
         return;
     }
-    QueueCompile(workspaceName, generatedSource, nowSeconds, immediate);
+
+    std::vector<UniformDescriptor> uniformDescriptors = ParseUniformDescriptors(workspaceIt->second.shaderSource);
+    DebugLog("QueueCompileForWorkspace(name=" + workspaceName +
+             ", immediate=" + std::to_string(immediate) +
+             ", uniforms=" + std::to_string(uniformDescriptors.size()) + ")");
+    QueueCompile(workspaceName, generatedSource, std::move(uniformDescriptors), nowSeconds, immediate);
 }
 
 bool Engine::RegisterWorkspace(const WorkspaceDescriptor& descriptor) {
@@ -655,12 +889,24 @@ bool Engine::RegisterWorkspace(const WorkspaceDescriptor& descriptor) {
     workspace.directory = descriptor.directory;
     workspace.cppPath = descriptor.cppPath;
     workspace.shaderPath = descriptor.shaderPath;
+    workspace.uniformsPath = descriptor.uniformsPath;
     workspace.consoleLogPath = descriptor.consoleLogPath;
     workspace.engineLogPath = descriptor.engineLogPath;
     workspace.cppSource = std::move(*cppSource);
     workspace.shaderSource = std::move(*shaderSource);
+    if (auto uniformsJson = workspaceManager_->ReadFile(descriptor.uniformsPath); uniformsJson.has_value()) {
+        (void)workspace.uniforms.LoadFromJson(*uniformsJson);
+    }
+    if (!EnsureWorkspaceGeometry(&workspace)) {
+        return false;
+    }
 
     workspaces_[workspace.name] = workspace;
+    DebugLog("RegisterWorkspace(name=" + workspace.name +
+             ", vao=" + std::to_string(workspace.vao) +
+             ", vbo=" + std::to_string(workspace.vbo) +
+             ", cpp=" + workspace.cppPath +
+             ", shader=" + workspace.shaderPath + ")");
     fileToWorkspace_[workspace.cppPath] = workspace.name;
     fileToWorkspace_[workspace.shaderPath] = workspace.name;
     workspaceDirty_[workspace.name] = false;
@@ -744,6 +990,14 @@ bool Engine::DeleteWorkspaceFromUI(const std::string& workspaceName) {
         return false;
     }
 
+    ReleaseWorkspaceGeometry(&workspaceIt->second);
+    if (ctx_.vao == workspace.vao) {
+        ctx_.vao = 0;
+    }
+    if (ctx_.vbo == workspace.vbo) {
+        ctx_.vbo = 0;
+    }
+
     if (auto compiledIt = compiledPrograms_.find(workspaceName);
         compiledIt != compiledPrograms_.end()) {
         if (compiledIt->second && compiledIt->second != activeProgram_) {
@@ -764,6 +1018,7 @@ bool Engine::DeleteWorkspaceFromUI(const std::string& workspaceName) {
     fileToWorkspace_.erase(workspace.cppPath);
     fileToWorkspace_.erase(workspace.shaderPath);
     latestSources_.erase(workspaceName);
+    latestUniformDescriptors_.erase(workspaceName);
     pendingCompilesAt_.erase(workspaceName);
     compileFailures_.erase(workspaceName);
     compileRetryAfter_.erase(workspaceName);
@@ -825,9 +1080,12 @@ bool Engine::DeleteWorkspaceFromUI(const std::string& workspaceName) {
 void Engine::SwitchToWorkspace(const std::string& workspaceName, bool focusCppDocument) {
     auto workspaceIt = workspaces_.find(workspaceName);
     if (workspaceIt == workspaces_.end()) {
+        DebugLog("SwitchToWorkspace missing '" + workspaceName + "'");
         return;
     }
 
+    DebugLog("SwitchToWorkspace begin(from='" + activeWorkspaceName_ + "', to='" + workspaceName +
+             "', focusCpp=" + std::to_string(focusCppDocument) + ")");
     const double nowSeconds = glfwGetTime();
     if (activeWorkspaceName_ != workspaceName) {
         if (auto previousWorkspaceIt = workspaces_.find(activeWorkspaceName_);
@@ -845,14 +1103,17 @@ void Engine::SwitchToWorkspace(const std::string& workspaceName, bool focusCppDo
             ShutdownProgramIfInitialized(activeProgram_);
         }
         SaveActiveWorkspaceRuntimeState();
+        PersistWorkspaceUniformState(activeWorkspaceName_);
         activeProgram_.reset();
         activeWorkspaceName_ = workspaceName;
         LoadWorkspaceRuntimeState(workspaceName);
+        ActivateWorkspaceGeometry(workspaceName);
         workspaceIt = workspaces_.find(workspaceName);
         if (workspaceIt == workspaces_.end()) {
             return;
         }
         ui_->SetActiveWorkspace(workspaceName);
+        ui_->SetUniformValues(workspaceIt->second.uniforms.Values());
     }
 
     if (workspaceIt->second.activeClockStartSeconds < 0.0) {
@@ -865,16 +1126,24 @@ void Engine::SwitchToWorkspace(const std::string& workspaceName, bool focusCppDo
     }
 
     if (const bool requiresRecompile = workspaceDirty_[workspaceName]; requiresRecompile) {
+        DebugLog("SwitchToWorkspace dirty workspace '" + workspaceName + "', forcing compile");
         ActivateProgramForWorkspace(workspaceName);
         QueueCompileForWorkspace(workspaceName, glfwGetTime(), true);
         SaveActiveWorkspaceRuntimeState();
+        DebugLog("SwitchToWorkspace end(dirty, activeProgram=" +
+                 std::to_string(activeProgram_ != nullptr) + ")");
         return;
     }
 
     if (!ActivateProgramForWorkspace(workspaceName)) {
+        DebugLog("SwitchToWorkspace no compiled program for '" + workspaceName + "', queueing compile");
         QueueCompileForWorkspace(workspaceName, glfwGetTime(), true);
     }
     SaveActiveWorkspaceRuntimeState();
+    DebugLog("SwitchToWorkspace end(activeProgram=" + std::to_string(activeProgram_ != nullptr) +
+             ", ctx.vao=" + std::to_string(ctx_.vao) +
+             ", ctx.vbo=" + std::to_string(ctx_.vbo) +
+             ", ctx.state_i0=" + std::to_string(ctx_.state_i[0]) + ")");
 }
 
 bool Engine::InitWatcher() {
@@ -928,14 +1197,23 @@ bool Engine::InitWatcher() {
         RegisterWorkspace(descriptor);
     }
 
+    bool switchedByShowcaseLoad = false;
+    if (ui_->ShouldLoadShowcaseWorkspaceOnStartup()) {
+        switchedByShowcaseLoad = LoadShowcaseWorkspaceFromAssets(true);
+        if (!switchedByShowcaseLoad) {
+            ui_->AddLogOutput("[Workspace] Failed to load startup showcase workspace.");
+        }
+    }
+
     if (workspaceOrder_.empty()) {
         ui_->AddLogOutput("[Workspace Error] No workspace could be loaded.");
         return false;
     }
 
-    activeWorkspaceName_ = workspaceOrder_.front();
     SyncWorkspaceUiState();
-    SwitchToWorkspace(activeWorkspaceName_, true);
+    if (!switchedByShowcaseLoad) {
+        SwitchToWorkspace(workspaceOrder_.front(), true);
+    }
 
     watcher_ = std::make_unique<FileWatcher>(
         WORKSPACE_DIR,
@@ -1034,7 +1312,11 @@ void Engine::HandleActiveDocumentChanged(const std::string& filepath, const std:
     }
 }
 
-void Engine::QueueCompile(const std::string& workspaceName, const std::string& source, double nowSeconds, bool immediate) {
+void Engine::QueueCompile(const std::string& workspaceName,
+                          const std::string& source,
+                          std::vector<UniformDescriptor> uniformDescriptors,
+                          double nowSeconds,
+                          bool immediate) {
     const std::size_t sourceHash = std::hash<std::string>{}(source);
     auto failureIt = compileFailures_.find(workspaceName);
     if (failureIt != compileFailures_.end() && failureIt->second.sourceHash == sourceHash) {
@@ -1051,6 +1333,7 @@ void Engine::QueueCompile(const std::string& workspaceName, const std::string& s
     }
 
     latestSources_[workspaceName] = source;
+    latestUniformDescriptors_[workspaceName] = std::move(uniformDescriptors);
     // Error-heavy workspaces get a longer debounce to avoid compile spam while user is fixing errors.
     double debounce = MIN_DEBOUNCE_SECONDS;
     auto errorIt = recentErrors_.find(workspaceName);
@@ -1105,6 +1388,10 @@ void Engine::EnqueueDueCompiles(const std::vector<std::string>& duePaths) {
         if (sourceIt == latestSources_.end()) {
             continue;
         }
+        auto uniformDescriptorsIt = latestUniformDescriptors_.find(workspaceName);
+        if (uniformDescriptorsIt == latestUniformDescriptors_.end()) {
+            continue;
+        }
 
         const std::size_t sourceHash = std::hash<std::string>{}(sourceIt->second);
         if (auto inFlightIt = inFlightSourceHashes_.find(workspaceName);
@@ -1139,7 +1426,8 @@ void Engine::EnqueueDueCompiles(const std::vector<std::string>& duePaths) {
             workspaceName,
             workspaceIt->second.cppPath,
             sourceIt->second,
-            sourceHash
+            sourceHash,
+            uniformDescriptorsIt->second
         });
         pendingCompilesAt_.erase(workspaceName);
     }
@@ -1203,7 +1491,12 @@ void Engine::CompileThreadMain(std::shared_ptr<std::atomic<bool>> running) {
             std::scoped_lock lock(compileMutex_);
             inFlightSourceHashes_.erase(job.workspaceName);
             inFlightStartTime_ = 0.0;
-            compileResults_.push(CompileResult{ job.workspaceName, std::move(program), job.sourceHash });
+            compileResults_.push(CompileResult{
+                job.workspaceName,
+                std::move(program),
+                job.sourceHash,
+                std::move(job.uniformDescriptors)
+            });
         }
     }
 }
@@ -1213,10 +1506,21 @@ void Engine::InitializeProgramIfNeeded(const std::shared_ptr<JitProgram>& progra
         return;
     }
 
+    DebugLog("InitializeProgramIfNeeded(program_ptr=" +
+             std::to_string(reinterpret_cast<std::uintptr_t>(program.get())) +
+             ", ctx.state_i0(before)=" + std::to_string(ctx_.state_i[0]) +
+             ", ctx.vao=" + std::to_string(ctx_.vao) +
+             ", ctx.vbo=" + std::to_string(ctx_.vbo) + ")");
+
     if (program->functions.init) {
         program->functions.init(&ctx_);
     }
     program->initialized = true;
+    DebugLog("InitializeProgramIfNeeded done(program_ptr=" +
+             std::to_string(reinterpret_cast<std::uintptr_t>(program.get())) +
+             ", ctx.state_i0(after)=" + std::to_string(ctx_.state_i[0]) +
+             ", glIsProgram=" + std::to_string(ctx_.state_i[0] != 0 &&
+                                               glIsProgram(static_cast<GLuint>(ctx_.state_i[0])) == GL_TRUE) + ")");
 }
 
 void Engine::ShutdownProgramIfInitialized(const std::shared_ptr<JitProgram>& program) {
@@ -1224,15 +1528,23 @@ void Engine::ShutdownProgramIfInitialized(const std::shared_ptr<JitProgram>& pro
         return;
     }
 
+    DebugLog("ShutdownProgramIfInitialized(program_ptr=" +
+             std::to_string(reinterpret_cast<std::uintptr_t>(program.get())) +
+             ", ctx.state_i0(before)=" + std::to_string(ctx_.state_i[0]) + ")");
+
     if (program->functions.shutdown) {
         program->functions.shutdown(&ctx_);
     }
     program->initialized = false;
+    DebugLog("ShutdownProgramIfInitialized done(program_ptr=" +
+             std::to_string(reinterpret_cast<std::uintptr_t>(program.get())) +
+             ", ctx.state_i0(after)=" + std::to_string(ctx_.state_i[0]) + ")");
 }
 
 bool Engine::ActivateProgramForWorkspace(const std::string& workspaceName) {
     auto it = compiledPrograms_.find(workspaceName);
     if (it == compiledPrograms_.end()) {
+        DebugLog("ActivateProgramForWorkspace missing compiled program for '" + workspaceName + "'");
         return false;
     }
 
@@ -1244,12 +1556,19 @@ bool Engine::ActivateProgramForWorkspace(const std::string& workspaceName) {
     activeProgram_ = nextProgram;
     InitializeProgramIfNeeded(activeProgram_);
 
+    DebugLog("ActivateProgramForWorkspace(name=" + workspaceName +
+             ", program_ptr=" + std::to_string(reinterpret_cast<std::uintptr_t>(nextProgram.get())) +
+             ", initialized=" + std::to_string(nextProgram != nullptr && nextProgram->initialized) +
+             ", ctx.state_i0=" + std::to_string(ctx_.state_i[0]) +
+             ", glIsProgram=" + std::to_string(ctx_.state_i[0] != 0 &&
+                                               glIsProgram(static_cast<GLuint>(ctx_.state_i[0])) == GL_TRUE) + ")");
     ui_->AddLogOutput("[Runtime] Active workspace switched to " + workspaceName);
     return true;
 }
 
 bool Engine::ExportActiveWorkspace(const std::string& targetPath) const {
     if (activeWorkspaceName_.empty()) return false;
+    PersistWorkspaceUniformState(activeWorkspaceName_);
     return workspaceManager_->ExportWorkspace(activeWorkspaceName_, targetPath);
 }
 
@@ -1266,6 +1585,92 @@ bool Engine::ImportWorkspace(const std::string& sourcePath) {
         return true;
     }
     return false;
+}
+
+bool Engine::LoadShowcaseWorkspaceFromAssets(const bool focusWorkspace) {
+    if (!workspaceManager_ || !ui_) {
+        return false;
+    }
+
+    const auto sceneSource = LoadTextFileWithFallback(SHOWCASE_SCENE_ASSET_PATH, SHOWCASE_SCENE_ASSET_FALLBACK_PATH);
+    const auto shaderSource = LoadTextFileWithFallback(SHOWCASE_SHADER_ASSET_PATH, SHOWCASE_SHADER_ASSET_FALLBACK_PATH);
+    const auto uniformsSource = LoadTextFileWithFallback(SHOWCASE_UNIFORMS_ASSET_PATH,
+                                                         SHOWCASE_UNIFORMS_ASSET_FALLBACK_PATH);
+    if (!sceneSource.has_value() || !shaderSource.has_value()) {
+        ui_->AddLogOutput("[Workspace Error] Showcase assets are missing. Expected assets/showcase_scene.cpp and assets/showcase_shader.glsl.");
+        return false;
+    }
+
+    auto descriptor = workspaceManager_->CreateWorkspace(SHOWCASE_WORKSPACE_NAME);
+    if (!descriptor.has_value()) {
+        ui_->AddLogOutput("[Workspace Error] Failed to create or load showcase workspace directory.");
+        return false;
+    }
+
+    const std::string uniformJson = uniformsSource.value_or("{}\n");
+    if (!workspaceManager_->SaveFile(descriptor->cppPath, *sceneSource) ||
+        !workspaceManager_->SaveFile(descriptor->shaderPath, *shaderSource) ||
+        !workspaceManager_->SaveFile(descriptor->uniformsPath, uniformJson)) {
+        ui_->AddLogOutput("[Workspace Error] Failed to write showcase workspace files.");
+        return false;
+    }
+
+    const double nowSeconds = glfwGetTime();
+    ignoreWatcherUntil_[descriptor->cppPath] = nowSeconds + WATCHER_IGNORE_SECONDS;
+    ignoreWatcherUntil_[descriptor->shaderPath] = nowSeconds + WATCHER_IGNORE_SECONDS;
+    ignoreWatcherUntil_[descriptor->uniformsPath] = nowSeconds + WATCHER_IGNORE_SECONDS;
+
+    auto workspaceIt = workspaces_.find(descriptor->name);
+    if (workspaceIt == workspaces_.end()) {
+        if (!RegisterWorkspace(*descriptor)) {
+            ui_->AddLogOutput("[Workspace Error] Showcase workspace files were written but could not be registered.");
+            return false;
+        }
+        workspaceIt = workspaces_.find(descriptor->name);
+        if (workspaceIt == workspaces_.end()) {
+            return false;
+        }
+    } else {
+        auto& workspace = workspaceIt->second;
+        workspace.cppSource = *sceneSource;
+        workspace.shaderSource = *shaderSource;
+        workspace.uniforms = UniformRegistry{};
+        (void)workspace.uniforms.LoadFromJson(uniformJson);
+
+        ui_->UpdateDocumentContent(workspace.cppPath, workspace.cppSource);
+        ui_->UpdateDocumentContent(workspace.shaderPath, workspace.shaderSource);
+        ui_->SetWorkspaceOutputHistory(workspace.name,
+                                       workspaceManager_->LoadWorkspaceConsoleLog(workspace.name),
+                                       workspaceManager_->LoadWorkspaceEngineLog(workspace.name));
+    }
+
+    workspaceDirty_[descriptor->name] = true;
+    compileFailures_.erase(descriptor->name);
+    compileRetryAfter_.erase(descriptor->name);
+    recentErrors_.erase(descriptor->name);
+    latestSources_.erase(descriptor->name);
+    latestUniformDescriptors_.erase(descriptor->name);
+    pendingCompilesAt_.erase(descriptor->name);
+
+    SyncWorkspaceUiState();
+    if (focusWorkspace) {
+        SwitchToWorkspace(descriptor->name, true);
+    }
+    return true;
+}
+
+void Engine::HandleLoadShowcaseWorkspaceRequest() {
+    if (!workspaceManager_) {
+        ui_->AddLogOutput("[Workspace Error] Cannot load showcase workspace before workspace manager is initialized.");
+        return;
+    }
+
+    if (!LoadShowcaseWorkspaceFromAssets(true)) {
+        ui_->AddLogOutput("[Workspace Error] Failed to load showcase workspace from assets.");
+        return;
+    }
+
+    ui_->AddLogOutput("[Workspace] Showcase workspace loaded from assets.");
 }
 
 bool Engine::ImportWorkspacePackage(const std::string& packageData, const std::string& sourceHint) {
@@ -1404,6 +1809,7 @@ void Engine::HandleShareWorkspaceRequest(const std::vector<std::string>& targetP
         return;
     }
 
+    PersistWorkspaceUniformState(activeWorkspaceName_);
     auto packageData = workspaceManager_->ExportWorkspacePackage(activeWorkspaceName_);
     if (!packageData.has_value()) {
         ui_->AddLogOutput("[Network Error] Failed to package workspace '" + activeWorkspaceName_ + "' for sharing.");
@@ -1576,6 +1982,8 @@ void Engine::HandleRequestFirewallAccess() {
 }
 
 void Engine::HandleCompileFailure(const CompileResult& result) {
+    DebugLog("HandleCompileFailure(workspace=" + result.workspaceName +
+             ", sourceHash=" + std::to_string(result.sourceHash) + ")");
     ui_->AddLogOutput("[JIT] Compile failed for workspace '" + result.workspaceName +
                       "'. Keeping previous program.");
     if (auto sourceIt = latestSources_.find(result.workspaceName);
@@ -1604,8 +2012,17 @@ void Engine::HandleCompileFailure(const CompileResult& result) {
 }
 
 void Engine::HandleCompileSuccess(const CompileResult& result) {
+    DebugLog("HandleCompileSuccess(workspace=" + result.workspaceName +
+             ", sourceHash=" + std::to_string(result.sourceHash) +
+             ", program_ptr=" + std::to_string(reinterpret_cast<std::uintptr_t>(result.program.get())) +
+             ", uniforms=" + std::to_string(result.uniformDescriptors.size()) + ")");
     ui_->SetCompilationStatus(false, ActiveWorkspaceHasCompileError(), false);
     recentErrors_.erase(result.workspaceName);
+
+    auto workspaceIt = workspaces_.find(result.workspaceName);
+    if (workspaceIt == workspaces_.end()) {
+        return;
+    }
 
     if (auto latestIt = latestSources_.find(result.workspaceName);
         latestIt != latestSources_.end()) {
@@ -1626,6 +2043,11 @@ void Engine::HandleCompileSuccess(const CompileResult& result) {
         ShutdownProgramIfInitialized(existingIt->second);
     }
 
+    workspaceIt->second.uniforms.Rebuild(result.uniformDescriptors);
+    if (result.workspaceName == activeWorkspaceName_) {
+        ui_->SetUniformValues(workspaceIt->second.uniforms.Values());
+    }
+
     compiledPrograms_[result.workspaceName] = result.program;
     if (result.workspaceName != activeWorkspaceName_) {
         return;
@@ -1638,6 +2060,10 @@ void Engine::HandleCompileSuccess(const CompileResult& result) {
     ctx_.reloadCount++;
     InitializeProgramIfNeeded(activeProgram_);
     SaveActiveWorkspaceRuntimeState();
+    DebugLog("HandleCompileSuccess activated(workspace=" + result.workspaceName +
+             ", ctx.state_i0=" + std::to_string(ctx_.state_i[0]) +
+             ", glIsProgram=" + std::to_string(ctx_.state_i[0] != 0 &&
+                                               glIsProgram(static_cast<GLuint>(ctx_.state_i[0])) == GL_TRUE) + ")");
 }
 
 void Engine::ProcessCompileResults() {
@@ -1664,6 +2090,39 @@ void Engine::ProcessCompileResults() {
     }
 }
 
+void Engine::ApplyActiveWorkspaceUniforms() {
+    static GLuint lastLoggedProgramHandle = std::numeric_limits<GLuint>::max();
+    static std::string lastLoggedWorkspace;
+
+    if (activeWorkspaceName_.empty()) {
+        return;
+    }
+
+    auto workspaceIt = workspaces_.find(activeWorkspaceName_);
+    if (workspaceIt == workspaces_.end()) {
+        return;
+    }
+
+    const GLuint programHandle = static_cast<GLuint>(ctx_.state_i[0]);
+    if (programHandle != lastLoggedProgramHandle || activeWorkspaceName_ != lastLoggedWorkspace) {
+        DebugLog("ApplyActiveWorkspaceUniforms(workspace=" + activeWorkspaceName_ +
+                 ", programHandle=" + std::to_string(programHandle) +
+                 ", glIsProgram=" + std::to_string(programHandle != 0 &&
+                                                   glIsProgram(programHandle) == GL_TRUE) +
+                 ", uniformCount=" + std::to_string(workspaceIt->second.uniforms.Values().size()) + ")");
+        lastLoggedProgramHandle = programHandle;
+        lastLoggedWorkspace = activeWorkspaceName_;
+    }
+    if (programHandle == 0) {
+        workspaceIt->second.uniforms.BindProgram(0);
+        return;
+    }
+
+    workspaceIt->second.uniforms.BindProgram(programHandle);
+    glUseProgram(programHandle);
+    workspaceIt->second.uniforms.UploadDirty();
+}
+
 void Engine::RenderSceneToTexture() {
     if (sceneFbo_ == 0) {
         return;
@@ -1680,6 +2139,7 @@ void Engine::RenderSceneToTexture() {
         if (fn.update) {
             fn.update(&ctx_);
         }
+        ApplyActiveWorkspaceUniforms();
         if (fn.render) {
             fn.render(&ctx_);
         }
@@ -1726,6 +2186,13 @@ void Engine::Run() {
 
         RenderSceneToTexture();
         UpdateLanShareUiState();
+
+        if (auto activeWorkspaceIt = workspaces_.find(activeWorkspaceName_);
+            activeWorkspaceIt != workspaces_.end()) {
+            ui_->SetUniformValues(activeWorkspaceIt->second.uniforms.Values());
+        } else {
+            ui_->SetUniformValues({});
+        }
 
         ui_->NewFrame();
         ui_->Draw();
@@ -1794,11 +2261,17 @@ void Engine::Shutdown() {
     activeProgram_.reset();
     compiledPrograms_.clear();
 
+    for (auto& [workspaceName, workspace] : workspaces_) {
+        PersistWorkspaceUniformState(workspaceName);
+        ReleaseWorkspaceGeometry(&workspace);
+    }
+
     compileFailures_.clear();
     compileRetryAfter_.clear();
     recentErrors_.clear();
     ignoreWatcherUntil_.clear();
     latestSources_.clear();
+    latestUniformDescriptors_.clear();
     pendingCompilesAt_.clear();
     inFlightSourceHashes_.clear();
     workspaces_.clear();
@@ -1828,15 +2301,15 @@ void Engine::Shutdown() {
 
     DestroySceneRenderTarget();
 
-    if (ctx_.vao) {
+    if (ctx_.vao != 0 && glIsVertexArray(ctx_.vao) == GL_TRUE) {
         glDeleteVertexArrays(1, &ctx_.vao);
-        ctx_.vao = 0;
     }
+    ctx_.vao = 0;
 
-    if (ctx_.vbo) {
+    if (ctx_.vbo != 0 && glIsBuffer(ctx_.vbo) == GL_TRUE) {
         glDeleteBuffers(1, &ctx_.vbo);
-        ctx_.vbo = 0;
     }
+    ctx_.vbo = 0;
 
     if (ctx_.defaultShader) {
         glDeleteProgram(ctx_.defaultShader);
