@@ -68,6 +68,12 @@ private:
         unsigned int vbo = 0;
         double accumulatedActiveSeconds = 0.0;
         double activeClockStartSeconds = -1.0;
+        bool playbackPaused = false;
+        float playbackSpeed = 1.0f;
+        bool loopEnabled = false;
+        double loopStartSeconds = 0.0;
+        double loopEndSeconds = 10.0;
+        double timelineMaxSeconds = 30.0;
     };
 
     std::unordered_map<std::string, WorkspaceState> workspaces_;
@@ -164,6 +170,10 @@ private:
     void LoadWorkspaceRuntimeState(const std::string& workspaceName);
     void HandleUniformEditCommand(const UniformEditCommand& command);
     std::string ActiveWorkspaceUniformStateJson() const;
+    void HandlePlaybackCommand(const EditorUI::PlaybackCommand& command);
+    void AdvanceWorkspacePlayback(WorkspaceState* workspace, double nowSeconds);
+    void NormalizeWorkspacePlaybackRange(WorkspaceState* workspace);
+    EditorUI::PlaybackState BuildPlaybackStateForWorkspace(const std::string& workspaceName) const;
 
     void ResetJIT();
     void CompletePendingJITReset();

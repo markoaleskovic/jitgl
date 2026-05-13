@@ -740,6 +740,14 @@ void EditorUI::SetUniformJsonSnapshotCallback(std::function<std::string()> cb) {
     onUniformJsonSnapshot_ = std::move(cb);
 }
 
+void EditorUI::SetPlaybackState(PlaybackState state) {
+    playbackState_ = state;
+}
+
+void EditorUI::SetPlaybackCommandCallback(std::function<void(const PlaybackCommand&)> cb) {
+    onPlaybackCommand_ = std::move(cb);
+}
+
 void EditorUI::SetLoadShowcaseWorkspaceCallback(std::function<void()> cb) {
     onLoadShowcaseWorkspace_ = std::move(cb);
 }
@@ -1293,6 +1301,7 @@ void EditorUI::DrawViewMenu() {
     }
     ImGui::Separator();
     (void)ImGui::MenuItem("Uniform Controls", nullptr, &showUniformControlsPanel_);
+    (void)ImGui::MenuItem("Playback Controls", nullptr, &showPlaybackControlsPanel_);
     (void)ImGui::MenuItem("Network Diagnostics", nullptr, &showNetworkDiagnostics_);
     ImGui::EndMenu();
 }
@@ -2104,6 +2113,8 @@ void EditorUI::DrawRendererTab() {
         return;
     }
 
+    DrawPlaybackTransportBar();
+
     if (rendererTexture_ != 0 && rendererTextureWidth_ > 0 && rendererTextureHeight_ > 0) {
         const ImVec2 avail = ImGui::GetContentRegionAvail();
         const float srcAspect = static_cast<float>(rendererTextureWidth_) / static_cast<float>(rendererTextureHeight_);
@@ -2135,6 +2146,101 @@ void EditorUI::DrawRendererTab() {
     ImGui::EndTabItem();
 }
 
+void EditorUI::DrawPlaybackTransportBar() {
+    if (!showPlaybackControlsPanel_) {
+        return;
+    }
+
+    auto submitPlaybackCommand = [this](const PlaybackCommand& command) {
+        if (onPlaybackCommand_) {
+            onPlaybackCommand_(command);
+        }
+    };
+
+    if (ImGui::Button(playbackState_.paused ? "Play" : "Pause")) {
+        submitPlaybackCommand(PlaybackCommand{ PlaybackCommandType::TogglePause, 0.0f, false });
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Rewind")) {
+        submitPlaybackCommand(PlaybackCommand{ PlaybackCommandType::Rewind, 0.0f, false });
+    }
+    ImGui::SameLine();
+    ImGui::Text("Time %.3fs", playbackState_.currentTimeSeconds);
+
+    float timelineMax = std::max(1.0f, playbackState_.timelineMaxSeconds);
+    if (timelineMax < playbackState_.loopEndSeconds) {
+        timelineMax = playbackState_.loopEndSeconds;
+    }
+
+    ImGui::SetNextItemWidth(140.0f);
+    if (ImGui::DragFloat("Timeline End", &timelineMax, 0.1f, 1.0f, 3600.0f, "%.2fs")) {
+        submitPlaybackCommand(PlaybackCommand{ PlaybackCommandType::SetTimelineMax, timelineMax, false });
+    }
+
+    const float scrubMin = playbackState_.loopEnabled
+                               ? std::clamp(playbackState_.loopStartSeconds, 0.0f, timelineMax)
+                               : 0.0f;
+    const float scrubMax = playbackState_.loopEnabled
+                               ? std::max(scrubMin + 0.01f,
+                                          std::clamp(playbackState_.loopEndSeconds, scrubMin + 0.01f, timelineMax))
+                               : timelineMax;
+    float scrubTime = std::clamp(playbackState_.currentTimeSeconds, scrubMin, scrubMax);
+    if (ImGui::SliderFloat("Time Scrubber", &scrubTime, scrubMin, scrubMax, "%.3fs")) {
+        submitPlaybackCommand(PlaybackCommand{ PlaybackCommandType::SetTime, scrubTime, false });
+    }
+
+    ImGui::TextUnformatted("Speed");
+    ImGui::SameLine();
+    const std::array<std::pair<const char*, float>, 4> speeds = {{
+        {"0.25x", 0.25f},
+        {"0.5x", 0.5f},
+        {"1x", 1.0f},
+        {"2x", 2.0f},
+    }};
+    for (std::size_t i = 0; i < speeds.size(); ++i) {
+        if (i > 0) {
+            ImGui::SameLine();
+        }
+        const bool selected = std::abs(playbackState_.speed - speeds[i].second) < 0.001f;
+        if (selected) {
+            ImGui::PushStyleColor(ImGuiCol_Button, IsLightTheme() ? ImVec4(0.75f, 0.82f, 0.92f, 1.0f)
+                                                                  : ImVec4(0.22f, 0.37f, 0.53f, 1.0f));
+        }
+        if (ImGui::Button(speeds[i].first)) {
+            submitPlaybackCommand(PlaybackCommand{ PlaybackCommandType::SetSpeed, speeds[i].second, false });
+        }
+        if (selected) {
+            ImGui::PopStyleColor();
+        }
+    }
+
+    bool loopEnabled = playbackState_.loopEnabled;
+    if (ImGui::Checkbox("Loop Range", &loopEnabled)) {
+        submitPlaybackCommand(PlaybackCommand{ PlaybackCommandType::SetLoopEnabled, 0.0f, loopEnabled });
+    }
+
+    float loopStart = std::clamp(playbackState_.loopStartSeconds, 0.0f, timelineMax);
+    float loopEnd = std::clamp(playbackState_.loopEndSeconds, 0.0f, std::max(timelineMax, loopStart + 0.01f));
+    if (loopEnd <= loopStart) {
+        loopEnd = loopStart + 0.01f;
+    }
+    loopEnd = std::clamp(loopEnd, 0.0f, std::max(timelineMax, loopStart + 0.01f));
+
+    const float loopStartMax = std::max(0.0f, loopEnd - 0.01f);
+    ImGui::SetNextItemWidth(180.0f);
+    if (ImGui::DragFloat("Loop Start", &loopStart, 0.05f, 0.0f, loopStartMax, "%.2fs")) {
+        submitPlaybackCommand(PlaybackCommand{ PlaybackCommandType::SetLoopStart, loopStart, false });
+    }
+
+    const float loopEndMin = std::min(timelineMax, loopStart + 0.01f);
+    ImGui::SetNextItemWidth(180.0f);
+    if (ImGui::DragFloat("Loop End", &loopEnd, 0.05f, loopEndMin, std::max(timelineMax, loopEndMin), "%.2fs")) {
+        submitPlaybackCommand(PlaybackCommand{ PlaybackCommandType::SetLoopEnd, loopEnd, false });
+    }
+
+    ImGui::Separator();
+}
+
 void EditorUI::DrawUniformsTab() {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const float margin = 12.0f;
@@ -2154,9 +2260,14 @@ void EditorUI::DrawUniformsTab() {
 
     float toggleHeight = 0.0f;
     if (ImGui::Begin("UniformControlsToggle", nullptr, toggleFlags)) {
-        const char* buttonLabel = showUniformControlsPanel_ ? "Hide Uniforms" : "Show Uniforms";
-        if (ImGui::Button(buttonLabel)) {
+        const char* uniformButtonLabel = showUniformControlsPanel_ ? "Hide Uniforms" : "Show Uniforms";
+        if (ImGui::Button(uniformButtonLabel)) {
             showUniformControlsPanel_ = !showUniformControlsPanel_;
+        }
+        ImGui::SameLine();
+        const char* playbackButtonLabel = showPlaybackControlsPanel_ ? "Hide Playback" : "Show Playback";
+        if (ImGui::Button(playbackButtonLabel)) {
+            showPlaybackControlsPanel_ = !showPlaybackControlsPanel_;
         }
         toggleHeight = ImGui::GetWindowSize().y;
     }

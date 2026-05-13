@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -333,11 +334,43 @@ bool Engine::InitWindow() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, GL_VERSION_MINOR);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    window_ = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_TITLE, nullptr, nullptr);
+    int initialWidth = WINDOW_WIDTH;
+    int initialHeight = WINDOW_HEIGHT;
+    int initialPosX = 0;
+    int initialPosY = 0;
+    bool hasInitialPosition = false;
+
+    if (GLFWmonitor* primaryMonitor = glfwGetPrimaryMonitor(); primaryMonitor != nullptr) {
+        int workX = 0;
+        int workY = 0;
+        int workWidth = 0;
+        int workHeight = 0;
+        glfwGetMonitorWorkarea(primaryMonitor, &workX, &workY, &workWidth, &workHeight);
+        if (workWidth > 0 && workHeight > 0) {
+            initialWidth = workWidth;
+            initialHeight = workHeight;
+            initialPosX = workX;
+            initialPosY = workY;
+            hasInitialPosition = true;
+        } else if (const GLFWvidmode* mode = glfwGetVideoMode(primaryMonitor); mode != nullptr &&
+                   mode->width > 0 && mode->height > 0) {
+            initialWidth = mode->width;
+            initialHeight = mode->height;
+            initialPosX = 0;
+            initialPosY = 0;
+            hasInitialPosition = true;
+        }
+    }
+
+    window_ = glfwCreateWindow(initialWidth, initialHeight, WINDOW_TITLE, nullptr, nullptr);
     if (!window_) {
         std::cerr << "Window creation failed\n";
         glfwTerminate();
         return false;
+    }
+
+    if (hasInitialPosition) {
+        glfwSetWindowPos(window_, initialPosX, initialPosY);
     }
 
     glfwMakeContextCurrent(window_);
@@ -614,6 +647,9 @@ bool Engine::InitUI() {
     ui_->SetUniformJsonSnapshotCallback([this]() {
         return ActiveWorkspaceUniformStateJson();
     });
+    ui_->SetPlaybackCommandCallback([this](const EditorUI::PlaybackCommand& command) {
+        HandlePlaybackCommand(command);
+    });
     ui_->SetLoadShowcaseWorkspaceCallback([this]() {
         HandleLoadShowcaseWorkspaceRequest();
     });
@@ -800,6 +836,153 @@ std::string Engine::ActiveWorkspaceUniformStateJson() const {
     return workspaceIt->second.uniforms.SerializeToJson();
 }
 
+void Engine::NormalizeWorkspacePlaybackRange(WorkspaceState* workspace) {
+    if (workspace == nullptr) {
+        return;
+    }
+
+    if (!std::isfinite(workspace->accumulatedActiveSeconds) || workspace->accumulatedActiveSeconds < 0.0) {
+        workspace->accumulatedActiveSeconds = 0.0;
+    }
+    if (!std::isfinite(workspace->timelineMaxSeconds) || workspace->timelineMaxSeconds < 1.0) {
+        workspace->timelineMaxSeconds = 1.0;
+    }
+    if (!std::isfinite(workspace->loopStartSeconds) || workspace->loopStartSeconds < 0.0) {
+        workspace->loopStartSeconds = 0.0;
+    }
+    if (!std::isfinite(workspace->loopEndSeconds)) {
+        workspace->loopEndSeconds = workspace->loopStartSeconds + 10.0;
+    }
+    if (workspace->loopEndSeconds <= workspace->loopStartSeconds) {
+        workspace->loopEndSeconds = workspace->loopStartSeconds + 0.01;
+    }
+
+    if (workspace->loopEnabled) {
+        const double loopRange = workspace->loopEndSeconds - workspace->loopStartSeconds;
+        if (loopRange > 0.0) {
+            if (workspace->accumulatedActiveSeconds < workspace->loopStartSeconds) {
+                workspace->accumulatedActiveSeconds = workspace->loopStartSeconds;
+            } else if (workspace->accumulatedActiveSeconds >= workspace->loopEndSeconds) {
+                double offset = std::fmod(workspace->accumulatedActiveSeconds - workspace->loopStartSeconds, loopRange);
+                if (offset < 0.0) {
+                    offset += loopRange;
+                }
+                workspace->accumulatedActiveSeconds = workspace->loopStartSeconds + offset;
+            }
+        }
+    }
+
+    if (workspace->loopEndSeconds > workspace->timelineMaxSeconds) {
+        workspace->timelineMaxSeconds = workspace->loopEndSeconds;
+    }
+    if (!workspace->loopEnabled && workspace->accumulatedActiveSeconds > workspace->timelineMaxSeconds) {
+        workspace->timelineMaxSeconds = workspace->accumulatedActiveSeconds;
+    }
+}
+
+void Engine::AdvanceWorkspacePlayback(WorkspaceState* workspace, const double nowSeconds) {
+    if (workspace == nullptr) {
+        return;
+    }
+
+    if (workspace->activeClockStartSeconds < 0.0) {
+        workspace->activeClockStartSeconds = nowSeconds;
+        NormalizeWorkspacePlaybackRange(workspace);
+        return;
+    }
+
+    const double deltaSeconds = std::max(0.0, nowSeconds - workspace->activeClockStartSeconds);
+    workspace->activeClockStartSeconds = nowSeconds;
+
+    if (!workspace->playbackPaused && std::isfinite(workspace->playbackSpeed) && workspace->playbackSpeed > 0.0f) {
+        workspace->accumulatedActiveSeconds += deltaSeconds * static_cast<double>(workspace->playbackSpeed);
+    }
+
+    NormalizeWorkspacePlaybackRange(workspace);
+}
+
+EditorUI::PlaybackState Engine::BuildPlaybackStateForWorkspace(const std::string& workspaceName) const {
+    EditorUI::PlaybackState state;
+
+    auto workspaceIt = workspaces_.find(workspaceName);
+    if (workspaceIt == workspaces_.end()) {
+        return state;
+    }
+
+    const auto& workspace = workspaceIt->second;
+    state.currentTimeSeconds = static_cast<float>(std::max(0.0, workspace.accumulatedActiveSeconds));
+    state.timelineMaxSeconds = static_cast<float>(std::max(1.0, workspace.timelineMaxSeconds));
+    state.paused = workspace.playbackPaused;
+    state.speed = workspace.playbackSpeed;
+    state.loopEnabled = workspace.loopEnabled;
+    state.loopStartSeconds = static_cast<float>(std::max(0.0, workspace.loopStartSeconds));
+    state.loopEndSeconds = static_cast<float>(std::max(workspace.loopStartSeconds + 0.01, workspace.loopEndSeconds));
+    return state;
+}
+
+void Engine::HandlePlaybackCommand(const EditorUI::PlaybackCommand& command) {
+    if (activeWorkspaceName_.empty()) {
+        return;
+    }
+
+    auto workspaceIt = workspaces_.find(activeWorkspaceName_);
+    if (workspaceIt == workspaces_.end()) {
+        return;
+    }
+
+    const double nowSeconds = glfwGetTime();
+    auto& workspace = workspaceIt->second;
+    AdvanceWorkspacePlayback(&workspace, nowSeconds);
+
+    switch (command.type) {
+        case EditorUI::PlaybackCommandType::TogglePause:
+            workspace.playbackPaused = !workspace.playbackPaused;
+            break;
+
+        case EditorUI::PlaybackCommandType::Rewind:
+            workspace.accumulatedActiveSeconds = 0.0;
+            break;
+
+        case EditorUI::PlaybackCommandType::SetTime:
+            workspace.accumulatedActiveSeconds = std::max(0.0, static_cast<double>(command.value));
+            break;
+
+        case EditorUI::PlaybackCommandType::SetSpeed: {
+            constexpr std::array<float, 4> allowedSpeeds = { 0.25f, 0.5f, 1.0f, 2.0f };
+            float selected = allowedSpeeds.front();
+            float smallestDistance = std::abs(command.value - selected);
+            for (const float candidate : allowedSpeeds) {
+                const float distance = std::abs(command.value - candidate);
+                if (distance < smallestDistance) {
+                    selected = candidate;
+                    smallestDistance = distance;
+                }
+            }
+            workspace.playbackSpeed = selected;
+            break;
+        }
+
+        case EditorUI::PlaybackCommandType::SetLoopEnabled:
+            workspace.loopEnabled = command.enabled;
+            break;
+
+        case EditorUI::PlaybackCommandType::SetLoopStart:
+            workspace.loopStartSeconds = std::max(0.0, static_cast<double>(command.value));
+            break;
+
+        case EditorUI::PlaybackCommandType::SetLoopEnd:
+            workspace.loopEndSeconds = std::max(0.0, static_cast<double>(command.value));
+            break;
+
+        case EditorUI::PlaybackCommandType::SetTimelineMax:
+            workspace.timelineMaxSeconds = std::max(1.0, static_cast<double>(command.value));
+            break;
+    }
+
+    NormalizeWorkspacePlaybackRange(&workspace);
+    ui_->SetPlaybackState(BuildPlaybackStateForWorkspace(activeWorkspaceName_));
+}
+
 void Engine::UpdateWorkspaceSourceFromDocument(const std::string& workspaceName,
                                                const std::string& filepath,
                                                const std::string& content) {
@@ -900,6 +1083,7 @@ bool Engine::RegisterWorkspace(const WorkspaceDescriptor& descriptor) {
     if (!EnsureWorkspaceGeometry(&workspace)) {
         return false;
     }
+    NormalizeWorkspacePlaybackRange(&workspace);
 
     workspaces_[workspace.name] = workspace;
     DebugLog("RegisterWorkspace(name=" + workspace.name +
@@ -1091,12 +1275,8 @@ void Engine::SwitchToWorkspace(const std::string& workspaceName, bool focusCppDo
         if (auto previousWorkspaceIt = workspaces_.find(activeWorkspaceName_);
             previousWorkspaceIt != workspaces_.end()) {
             auto& previousWorkspace = previousWorkspaceIt->second;
-            if (previousWorkspace.activeClockStartSeconds >= 0.0) {
-                // Freeze per-workspace time when leaving it; inactive workspaces stay paused.
-                const double elapsed = std::max(0.0, nowSeconds - previousWorkspace.activeClockStartSeconds);
-                previousWorkspace.accumulatedActiveSeconds += elapsed;
-                previousWorkspace.activeClockStartSeconds = -1.0;
-            }
+            AdvanceWorkspacePlayback(&previousWorkspace, nowSeconds);
+            previousWorkspace.activeClockStartSeconds = -1.0;
         }
 
         if (activeProgram_) {
@@ -1115,10 +1295,7 @@ void Engine::SwitchToWorkspace(const std::string& workspaceName, bool focusCppDo
         ui_->SetActiveWorkspace(workspaceName);
         ui_->SetUniformValues(workspaceIt->second.uniforms.Values());
     }
-
-    if (workspaceIt->second.activeClockStartSeconds < 0.0) {
-        workspaceIt->second.activeClockStartSeconds = nowSeconds;
-    }
+    workspaceIt->second.activeClockStartSeconds = nowSeconds;
 
     if (focusCppDocument) {
         activeFilePath_ = workspaceIt->second.cppPath;
@@ -1129,6 +1306,7 @@ void Engine::SwitchToWorkspace(const std::string& workspaceName, bool focusCppDo
         DebugLog("SwitchToWorkspace dirty workspace '" + workspaceName + "', forcing compile");
         ActivateProgramForWorkspace(workspaceName);
         QueueCompileForWorkspace(workspaceName, glfwGetTime(), true);
+        ui_->SetPlaybackState(BuildPlaybackStateForWorkspace(workspaceName));
         SaveActiveWorkspaceRuntimeState();
         DebugLog("SwitchToWorkspace end(dirty, activeProgram=" +
                  std::to_string(activeProgram_ != nullptr) + ")");
@@ -1139,6 +1317,7 @@ void Engine::SwitchToWorkspace(const std::string& workspaceName, bool focusCppDo
         DebugLog("SwitchToWorkspace no compiled program for '" + workspaceName + "', queueing compile");
         QueueCompileForWorkspace(workspaceName, glfwGetTime(), true);
     }
+    ui_->SetPlaybackState(BuildPlaybackStateForWorkspace(workspaceName));
     SaveActiveWorkspaceRuntimeState();
     DebugLog("SwitchToWorkspace end(activeProgram=" + std::to_string(activeProgram_ != nullptr) +
              ", ctx.vao=" + std::to_string(ctx_.vao) +
@@ -2158,16 +2337,19 @@ void Engine::Run() {
         SubmitDueCompiles(now);
         ProcessCompileResults();
 
-        ctx_.deltaTime = static_cast<float>(now - lastTime_);
+        const double frameDeltaSeconds = std::max(0.0, now - lastTime_);
+        ctx_.deltaTime = static_cast<float>(frameDeltaSeconds);
         ctx_.time = 0.0f;
         if (auto activeWorkspaceIt = workspaces_.find(activeWorkspaceName_);
             activeWorkspaceIt != workspaces_.end()) {
             auto& activeWorkspace = activeWorkspaceIt->second;
-            if (activeWorkspace.activeClockStartSeconds < 0.0) {
-                activeWorkspace.activeClockStartSeconds = now;
+            AdvanceWorkspacePlayback(&activeWorkspace, now);
+            if (activeWorkspace.playbackPaused) {
+                ctx_.deltaTime = 0.0f;
+            } else {
+                ctx_.deltaTime = static_cast<float>(frameDeltaSeconds * static_cast<double>(activeWorkspace.playbackSpeed));
             }
-            const double elapsed = std::max(0.0, now - activeWorkspace.activeClockStartSeconds);
-            ctx_.time = static_cast<float>(activeWorkspace.accumulatedActiveSeconds + elapsed);
+            ctx_.time = static_cast<float>(activeWorkspace.accumulatedActiveSeconds);
         }
         ctx_.frameCount++;
         lastTime_ = now;
@@ -2190,8 +2372,10 @@ void Engine::Run() {
         if (auto activeWorkspaceIt = workspaces_.find(activeWorkspaceName_);
             activeWorkspaceIt != workspaces_.end()) {
             ui_->SetUniformValues(activeWorkspaceIt->second.uniforms.Values());
+            ui_->SetPlaybackState(BuildPlaybackStateForWorkspace(activeWorkspaceName_));
         } else {
             ui_->SetUniformValues({});
+            ui_->SetPlaybackState(EditorUI::PlaybackState{});
         }
 
         ui_->NewFrame();

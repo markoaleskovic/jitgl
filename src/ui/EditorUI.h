@@ -95,6 +95,33 @@ public:
         std::size_t cachedSharedPayloads = 0;
     };
 
+    enum class PlaybackCommandType : std::uint8_t {
+        TogglePause,
+        Rewind,
+        SetTime,
+        SetSpeed,
+        SetLoopEnabled,
+        SetLoopStart,
+        SetLoopEnd,
+        SetTimelineMax,
+    };
+
+    struct PlaybackCommand {
+        PlaybackCommandType type = PlaybackCommandType::SetTime;
+        float value = 0.0f;
+        bool enabled = false;
+    };
+
+    struct PlaybackState {
+        float currentTimeSeconds = 0.0f;
+        float timelineMaxSeconds = 30.0f;
+        bool paused = false;
+        float speed = 1.0f;
+        bool loopEnabled = false;
+        float loopStartSeconds = 0.0f;
+        float loopEndSeconds = 10.0f;
+    };
+
     EditorUI();
     ~EditorUI();
 
@@ -136,6 +163,8 @@ public:
     void SetUniformValues(std::vector<UniformValue> values);
     void SetUniformEditCallback(std::function<void(const UniformEditCommand&)> cb);
     void SetUniformJsonSnapshotCallback(std::function<std::string()> cb);
+    void SetPlaybackState(PlaybackState state);
+    void SetPlaybackCommandCallback(std::function<void(const PlaybackCommand&)> cb);
     void SetLoadShowcaseWorkspaceCallback(std::function<void()> cb);
     bool ShouldLoadShowcaseWorkspaceOnStartup() const;
     void SetupDarkTheme() const;
@@ -203,6 +232,8 @@ private:
     std::vector<UniformValue> uniformValues_;
     std::function<void(const UniformEditCommand&)> onUniformEdit_;
     std::function<std::string()> onUniformJsonSnapshot_;
+    PlaybackState playbackState_{};
+    std::function<void(const PlaybackCommand&)> onPlaybackCommand_;
     std::function<void()> onLoadShowcaseWorkspace_;
     bool openCreateWorkspacePopup_ = false;
     std::array<char, 128> newWorkspaceNameBuffer_{};
@@ -239,6 +270,7 @@ private:
                        bool* pendingSelectionConsumed);
     void AutosaveDirtyDocuments(double currentTime);
     void DrawRendererTab();
+    void DrawPlaybackTransportBar();
     void DrawUniformsTab();
     void DrawConsoleTab(const std::string& currentWorkspace);
     void DrawLogsTab(const std::string& currentWorkspace);
@@ -292,7 +324,8 @@ private:
     bool focusCreateWorkspaceNameInput_ = false;
     UiTheme currentTheme_ = UiTheme::Dark;
     bool themeApplyPending_ = false;
-    bool showUniformControlsPanel_ = true;
+    bool showUniformControlsPanel_ = false;
+    bool showPlaybackControlsPanel_ = false;
     bool rendererFullscreen_ = false;
     int focusEditorRequestFramesRemaining_ = 0;
 
