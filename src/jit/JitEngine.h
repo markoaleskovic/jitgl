@@ -2,6 +2,7 @@
 #include <string>
 #include <functional>
 #include <memory>
+#include <cstdint>
 #include <vector>
 #include <unordered_map>
 
@@ -27,6 +28,8 @@ struct JitProgram {
     std::shared_ptr<clang::Interpreter> interpreter;
     JitFunctions functions;
     bool initialized = false;
+    std::uint64_t allocationOwner = 0;
+    bool allocationOwnerReleased = false;
     ~JitProgram();
 };
 

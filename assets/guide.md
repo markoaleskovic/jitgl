@@ -6,6 +6,9 @@ This explains why the default workspace code caches program handles, uniform loc
 ### Why STATE_I Exists
 * Your JIT code is recompiled/reloaded often, but `EngineContext` state arrays persist across reloads and workspace switches.
 * `STATE_I(index)` and `STATE_F(index)` are stable per-workspace storage for values your code needs between frames.
+* `ctx->state_buffer` is a stable 4096-byte POD buffer for transferable per-workspace state.
+* `jit_alloc(...)` allocates from a host-managed arena that resets automatically on hot-reload.
+* You can request a cold reset from code via `ctx->reset_state()` / `jit_request_hard_reset(ctx)`.
 * Without this storage, expensive setup work (shader compile/link, uniform lookups) would repeat unnecessarily.
 
 ---
@@ -46,5 +49,6 @@ const uint32_t cachedShaderHash = STATE_I(3);
 * Use `STATE_F` for persistent float values (timers, parameters, interpolation state).
 * If `glGetUniformLocation` returns -1, the uniform may be optimized out or misnamed.
 * Auto-injected shader macros are `JIT_WORKSPACE_VERTEX_SHADER`, `JIT_WORKSPACE_FRAGMENT_SHADER`, `JIT_WORKSPACE_SHADER_HASH`.
+* Auto-injected ABI macro is `JIT_WORKSPACE_STATE_ABI_HASH`; call `jit_state_guard(ctx, JIT_WORKSPACE_STATE_ABI_HASH)` in `init()`.
 
 > **Note:** Open this anytime from **Help -> Runtime State Guide**.

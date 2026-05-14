@@ -150,6 +150,7 @@ public:
     void SetShareWorkspaceCallback(std::function<void(const std::vector<std::string>&, bool)> cb);
     void SetWorkspaceShareDecisionCallback(std::function<void(const std::string&, bool)> cb);
     void SetRequestFirewallAccessCallback(std::function<void()> cb);
+    void SetHardResetRuntimeCallback(std::function<void()> cb);
     void SetWorkspaces(const std::vector<std::string>& workspaceNames, const std::string& activeWorkspace);
     void SetActiveWorkspace(const std::string& workspaceName);
     void SetWorkspaceOutputHistory(const std::string& workspaceName,
@@ -209,6 +210,7 @@ private:
     std::function<void(const std::vector<std::string>&, bool)> onShareWorkspace_;
     std::function<void(const std::string&, bool)> onWorkspaceShareDecision_;
     std::function<void()> onRequestFirewallAccess_;
+    std::function<void()> onHardResetRuntime_;
 
     std::vector<NetworkPeer> networkPeers_;
     NetworkDiagnostics networkDiagnostics_;

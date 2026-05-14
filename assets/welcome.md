@@ -8,6 +8,8 @@ Live C++ + GLSL playground with per-workspace runtime state.
 * `scene.cpp` is JIT-compiled C++ and drives frame updates/rendering.
 * `shader.glsl` contains your GPU shaders and is hot-swapped with `scene.cpp`.
 * Edits auto-save and hot-reload while preserving workspace-specific state arrays.
+* Runtime state now includes a fixed `state_buffer`, per-run arena allocation (`jit_alloc(...)`), and ABI guards.
+* Use **File -> Hard Reset Runtime State** to cold-boot active runtime data without restarting JITGL.
 
 ---
 
@@ -28,7 +30,9 @@ Live C++ + GLSL playground with per-workspace runtime state.
 * Compiled as C++20 with engine/OpenGL helpers pre-injected.
 * Define at least one entry point with `extern "C"`: `init`, `update`, `renderFrame`, `shutdown`.
 * Use `EngineContext* ctx` signature for those entry points.
-* Shader access macros are injected: `JIT_WORKSPACE_VERTEX_SHADER`, `JIT_WORKSPACE_FRAGMENT_SHADER`, `JIT_WORKSPACE_SHADER_HASH`.
+* Shader/state macros are injected:
+  * `JIT_WORKSPACE_VERTEX_SHADER`, `JIT_WORKSPACE_FRAGMENT_SHADER`, `JIT_WORKSPACE_SHADER_HASH`
+  * `JIT_WORKSPACE_STATE_ABI_HASH` (best-effort hash of local struct/class layouts in `scene.cpp`)
 
 ### shader.glsl Compile Requirements
 * Must include both sections: `#type vertex` and `#type fragment`.

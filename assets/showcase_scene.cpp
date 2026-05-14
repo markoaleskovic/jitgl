@@ -3,6 +3,8 @@
 // quad so uniform controls and live shader edits are immediately visible.
 
 extern "C" void init(EngineContext* ctx) {
+    (void)jit_state_guard(ctx, JIT_WORKSPACE_STATE_ABI_HASH);
+
     GLuint currentProgram = static_cast<GLuint>(STATE_I(0));
     const uint32_t cachedShaderHash = STATE_I(3);
 

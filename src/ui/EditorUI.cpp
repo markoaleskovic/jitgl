@@ -606,6 +606,10 @@ void EditorUI::SetRequestFirewallAccessCallback(std::function<void()> cb) {
     onRequestFirewallAccess_ = std::move(cb);
 }
 
+void EditorUI::SetHardResetRuntimeCallback(std::function<void()> cb) {
+    onHardResetRuntime_ = std::move(cb);
+}
+
 void EditorUI::SetNetworkPeers(std::vector<NetworkPeer> peers) {
     networkPeers_ = std::move(peers);
 
@@ -1215,6 +1219,12 @@ void EditorUI::DrawFileMenu(const std::vector<std::string>& workspaceNamesSnapsh
     }
 
     (void)ImGui::MenuItem("Save", "Ctrl+S");
+    ImGui::Separator();
+    if (ImGui::MenuItem("Hard Reset Runtime State")) {
+        if (onHardResetRuntime_) {
+            onHardResetRuntime_();
+        }
+    }
     ImGui::Separator();
     if (ImGui::MenuItem("Share Workspace...")) {
         openShareWorkspacePopup_ = true;

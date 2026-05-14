@@ -24,6 +24,7 @@
 #include <optional>
 #include <ranges>
 #include <sstream>
+#include <string_view>
 #include <utility>
 #include <vector>
 #if defined(__linux__) || defined(__APPLE__)
@@ -303,6 +304,217 @@ namespace {
             }
         }
         return escaped;
+    }
+
+    constexpr std::uint64_t kFnv1aOffsetBasis = 1469598103934665603ull;
+    constexpr std::uint64_t kFnv1aPrime = 1099511628211ull;
+
+    std::uint64_t HashFnv1a64(std::string_view text) {
+        std::uint64_t hash = kFnv1aOffsetBasis;
+        for (const char c : text) {
+            hash ^= static_cast<std::uint64_t>(static_cast<unsigned char>(c));
+            hash *= kFnv1aPrime;
+        }
+        return hash;
+    }
+
+    std::string StripCommentsAndLiterals(std::string_view source) {
+        enum class Mode {
+            Code,
+            LineComment,
+            BlockComment,
+            StringLiteral,
+            CharLiteral,
+        };
+
+        Mode mode = Mode::Code;
+        std::string out;
+        out.reserve(source.size());
+
+        for (std::size_t i = 0; i < source.size(); ++i) {
+            const char c = source[i];
+            const char next = (i + 1 < source.size()) ? source[i + 1] : '\0';
+
+            switch (mode) {
+                case Mode::Code:
+                    if (c == '/' && next == '/') {
+                        mode = Mode::LineComment;
+                        out.push_back(' ');
+                        ++i;
+                        out.push_back(' ');
+                    } else if (c == '/' && next == '*') {
+                        mode = Mode::BlockComment;
+                        out.push_back(' ');
+                        ++i;
+                        out.push_back(' ');
+                    } else if (c == '"') {
+                        mode = Mode::StringLiteral;
+                        out.push_back(' ');
+                    } else if (c == '\'') {
+                        mode = Mode::CharLiteral;
+                        out.push_back(' ');
+                    } else {
+                        out.push_back(c);
+                    }
+                    break;
+
+                case Mode::LineComment:
+                    if (c == '\n') {
+                        mode = Mode::Code;
+                        out.push_back('\n');
+                    } else {
+                        out.push_back(' ');
+                    }
+                    break;
+
+                case Mode::BlockComment:
+                    if (c == '*' && next == '/') {
+                        mode = Mode::Code;
+                        out.push_back(' ');
+                        ++i;
+                        out.push_back(' ');
+                    } else {
+                        out.push_back(c == '\n' ? '\n' : ' ');
+                    }
+                    break;
+
+                case Mode::StringLiteral:
+                    if (c == '\\' && next != '\0') {
+                        out.push_back(' ');
+                        ++i;
+                        out.push_back(' ');
+                    } else if (c == '"') {
+                        mode = Mode::Code;
+                        out.push_back(' ');
+                    } else {
+                        out.push_back(c == '\n' ? '\n' : ' ');
+                    }
+                    break;
+
+                case Mode::CharLiteral:
+                    if (c == '\\' && next != '\0') {
+                        out.push_back(' ');
+                        ++i;
+                        out.push_back(' ');
+                    } else if (c == '\'') {
+                        mode = Mode::Code;
+                        out.push_back(' ');
+                    } else {
+                        out.push_back(c == '\n' ? '\n' : ' ');
+                    }
+                    break;
+            }
+        }
+
+        return out;
+    }
+
+    bool IsIdentifierCharForScan(const char c) {
+        return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+    }
+
+    bool IsStandaloneKeyword(std::string_view source, std::size_t pos, std::string_view keyword) {
+        if (pos + keyword.size() > source.size()) {
+            return false;
+        }
+        if (source.substr(pos, keyword.size()) != keyword) {
+            return false;
+        }
+
+        const bool hasBefore = (pos > 0);
+        if (hasBefore && IsIdentifierCharForScan(source[pos - 1])) {
+            return false;
+        }
+        const std::size_t after = pos + keyword.size();
+        if (after < source.size() && IsIdentifierCharForScan(source[after])) {
+            return false;
+        }
+        return true;
+    }
+
+    std::string NormalizeAbiSignature(std::string_view text) {
+        std::string normalized;
+        normalized.reserve(text.size());
+        for (const char c : text) {
+            if (!std::isspace(static_cast<unsigned char>(c))) {
+                normalized.push_back(c);
+            }
+        }
+        return normalized;
+    }
+
+    std::uint64_t ComputeStateAbiHashFromCppSource(const std::string& source) {
+        const std::string sanitized = StripCommentsAndLiterals(source);
+        std::string signature;
+
+        std::size_t cursor = 0;
+        while (cursor < sanitized.size()) {
+            std::size_t keywordPos = std::string::npos;
+            std::size_t keywordLen = 0;
+
+            for (std::size_t i = cursor; i < sanitized.size(); ++i) {
+                if (IsStandaloneKeyword(sanitized, i, "struct")) {
+                    keywordPos = i;
+                    keywordLen = 6;
+                    break;
+                }
+                if (IsStandaloneKeyword(sanitized, i, "class")) {
+                    keywordPos = i;
+                    keywordLen = 5;
+                    break;
+                }
+            }
+
+            if (keywordPos == std::string::npos) {
+                break;
+            }
+
+            const std::size_t searchFrom = keywordPos + keywordLen;
+            const std::size_t bodyStart = sanitized.find('{', searchFrom);
+            if (bodyStart == std::string::npos) {
+                break;
+            }
+
+            const std::size_t nextSemicolon = sanitized.find(';', searchFrom);
+            if (nextSemicolon != std::string::npos && nextSemicolon < bodyStart) {
+                cursor = nextSemicolon + 1;
+                continue;
+            }
+
+            int depth = 0;
+            std::size_t bodyEnd = std::string::npos;
+            for (std::size_t i = bodyStart; i < sanitized.size(); ++i) {
+                if (sanitized[i] == '{') {
+                    ++depth;
+                } else if (sanitized[i] == '}') {
+                    --depth;
+                    if (depth == 0) {
+                        bodyEnd = i;
+                        break;
+                    }
+                }
+            }
+            if (bodyEnd == std::string::npos) {
+                break;
+            }
+
+            std::size_t declEnd = sanitized.find(';', bodyEnd + 1);
+            if (declEnd == std::string::npos) {
+                declEnd = bodyEnd;
+            }
+
+            const std::string_view declaration(
+                sanitized.data() + keywordPos,
+                (declEnd - keywordPos) + 1);
+            signature += NormalizeAbiSignature(declaration);
+            signature.push_back('\n');
+            cursor = declEnd + 1;
+        }
+
+        if (signature.empty()) {
+            return 0;
+        }
+        return HashFnv1a64(signature);
     }
 }
 
@@ -641,6 +853,9 @@ bool Engine::InitUI() {
     ui_->SetRequestFirewallAccessCallback([this]() {
         HandleRequestFirewallAccess();
     });
+    ui_->SetHardResetRuntimeCallback([this]() {
+        HardResetActiveWorkspaceState("manual hard reset", true);
+    });
     ui_->SetUniformEditCallback([this](const UniformEditCommand& command) {
         HandleUniformEditCommand(command);
     });
@@ -760,7 +975,14 @@ void Engine::SaveActiveWorkspaceRuntimeState() {
     // Snapshot persisted runtime state before switching programs/workspaces.
     std::ranges::copy(ctx_.state_i, workspace.stateI.begin());
     std::ranges::copy(ctx_.state_f, workspace.stateF.begin());
+    std::ranges::copy(ctx_.state_buffer, workspace.stateBuffer.begin());
     workspace.userData = ctx_.userData;
+    workspace.stateAbiHash = ctx_.state_abi_hash;
+    if (!workspace.arenaStorage.empty()) {
+        workspace.arenaOffset = std::min(ctx_.arena_offset, workspace.arenaStorage.size());
+    } else {
+        workspace.arenaOffset = 0;
+    }
     DebugLog("SaveActiveWorkspaceRuntimeState(name=" + activeWorkspaceName_ +
              ", ctx.vao=" + std::to_string(ctx_.vao) +
              ", ctx.vbo=" + std::to_string(ctx_.vbo) +
@@ -792,14 +1014,71 @@ void Engine::LoadWorkspaceRuntimeState(const std::string& workspaceName) {
         return;
     }
 
-    const auto& workspace = workspaceIt->second;
+    auto& workspace = workspaceIt->second;
     std::ranges::copy(workspace.stateI, std::begin(ctx_.state_i));
     std::ranges::copy(workspace.stateF, std::begin(ctx_.state_f));
+    std::ranges::copy(workspace.stateBuffer, std::begin(ctx_.state_buffer));
     ctx_.userData = workspace.userData;
+    ctx_.state_abi_hash = workspace.stateAbiHash;
+    ctx_.arena_base = workspace.arenaStorage.empty() ? nullptr : workspace.arenaStorage.data();
+    ctx_.arena_size = workspace.arenaStorage.size();
+    ctx_.arena_offset = std::min(workspace.arenaOffset, workspace.arenaStorage.size());
+    ctx_.reset_state_requested = false;
     DebugLog("LoadWorkspaceRuntimeState(name=" + workspaceName +
              ", workspace.vao=" + std::to_string(workspace.vao) +
              ", workspace.vbo=" + std::to_string(workspace.vbo) +
              ", " + FormatStateSlice(workspace.stateI, workspace.stateF) + ")");
+}
+
+void Engine::ResetWorkspaceRuntimeState(WorkspaceState* workspace, const bool clearStateAbiHash) {
+    if (workspace == nullptr) {
+        return;
+    }
+
+    workspace->stateI.fill(0);
+    workspace->stateF.fill(0.0f);
+    workspace->stateBuffer.fill(0);
+    workspace->userData = nullptr;
+    workspace->arenaOffset = 0;
+    if (clearStateAbiHash) {
+        workspace->stateAbiHash = 0;
+    }
+
+    const bool isActiveWorkspace = (!activeWorkspaceName_.empty() && workspace->name == activeWorkspaceName_);
+    if (isActiveWorkspace) {
+        ctx_.clear_runtime_state();
+        if (!clearStateAbiHash) {
+            ctx_.state_abi_hash = workspace->stateAbiHash;
+        }
+        ctx_.arena_base = workspace->arenaStorage.empty() ? nullptr : workspace->arenaStorage.data();
+        ctx_.arena_size = workspace->arenaStorage.size();
+        ctx_.arena_offset = workspace->arenaOffset;
+        ctx_.reset_state_requested = false;
+    }
+}
+
+void Engine::HardResetActiveWorkspaceState(const std::string& reason, const bool clearStateAbiHash) {
+    if (activeWorkspaceName_.empty()) {
+        return;
+    }
+
+    auto workspaceIt = workspaces_.find(activeWorkspaceName_);
+    if (workspaceIt == workspaces_.end()) {
+        return;
+    }
+
+    if (activeProgram_) {
+        ShutdownProgramIfInitialized(activeProgram_);
+    }
+
+    ResetWorkspaceRuntimeState(&workspaceIt->second, clearStateAbiHash);
+    LoadWorkspaceRuntimeState(activeWorkspaceName_);
+
+    if (activeProgram_) {
+        InitializeProgramIfNeeded(activeProgram_);
+    }
+    SaveActiveWorkspaceRuntimeState();
+    ui_->AddLogOutput("[Runtime] Active workspace state reset (" + reason + ").");
 }
 
 void Engine::HandleUniformEditCommand(const UniformEditCommand& command) {
@@ -1025,7 +1304,10 @@ std::string Engine::BuildCompileSourceForWorkspace(const std::string& workspaceN
 
     // Inject parsed shader sources and hash into the generated C++ translation unit.
     const uint32_t shaderHash = static_cast<uint32_t>(std::hash<std::string>{}(workspace.shaderSource));
+    const std::uint64_t stateAbiHash = ComputeStateAbiHashFromCppSource(workspace.cppSource);
     generatedSource << "static const unsigned int jitgl_workspace_shader_hash = " << shaderHash << "u;\n";
+    generatedSource << "static const unsigned long long jitgl_workspace_state_abi_hash = "
+                    << stateAbiHash << "ull;\n";
     generatedSource << "static const char* jitgl_workspace_vertex_shader_source = \""
                     << escapeForCStringLiteral(vertexShader) << "\";\n";
     generatedSource << "static const char* jitgl_workspace_fragment_shader_source = \""
@@ -1033,6 +1315,7 @@ std::string Engine::BuildCompileSourceForWorkspace(const std::string& workspaceN
     generatedSource << "#define JIT_WORKSPACE_VERTEX_SHADER jitgl_workspace_vertex_shader_source\n";
     generatedSource << "#define JIT_WORKSPACE_FRAGMENT_SHADER jitgl_workspace_fragment_shader_source\n";
     generatedSource << "#define JIT_WORKSPACE_SHADER_HASH jitgl_workspace_shader_hash\n";
+    generatedSource << "#define JIT_WORKSPACE_STATE_ABI_HASH jitgl_workspace_state_abi_hash\n";
     generatedSource << workspace.cppSource;
 
     return generatedSource.str();
@@ -1049,11 +1332,17 @@ void Engine::QueueCompileForWorkspace(const std::string& workspaceName, double n
         return;
     }
 
+    const std::uint64_t stateAbiHash = ComputeStateAbiHashFromCppSource(workspaceIt->second.cppSource);
     std::vector<UniformDescriptor> uniformDescriptors = ParseUniformDescriptors(workspaceIt->second.shaderSource);
     DebugLog("QueueCompileForWorkspace(name=" + workspaceName +
              ", immediate=" + std::to_string(immediate) +
              ", uniforms=" + std::to_string(uniformDescriptors.size()) + ")");
-    QueueCompile(workspaceName, generatedSource, std::move(uniformDescriptors), nowSeconds, immediate);
+    QueueCompile(workspaceName,
+                 generatedSource,
+                 stateAbiHash,
+                 std::move(uniformDescriptors),
+                 nowSeconds,
+                 immediate);
 }
 
 bool Engine::RegisterWorkspace(const WorkspaceDescriptor& descriptor) {
@@ -1077,6 +1366,8 @@ bool Engine::RegisterWorkspace(const WorkspaceDescriptor& descriptor) {
     workspace.engineLogPath = descriptor.engineLogPath;
     workspace.cppSource = std::move(*cppSource);
     workspace.shaderSource = std::move(*shaderSource);
+    workspace.arenaStorage.resize(kWorkspaceArenaBytes, 0);
+    workspace.arenaOffset = 0;
     if (auto uniformsJson = workspaceManager_->ReadFile(descriptor.uniformsPath); uniformsJson.has_value()) {
         (void)workspace.uniforms.LoadFromJson(*uniformsJson);
     }
@@ -1203,6 +1494,7 @@ bool Engine::DeleteWorkspaceFromUI(const std::string& workspaceName) {
     fileToWorkspace_.erase(workspace.shaderPath);
     latestSources_.erase(workspaceName);
     latestUniformDescriptors_.erase(workspaceName);
+    latestStateAbiHashes_.erase(workspaceName);
     pendingCompilesAt_.erase(workspaceName);
     compileFailures_.erase(workspaceName);
     compileRetryAfter_.erase(workspaceName);
@@ -1493,6 +1785,7 @@ void Engine::HandleActiveDocumentChanged(const std::string& filepath, const std:
 
 void Engine::QueueCompile(const std::string& workspaceName,
                           const std::string& source,
+                          const std::uint64_t stateAbiHash,
                           std::vector<UniformDescriptor> uniformDescriptors,
                           double nowSeconds,
                           bool immediate) {
@@ -1513,6 +1806,7 @@ void Engine::QueueCompile(const std::string& workspaceName,
 
     latestSources_[workspaceName] = source;
     latestUniformDescriptors_[workspaceName] = std::move(uniformDescriptors);
+    latestStateAbiHashes_[workspaceName] = stateAbiHash;
     // Error-heavy workspaces get a longer debounce to avoid compile spam while user is fixing errors.
     double debounce = MIN_DEBOUNCE_SECONDS;
     auto errorIt = recentErrors_.find(workspaceName);
@@ -1571,6 +1865,10 @@ void Engine::EnqueueDueCompiles(const std::vector<std::string>& duePaths) {
         if (uniformDescriptorsIt == latestUniformDescriptors_.end()) {
             continue;
         }
+        auto stateAbiHashIt = latestStateAbiHashes_.find(workspaceName);
+        if (stateAbiHashIt == latestStateAbiHashes_.end()) {
+            continue;
+        }
 
         const std::size_t sourceHash = std::hash<std::string>{}(sourceIt->second);
         if (auto inFlightIt = inFlightSourceHashes_.find(workspaceName);
@@ -1606,6 +1904,7 @@ void Engine::EnqueueDueCompiles(const std::vector<std::string>& duePaths) {
             workspaceIt->second.cppPath,
             sourceIt->second,
             sourceHash,
+            stateAbiHashIt->second,
             uniformDescriptorsIt->second
         });
         pendingCompilesAt_.erase(workspaceName);
@@ -1674,6 +1973,7 @@ void Engine::CompileThreadMain(std::shared_ptr<std::atomic<bool>> running) {
                 job.workspaceName,
                 std::move(program),
                 job.sourceHash,
+                job.stateAbiHash,
                 std::move(job.uniformDescriptors)
             });
         }
@@ -2193,6 +2493,7 @@ void Engine::HandleCompileFailure(const CompileResult& result) {
 void Engine::HandleCompileSuccess(const CompileResult& result) {
     DebugLog("HandleCompileSuccess(workspace=" + result.workspaceName +
              ", sourceHash=" + std::to_string(result.sourceHash) +
+             ", stateAbiHash=" + std::to_string(result.stateAbiHash) +
              ", program_ptr=" + std::to_string(reinterpret_cast<std::uintptr_t>(result.program.get())) +
              ", uniforms=" + std::to_string(result.uniformDescriptors.size()) + ")");
     ui_->SetCompilationStatus(false, ActiveWorkspaceHasCompileError(), false);
@@ -2222,8 +2523,22 @@ void Engine::HandleCompileSuccess(const CompileResult& result) {
         ShutdownProgramIfInitialized(existingIt->second);
     }
 
+    const std::uint64_t previousAbiHash = workspaceIt->second.stateAbiHash;
+    const bool abiHashChanged = (previousAbiHash != result.stateAbiHash);
+    workspaceIt->second.stateAbiHash = result.stateAbiHash;
+    workspaceIt->second.arenaOffset = 0;
+    if (abiHashChanged) {
+        ResetWorkspaceRuntimeState(&workspaceIt->second, false);
+        workspaceIt->second.stateAbiHash = result.stateAbiHash;
+        if (previousAbiHash != 0) {
+            ui_->AddLogOutput("[Runtime] State ABI changed for workspace '" + result.workspaceName +
+                              "'. Runtime state was reset.");
+        }
+    }
+
     workspaceIt->second.uniforms.Rebuild(result.uniformDescriptors);
     if (result.workspaceName == activeWorkspaceName_) {
+        ctx_.reset_arena();
         ui_->SetUniformValues(workspaceIt->second.uniforms.Values());
     }
 
@@ -2330,6 +2645,10 @@ void Engine::RenderSceneToTexture() {
 void Engine::Run() {
     while (!glfwWindowShouldClose(window_)) {
         glfwPollEvents();
+
+        if (ctx_.consume_reset_state_request()) {
+            HardResetActiveWorkspaceState("requested by scene code", false);
+        }
 
         const double now = glfwGetTime();
         ProcessPendingReloads(now);
@@ -2456,6 +2775,7 @@ void Engine::Shutdown() {
     ignoreWatcherUntil_.clear();
     latestSources_.clear();
     latestUniformDescriptors_.clear();
+    latestStateAbiHashes_.clear();
     pendingCompilesAt_.clear();
     inFlightSourceHashes_.clear();
     workspaces_.clear();
@@ -2500,9 +2820,11 @@ void Engine::Shutdown() {
         ctx_.defaultShader = 0;
     }
 
-    // Note: userData is left to the user to manage via shutdown() if they allocated it,
-    // but we clear the pointer here for safety.
-    ctx_.userData = nullptr;
+    // Runtime pointers/state are host-owned; clear them on shutdown.
+    ctx_.clear_runtime_state();
+    ctx_.arena_base = nullptr;
+    ctx_.arena_size = 0;
+    ctx_.reset_state_requested = false;
 
     if (ui_) {
         ui_->Shutdown();

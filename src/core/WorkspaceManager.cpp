@@ -364,8 +364,11 @@ namespace {
 //   JIT_WORKSPACE_VERTEX_SHADER   (const char*)
 //   JIT_WORKSPACE_FRAGMENT_SHADER (const char*)
 //   JIT_WORKSPACE_SHADER_HASH     (uint32_t)
+//   JIT_WORKSPACE_STATE_ABI_HASH  (uint64_t)
 
 extern "C" void init(EngineContext* ctx) {
+    (void)jit_state_guard(ctx, JIT_WORKSPACE_STATE_ABI_HASH);
+
     GLuint currentProgram = (GLuint)STATE_I(0);
     const uint32_t cachedShaderHash = STATE_I(3);
 

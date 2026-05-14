@@ -2,6 +2,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <array>
 #include <mutex>
@@ -36,6 +37,9 @@ public:
     void Shutdown();
 
 private:
+    static constexpr std::size_t kWorkspaceStateBufferBytes = EngineContext::kStateBufferSize;
+    static constexpr std::size_t kWorkspaceArenaBytes = 1024 * 1024;
+
     GLFWwindow* window_ = nullptr;
     std::unique_ptr<EditorUI> ui_ = nullptr;
 
@@ -63,7 +67,11 @@ private:
         UniformRegistry uniforms;
         std::array<uint32_t, 64> stateI{};
         std::array<float, 64> stateF{};
+        std::array<unsigned char, kWorkspaceStateBufferBytes> stateBuffer{};
         void* userData = nullptr;
+        std::uint64_t stateAbiHash = 0;
+        std::vector<unsigned char> arenaStorage;
+        std::size_t arenaOffset = 0;
         unsigned int vao = 0;
         unsigned int vbo = 0;
         double accumulatedActiveSeconds = 0.0;
@@ -84,6 +92,7 @@ private:
 
     std::unordered_map<std::string, std::string> latestSources_;
     std::unordered_map<std::string, std::vector<UniformDescriptor>> latestUniformDescriptors_;
+    std::unordered_map<std::string, std::uint64_t> latestStateAbiHashes_;
     // Per-workspace "earliest compile time" used for debounce/backoff scheduling.
     std::unordered_map<std::string, double> pendingCompilesAt_;
     std::unordered_map<std::string, double> ignoreWatcherUntil_;
@@ -107,6 +116,7 @@ private:
         std::string sourceName;
         std::string source;
         std::size_t sourceHash = 0;
+        std::uint64_t stateAbiHash = 0;
         std::vector<UniformDescriptor> uniformDescriptors;
     };
 
@@ -114,6 +124,7 @@ private:
         std::string workspaceName;
         std::shared_ptr<JitProgram> program;
         std::size_t sourceHash = 0;
+        std::uint64_t stateAbiHash = 0;
         std::vector<UniformDescriptor> uniformDescriptors;
     };
 
@@ -168,6 +179,8 @@ private:
     void SaveActiveWorkspaceRuntimeState();
     void PersistWorkspaceUniformState(const std::string& workspaceName) const;
     void LoadWorkspaceRuntimeState(const std::string& workspaceName);
+    void ResetWorkspaceRuntimeState(WorkspaceState* workspace, bool clearStateAbiHash);
+    void HardResetActiveWorkspaceState(const std::string& reason, bool clearStateAbiHash);
     void HandleUniformEditCommand(const UniformEditCommand& command);
     std::string ActiveWorkspaceUniformStateJson() const;
     void HandlePlaybackCommand(const EditorUI::PlaybackCommand& command);
@@ -184,6 +197,7 @@ private:
     void HandleActiveDocumentChanged(const std::string& filepath, const std::string& content);
     void QueueCompile(const std::string& workspaceName,
                       const std::string& source,
+                      std::uint64_t stateAbiHash,
                       std::vector<UniformDescriptor> uniformDescriptors,
                       double nowSeconds,
                       bool immediate);
