@@ -61,6 +61,7 @@ private:
     std::unique_ptr<ConsoleRedirectSession> consoleRedirect_;
     std::unique_ptr<WorkspaceManager> workspaceManager_;
     std::unique_ptr<LanWorkspaceShareService> lanShare_;
+    bool networkEnabled_ = true;
 
     // Main-thread runtime state
     EngineContext ctx_;
@@ -207,6 +208,7 @@ private:
     bool LoadShowcaseWorkspaceFromAssets(bool focusWorkspace);
     bool InitLanShare();
     void UpdateLanShareUiState();
+    void HandleNetworkEnabledChanged(bool enabled);
     void HandleLoadShowcaseWorkspaceRequest();
     void HandleShareWorkspaceRequest(const std::vector<std::string>& targetPeerIds, bool shareToAll);
     void HandleWorkspaceShareDecision(const std::string& offerId, bool accepted);

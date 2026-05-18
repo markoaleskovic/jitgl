@@ -586,8 +586,13 @@ bool Engine::Init() {
     if (!InitUI()) return false;
     if (!InitJIT()) return false;
     if (!InitWatcher()) return false;
-    if (!InitLanShare()) {
-        ui_->AddLogOutput("[Network] LAN workspace sharing is unavailable.");
+    networkEnabled_ = ui_ ? ui_->IsNetworkEnabled() : true;
+    if (networkEnabled_) {
+        if (!InitLanShare()) {
+            ui_->AddLogOutput("[Network] LAN workspace sharing is unavailable.");
+        }
+    } else if (ui_) {
+        ui_->AddLogOutput("[Network] LAN workspace sharing is disabled by preference.");
     }
 
     lastTime_ = glfwGetTime();
@@ -993,6 +998,9 @@ bool Engine::InitUI() {
     });
     ui_->SetRequestFirewallAccessCallback([this]() {
         HandleRequestFirewallAccess();
+    });
+    ui_->SetNetworkEnabledChangedCallback([this](const bool enabled) {
+        HandleNetworkEnabledChanged(enabled);
     });
     ui_->SetHardResetRuntimeCallback([this]() {
         HardResetActiveWorkspaceState("manual hard reset", true);
@@ -2656,10 +2664,19 @@ void Engine::UpdateLanShareUiState() {
         return;
     }
 
+    if (!networkEnabled_) {
+        EditorUI::NetworkDiagnostics diagnostics;
+        diagnostics.lastError = "LAN networking is disabled in preferences.";
+        ui_->SetNetworkDiagnostics(std::move(diagnostics));
+        ui_->SetNetworkPeers({});
+        return;
+    }
+
     if (!lanShare_) {
         EditorUI::NetworkDiagnostics diagnostics;
         diagnostics.lastError = "LAN sharing service was not initialized.";
         ui_->SetNetworkDiagnostics(std::move(diagnostics));
+        ui_->SetNetworkPeers({});
         return;
     }
 
@@ -2729,6 +2746,37 @@ void Engine::UpdateLanShareUiState() {
             offer.senderName
         });
     }
+}
+
+void Engine::HandleNetworkEnabledChanged(const bool enabled) {
+    if (networkEnabled_ == enabled) {
+        return;
+    }
+
+    networkEnabled_ = enabled;
+    pendingLanOffersById_.clear();
+    if (ui_) {
+        ui_->SetNetworkPeers({});
+    }
+
+    if (!networkEnabled_) {
+        if (lanShare_) {
+            lanShare_->Stop();
+            lanShare_.reset();
+        }
+        if (ui_) {
+            ui_->AddLogOutput("[Network] LAN workspace sharing disabled.");
+        }
+        UpdateLanShareUiState();
+        return;
+    }
+
+    if (!InitLanShare()) {
+        if (ui_) {
+            ui_->AddLogOutput("[Network] LAN workspace sharing is unavailable.");
+        }
+    }
+    UpdateLanShareUiState();
 }
 
 void Engine::HandleShareWorkspaceRequest(const std::vector<std::string>& targetPeerIds, bool shareToAll) {

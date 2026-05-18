@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include "TextEditor.h"
 #include "imgui_markdown.h"
+#include "system/AppPreferences.h"
 #include "uniform/UniformControls.h"
 
 struct GLFWwindow;
@@ -245,6 +246,8 @@ public:
     void SetWorkspaceShareDecisionCallback(std::function<void(const std::string&, bool)> cb);
     void SetRequestFirewallAccessCallback(std::function<void()> cb);
     void SetHardResetRuntimeCallback(std::function<void()> cb);
+    void SetNetworkEnabledChangedCallback(std::function<void(bool)> cb);
+    bool IsNetworkEnabled() const;
     void SetWorkspaces(const std::vector<std::string>& workspaceNames, const std::string& activeWorkspace);
     void SetActiveWorkspace(const std::string& workspaceName);
     void SetWorkspaceOutputHistory(const std::string& workspaceName,
@@ -292,6 +295,7 @@ private:
     };
 
     GLFWwindow* window;
+    AppPreferences appPreferences_;
     std::vector<Document> openDocuments;
     std::unordered_map<std::string, std::vector<std::string>> workspaceConsoleLines_;
     std::unordered_map<std::string, std::vector<std::string>> workspaceLogLines_;
@@ -320,6 +324,8 @@ private:
     std::function<void(const std::string&, bool)> onWorkspaceShareDecision_;
     std::function<void()> onRequestFirewallAccess_;
     std::function<void()> onHardResetRuntime_;
+    std::function<void(bool)> onNetworkEnabledChanged_;
+    bool networkEnabled_ = true;
 
     std::vector<NetworkPeer> networkPeers_;
     NetworkDiagnostics networkDiagnostics_;
@@ -410,9 +416,11 @@ private:
     void DrawMarkdown(const std::string& markdown, bool lightTheme);
     void LoadMarkdownFiles();
     void LoadWelcomePreference();
-    void SaveWelcomePreference() const;
+    void SaveWelcomePreference();
     void LoadShowcasePreference();
-    void SaveShowcasePreference() const;
+    void SaveShowcasePreference();
+    void LoadNetworkPreference();
+    void SaveNetworkPreference();
     void ApplyThemeAndScale(float dpiScale, bool recreateFontTexture);
     void ToggleTheme();
     void ApplyEditorPalette(Document& doc) const;

@@ -23,8 +23,6 @@ namespace {
     constexpr const char* FONT_PATH = "assets/JetBrainsMono-Regular.ttf";
     constexpr float BASE_FONT_SIZE = 16.0f;
     constexpr const char* FALLBACK_WORKSPACE_NAME = "default";
-    constexpr const char* WELCOME_PREFS_FILE = ".jitgl_welcome_prefs";
-    constexpr const char* SHOWCASE_PREFS_FILE = ".jitgl_showcase_prefs";
     constexpr double DPI_APPLY_MIN_INTERVAL_SECONDS = 0.08;
 
     const ImVec4 kEditorPaneBgColor = ImVec4(0.12f, 0.12f, 0.12f, 1.00f);
@@ -277,51 +275,30 @@ EditorUI::~EditorUI() {
 }
 
 void EditorUI::LoadWelcomePreference() {
-    showWelcomeOnStartup_ = true;
-
-    std::ifstream inFile(WELCOME_PREFS_FILE, std::ios::binary);
-    if (!inFile.is_open()) {
-        return;
-    }
-
-    std::string value;
-    std::getline(inFile, value);
-    if (value == "hide=1") {
-        showWelcomeOnStartup_ = false;
-    }
+    showWelcomeOnStartup_ = appPreferences_.GetBool("welcome.show_on_startup", true);
 }
 
-void EditorUI::SaveWelcomePreference() const {
-    std::ofstream outFile(WELCOME_PREFS_FILE, std::ios::trunc | std::ios::binary);
-    if (!outFile.is_open()) {
-        return;
-    }
-
-    outFile << (showWelcomeOnStartup_ ? "hide=0\n" : "hide=1\n");
+void EditorUI::SaveWelcomePreference() {
+    appPreferences_.SetBool("welcome.show_on_startup", showWelcomeOnStartup_);
+    (void)appPreferences_.Save();
 }
 
 void EditorUI::LoadShowcasePreference() {
-    loadShowcaseWorkspaceOnStartup_ = true;
-
-    std::ifstream inFile(SHOWCASE_PREFS_FILE, std::ios::binary);
-    if (!inFile.is_open()) {
-        return;
-    }
-
-    std::string value;
-    std::getline(inFile, value);
-    if (value == "startup=0") {
-        loadShowcaseWorkspaceOnStartup_ = false;
-    }
+    loadShowcaseWorkspaceOnStartup_ = appPreferences_.GetBool("showcase.load_on_startup", true);
 }
 
-void EditorUI::SaveShowcasePreference() const {
-    std::ofstream outFile(SHOWCASE_PREFS_FILE, std::ios::trunc | std::ios::binary);
-    if (!outFile.is_open()) {
-        return;
-    }
+void EditorUI::SaveShowcasePreference() {
+    appPreferences_.SetBool("showcase.load_on_startup", loadShowcaseWorkspaceOnStartup_);
+    (void)appPreferences_.Save();
+}
 
-    outFile << (loadShowcaseWorkspaceOnStartup_ ? "startup=1\n" : "startup=0\n");
+void EditorUI::LoadNetworkPreference() {
+    networkEnabled_ = appPreferences_.GetBool("network.enabled", true);
+}
+
+void EditorUI::SaveNetworkPreference() {
+    appPreferences_.SetBool("network.enabled", networkEnabled_);
+    (void)appPreferences_.Save();
 }
 
 void EditorUI::ApplyEditorPalette(Document& doc) const {
@@ -439,8 +416,10 @@ void EditorUI::Init(GLFWwindow *win) {
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init(GLSL_VERSION);
 
+    (void)appPreferences_.Reload();
     LoadWelcomePreference();
     LoadShowcasePreference();
+    LoadNetworkPreference();
     openWelcomePopupRequested_ = showWelcomeOnStartup_;
     welcomePopupOpenedThisSession_ = false;
     doNotShowWelcomeAgain_ = false;
@@ -643,6 +622,14 @@ void EditorUI::SetRequestFirewallAccessCallback(std::function<void()> cb) {
 
 void EditorUI::SetHardResetRuntimeCallback(std::function<void()> cb) {
     onHardResetRuntime_ = std::move(cb);
+}
+
+void EditorUI::SetNetworkEnabledChangedCallback(std::function<void(bool)> cb) {
+    onNetworkEnabledChanged_ = std::move(cb);
+}
+
+bool EditorUI::IsNetworkEnabled() const {
+    return networkEnabled_;
 }
 
 void EditorUI::SetNetworkPeers(std::vector<NetworkPeer> peers) {
@@ -1672,6 +1659,22 @@ void EditorUI::DrawNetworkDiagnosticsWindow() {
         ImGui::End();
         return;
     }
+
+    bool networkEnabled = networkEnabled_;
+    if (ImGui::Checkbox("Enable LAN Networking", &networkEnabled)) {
+        networkEnabled_ = networkEnabled;
+        SaveNetworkPreference();
+        if (!networkEnabled_) {
+            pendingWorkspaceShareOffers_.clear();
+            workspaceSharePromptOpen_ = false;
+            selectedNetworkPeers_.clear();
+        }
+        if (onNetworkEnabledChanged_) {
+            onNetworkEnabledChanged_(networkEnabled_);
+        }
+    }
+
+    ImGui::Separator();
 
     const ImVec4 okColor = IsLightTheme() ? ImVec4(0.16f, 0.56f, 0.24f, 1.0f)
                                           : ImVec4(0.4f, 1.0f, 0.4f, 1.0f);

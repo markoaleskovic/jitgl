@@ -118,6 +118,7 @@ add_executable(jit_ide
     ${text_editor_SOURCE_DIR}/TextEditor.cpp
         src/core/WorkspaceManager.cpp
         src/system/ConsoleRedirectSession.cpp
+        src/system/AppPreferences.cpp
         src/system/network/LanWorkspaceShareService.cpp
 )
 
