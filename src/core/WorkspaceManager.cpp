@@ -16,6 +16,7 @@ namespace fs = std::filesystem;
 namespace {
     constexpr const char* kSceneFilename = "scene.cpp";
     constexpr const char* kShaderFilename = "shader.glsl";
+    constexpr const char* kSharedShaderFilename = "shared.glsl";
     constexpr const char* kUniformsFilename = "uniforms.json";
     constexpr const char* kConsoleLogFilename = "console.log";
     constexpr const char* kEngineLogFilename = "engine.log";
@@ -363,6 +364,7 @@ namespace {
 // Injected by the host at JIT compile time:
 //   JIT_WORKSPACE_VERTEX_SHADER   (const char*)
 //   JIT_WORKSPACE_FRAGMENT_SHADER (const char*)
+//   JIT_WORKSPACE_COMPUTE_SHADER  (const char*)
 //   JIT_WORKSPACE_SHADER_HASH     (uint32_t)
 //   JIT_WORKSPACE_STATE_ABI_HASH  (uint64_t)
 
@@ -392,6 +394,10 @@ extern "C" void init(EngineContext* ctx) {
 }
 
 extern "C" void update(EngineContext* ctx) {
+    (void)ctx;
+}
+
+extern "C" void dispatchCompute(EngineContext* ctx) {
     (void)ctx;
 }
 
@@ -434,14 +440,25 @@ void main() {
 
 #type fragment
 #version 330 core
+#include "shared.glsl"
 in vec2 vUv;
 out vec4 FragColor;
 
 uniform float uTime;
 
 void main() {
-    vec3 base = vec3(vUv.x, vUv.y, 0.5 + 0.5 * sin(uTime));
+    vec3 base = vec3(vUv.x, vUv.y, jitgl_wave01(uTime));
     FragColor = vec4(base, 1.0);
+}
+)";
+    }
+
+    std::string DefaultSharedShaderTemplate() {
+        return R"(// Shared GLSL library included by workspace shaders.
+// Keep utility math and common constants here.
+
+float jitgl_wave01(float t) {
+    return 0.5 + 0.5 * sin(t);
 }
 )";
     }
@@ -458,6 +475,12 @@ void WorkspaceManager::Initialize() const {
     if (ec) {
         return;
     }
+
+    const fs::path sharedShaderPath = fs::path(directory_) / kSharedShaderFilename;
+    if (!fs::exists(sharedShaderPath, ec)) {
+        (void)SaveFile(sharedShaderPath.string(), DefaultSharedShaderTemplate());
+    }
+    ec.clear();
 
     if (!ListWorkspaces().empty()) {
         return;

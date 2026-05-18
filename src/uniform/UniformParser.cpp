@@ -368,6 +368,149 @@ namespace {
         return true;
     }
 
+    bool ParseSamplerUniformDeclaration(std::string_view code,
+                                        std::vector<std::string>* outNames) {
+        if (outNames == nullptr) {
+            return false;
+        }
+        outNames->clear();
+
+        code = TrimView(code);
+        if (!code.starts_with("uniform")) {
+            if (code.starts_with("layout")) {
+                const std::size_t uniformPos = code.find("uniform");
+                if (uniformPos == std::string_view::npos) {
+                    return false;
+                }
+                const bool leftBoundary = (uniformPos == 0) ||
+                                          !std::isalnum(static_cast<unsigned char>(code[uniformPos - 1]));
+                const std::size_t rightPos = uniformPos + std::char_traits<char>::length("uniform");
+                const bool rightBoundary = (rightPos >= code.size()) ||
+                                           !std::isalnum(static_cast<unsigned char>(code[rightPos]));
+                if (!leftBoundary || !rightBoundary) {
+                    return false;
+                }
+                code = code.substr(uniformPos);
+            } else {
+                return false;
+            }
+        }
+        if (!code.starts_with("uniform")) {
+            return false;
+        }
+        code.remove_prefix(std::char_traits<char>::length("uniform"));
+        code = TrimView(code);
+
+        const std::size_t semicolon = code.find(';');
+        if (semicolon == std::string_view::npos) {
+            return false;
+        }
+        code = code.substr(0, semicolon);
+        code = TrimView(code);
+        if (code.empty()) {
+            return false;
+        }
+
+        std::string firstToken;
+        if (!ConsumeToken(&code, &firstToken)) {
+            return false;
+        }
+
+        std::string typeToken = firstToken;
+        if (IsPrecisionToken(firstToken)) {
+            if (!ConsumeToken(&code, &typeToken)) {
+                return false;
+            }
+        }
+        if (typeToken != "sampler2D") {
+            return false;
+        }
+
+        std::string namesList = Trim(std::string(code));
+        if (namesList.empty()) {
+            return false;
+        }
+
+        std::size_t start = 0;
+        while (start <= namesList.size()) {
+            const std::size_t comma = namesList.find(',', start);
+            const std::size_t end = (comma == std::string::npos) ? namesList.size() : comma;
+            std::string nameToken = Trim(namesList.substr(start, end - start));
+
+            if (const std::size_t equals = nameToken.find('='); equals != std::string::npos) {
+                nameToken = Trim(nameToken.substr(0, equals));
+            }
+            if (nameToken.find('[') != std::string::npos || nameToken.find(']') != std::string::npos) {
+                nameToken.clear();
+            }
+
+            if (!nameToken.empty() && IsIdentifierStart(nameToken.front())) {
+                const bool valid = std::all_of(nameToken.begin() + 1, nameToken.end(), IsIdentifierChar);
+                if (valid) {
+                    outNames->push_back(nameToken);
+                }
+            }
+
+            if (comma == std::string::npos) {
+                break;
+            }
+            start = comma + 1;
+        }
+
+        return !outNames->empty();
+    }
+
+    bool ParseStorageBufferDeclaration(std::string_view code,
+                                       std::string* outName) {
+        if (outName == nullptr) {
+            return false;
+        }
+        outName->clear();
+
+        code = TrimView(code);
+        if (!code.starts_with("buffer")) {
+            if (code.starts_with("layout")) {
+                const std::size_t bufferPos = code.find("buffer");
+                if (bufferPos == std::string_view::npos) {
+                    return false;
+                }
+                const bool leftBoundary = (bufferPos == 0) ||
+                                          !std::isalnum(static_cast<unsigned char>(code[bufferPos - 1]));
+                const std::size_t rightPos = bufferPos + std::char_traits<char>::length("buffer");
+                const bool rightBoundary = (rightPos >= code.size()) ||
+                                           !std::isalnum(static_cast<unsigned char>(code[rightPos]));
+                if (!leftBoundary || !rightBoundary) {
+                    return false;
+                }
+                code = code.substr(bufferPos);
+            } else {
+                return false;
+            }
+        }
+        if (!code.starts_with("buffer")) {
+            return false;
+        }
+        code.remove_prefix(std::char_traits<char>::length("buffer"));
+        code = TrimView(code);
+        if (code.empty()) {
+            return false;
+        }
+
+        std::size_t nameEnd = 0;
+        while (nameEnd < code.size() && IsIdentifierChar(code[nameEnd])) {
+            ++nameEnd;
+        }
+        if (nameEnd == 0) {
+            return false;
+        }
+        if (!IsIdentifierStart(code.front())) {
+            return false;
+        }
+
+        *outName = std::string(code.substr(0, nameEnd));
+        return !outName->empty();
+    }
+
     UniformDescriptor BuildDescriptor(const std::string& uniformName,
                                       UniformType type,
                                       const UniformHintState& hints) {
@@ -464,4 +607,73 @@ std::vector<UniformDescriptor> ParseUniformDescriptors(const std::string& shader
     }
 
     return descriptors;
+}
+
+std::vector<std::string> ParseSamplerUniformNames(const std::string& shaderSource) {
+    std::vector<std::string> names;
+    names.reserve(8);
+    std::unordered_set<std::string> seenNames;
+    seenNames.reserve(16);
+
+    std::size_t cursor = 0;
+    while (cursor <= shaderSource.size()) {
+        const std::size_t lineEnd = shaderSource.find('\n', cursor);
+        const std::size_t lineLength = (lineEnd == std::string::npos) ? (shaderSource.size() - cursor)
+                                                                       : (lineEnd - cursor);
+        const std::string line = shaderSource.substr(cursor, lineLength);
+
+        const std::size_t commentPos = line.find("//");
+        const std::string code = (commentPos == std::string::npos) ? line : line.substr(0, commentPos);
+        const std::string trimmedCode = Trim(code);
+        if (!trimmedCode.empty()) {
+            std::vector<std::string> localNames;
+            if (ParseSamplerUniformDeclaration(trimmedCode, &localNames)) {
+                for (const auto& name : localNames) {
+                    if (seenNames.insert(name).second) {
+                        names.push_back(name);
+                    }
+                }
+            }
+        }
+
+        if (lineEnd == std::string::npos) {
+            break;
+        }
+        cursor = lineEnd + 1;
+    }
+
+    return names;
+}
+
+std::vector<std::string> ParseStorageBufferNames(const std::string& shaderSource) {
+    std::vector<std::string> names;
+    names.reserve(8);
+    std::unordered_set<std::string> seenNames;
+    seenNames.reserve(16);
+
+    std::size_t cursor = 0;
+    while (cursor <= shaderSource.size()) {
+        const std::size_t lineEnd = shaderSource.find('\n', cursor);
+        const std::size_t lineLength = (lineEnd == std::string::npos) ? (shaderSource.size() - cursor)
+                                                                       : (lineEnd - cursor);
+        const std::string line = shaderSource.substr(cursor, lineLength);
+
+        const std::size_t commentPos = line.find("//");
+        const std::string code = (commentPos == std::string::npos) ? line : line.substr(0, commentPos);
+        const std::string trimmedCode = Trim(code);
+        if (!trimmedCode.empty()) {
+            std::string localName;
+            if (ParseStorageBufferDeclaration(trimmedCode, &localName) &&
+                seenNames.insert(localName).second) {
+                names.push_back(std::move(localName));
+            }
+        }
+
+        if (lineEnd == std::string::npos) {
+            break;
+        }
+        cursor = lineEnd + 1;
+    }
+
+    return names;
 }

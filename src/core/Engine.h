@@ -11,6 +11,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 // Include this so std::unique_ptr knows how to delete it
@@ -37,6 +38,17 @@ public:
     void Shutdown();
 
 private:
+    struct SharedTextureResource {
+        GLuint texture = 0;
+        int width = 0;
+        int height = 0;
+    };
+
+    struct PipelineConnectionBinding {
+        std::string sourceWorkspace;
+        std::string sourceSlot;
+    };
+
     static constexpr std::size_t kWorkspaceStateBufferBytes = EngineContext::kStateBufferSize;
     static constexpr std::size_t kWorkspaceArenaBytes = 1024 * 1024;
 
@@ -74,6 +86,24 @@ private:
         std::size_t arenaOffset = 0;
         unsigned int vao = 0;
         unsigned int vbo = 0;
+        std::vector<std::string> shaderDependencies;
+        std::vector<std::string> samplerUniformNames;
+        std::vector<std::string> storageBufferNames;
+        std::string outputTextureName;
+        bool pipelineEnabled = true;
+        std::array<GLuint, 2> passFbos{};
+        std::array<GLuint, 2> passColorTextures{};
+        int passWidth = 0;
+        int passHeight = 0;
+        int passWriteIndex = 0;
+        std::array<GLuint, 2> gpuQueries{};
+        int gpuQueryWriteIndex = 0;
+        std::array<bool, 2> gpuQueryPending{};
+        float lastGpuPassTimeMs = 0.0f;
+        GLuint samplerLocationProgram = 0;
+        std::unordered_map<std::string, GLint> samplerLocationCache;
+        GLuint globalUniformLocationProgram = 0;
+        std::unordered_map<std::string, GLint> globalUniformLocationCache;
         double accumulatedActiveSeconds = 0.0;
         double activeClockStartSeconds = -1.0;
         bool playbackPaused = false;
@@ -92,12 +122,19 @@ private:
 
     std::unordered_map<std::string, std::string> latestSources_;
     std::unordered_map<std::string, std::vector<UniformDescriptor>> latestUniformDescriptors_;
+    std::unordered_map<std::string, std::vector<std::string>> latestSamplerUniformNames_;
+    std::unordered_map<std::string, std::vector<std::string>> latestStorageBufferNames_;
+    std::unordered_map<std::string, std::vector<std::string>> latestShaderDependencies_;
     std::unordered_map<std::string, std::uint64_t> latestStateAbiHashes_;
     // Per-workspace "earliest compile time" used for debounce/backoff scheduling.
     std::unordered_map<std::string, double> pendingCompilesAt_;
     std::unordered_map<std::string, double> ignoreWatcherUntil_;
     std::string activeWorkspaceName_;
     std::string activeFilePath_;
+    std::unordered_map<std::string, SharedTextureResource> sharedTextures_;
+    std::unordered_map<std::string, std::unordered_map<std::string, PipelineConnectionBinding>> pipelineConnections_;
+    std::vector<EditorUI::PipelineGlobalUniformView> pipelineGlobalUniforms_;
+    std::unordered_map<std::string, double> dependencyFlashUntil_;
     double lastTime_ = 0.0;
 
     // Scene render target shown in UI renderer tab
@@ -118,6 +155,9 @@ private:
         std::size_t sourceHash = 0;
         std::uint64_t stateAbiHash = 0;
         std::vector<UniformDescriptor> uniformDescriptors;
+        std::vector<std::string> samplerUniformNames;
+        std::vector<std::string> storageBufferNames;
+        std::vector<std::string> shaderDependencies;
     };
 
     struct CompileResult {
@@ -126,6 +166,9 @@ private:
         std::size_t sourceHash = 0;
         std::uint64_t stateAbiHash = 0;
         std::vector<UniformDescriptor> uniformDescriptors;
+        std::vector<std::string> samplerUniformNames;
+        std::vector<std::string> storageBufferNames;
+        std::vector<std::string> shaderDependencies;
     };
 
     struct CompileFailureState {
@@ -168,14 +211,30 @@ private:
     void HandleShareWorkspaceRequest(const std::vector<std::string>& targetPeerIds, bool shareToAll);
     void HandleWorkspaceShareDecision(const std::string& offerId, bool accepted);
     void HandleRequestFirewallAccess();
+    void HandlePipelineMoveCommand(const std::string& workspaceName, int delta);
+    void HandlePipelineAddPassCommand(const std::string& workspaceName);
+    void HandlePipelineConfigChanged(const EditorUI::PipelineEditCommand& command);
+    bool HandlePipelineSaveChainRequest(const std::string& path) const;
+    void HandlePipelineResetRequest();
+    void HandlePipelineOpenFileRequest(const std::string& workspaceName, bool openCppFile);
+    void HandlePipelineConnectionCommand(const EditorUI::PipelineConnectionCommand& command);
+    void HandlePipelineGlobalUniformCommand(const EditorUI::PipelineGlobalUniformCommand& command);
+    bool ExportPipelineResource(const std::string& resourceName, const std::string& targetPath) const;
     bool ImportWorkspacePackage(const std::string& packageData, const std::string& sourceHint);
-    std::string BuildCompileSourceForWorkspace(const std::string& workspaceName) const;
+    bool BuildCompileSourceForWorkspace(const std::string& workspaceName,
+                                        std::string* outSource,
+                                        std::vector<UniformDescriptor>* outUniformDescriptors,
+                                        std::vector<std::string>* outSamplerUniformNames,
+                                        std::vector<std::string>* outStorageBufferNames,
+                                        std::vector<std::string>* outShaderDependencies,
+                                        std::string* outError) const;
     void QueueCompileForWorkspace(const std::string& workspaceName, double nowSeconds, bool immediate);
     void UpdateWorkspaceSourceFromDocument(const std::string& workspaceName,
                                            const std::string& filepath,
                                            const std::string& content);
     std::string WorkspaceForPath(const std::string& filepath) const;
     bool ActiveWorkspaceHasCompileError() const;
+    void SaveWorkspaceRuntimeState(const std::string& workspaceName);
     void SaveActiveWorkspaceRuntimeState();
     void PersistWorkspaceUniformState(const std::string& workspaceName) const;
     void LoadWorkspaceRuntimeState(const std::string& workspaceName);
@@ -199,6 +258,9 @@ private:
                       const std::string& source,
                       std::uint64_t stateAbiHash,
                       std::vector<UniformDescriptor> uniformDescriptors,
+                      std::vector<std::string> samplerUniformNames,
+                      std::vector<std::string> storageBufferNames,
+                      std::vector<std::string> shaderDependencies,
                       double nowSeconds,
                       bool immediate);
     std::vector<std::string> CollectDueCompiles(double nowSeconds) const;
@@ -214,11 +276,20 @@ private:
     void ShutdownProgramIfInitialized(const std::shared_ptr<JitProgram>& program);
     bool EnsureWorkspaceGeometry(WorkspaceState* workspace);
     void ReleaseWorkspaceGeometry(WorkspaceState* workspace);
+    bool EnsureWorkspacePassTargets(WorkspaceState* workspace, int width, int height);
+    void ReleaseWorkspacePassTargets(WorkspaceState* workspace);
     void ActivateWorkspaceGeometry(const std::string& workspaceName);
 
     bool EnsureSceneRenderTarget(int width, int height);
     void DestroySceneRenderTarget();
-    void ApplyActiveWorkspaceUniforms();
+    void ApplyWorkspaceUniforms(const std::string& workspaceName);
+    void ApplyPipelineGlobalUniforms(WorkspaceState* workspace, GLuint programHandle);
+    bool ResolvePipelineSamplerBinding(const WorkspaceState& workspace,
+                                       const std::string& samplerName,
+                                       std::string* outResourceName,
+                                       bool* outIsExplicit) const;
+    void BindSharedSamplerUniforms(WorkspaceState* workspace, GLuint programHandle);
+    void UpdatePipelineUiState();
     void RenderSceneToTexture();
 
     bool InitWindow();

@@ -146,19 +146,41 @@ namespace {
         return value;
     }
 
-    bool parseShaderSections(const std::string& shaderSource,
-                             std::string* vertexShaderOut,
-                             std::string* fragmentShaderOut) {
-        if (!vertexShaderOut || !fragmentShaderOut) {
+    std::string EscapeJsonString(const std::string& value) {
+        std::string escaped;
+        escaped.reserve(value.size() + 8);
+        for (const char c : value) {
+            switch (c) {
+                case '\\': escaped += "\\\\"; break;
+                case '"': escaped += "\\\""; break;
+                case '\n': escaped += "\\n"; break;
+                case '\r': escaped += "\\r"; break;
+                case '\t': escaped += "\\t"; break;
+                default: escaped.push_back(c); break;
+            }
+        }
+        return escaped;
+    }
+
+    struct ShaderSections {
+        std::string vertex;
+        std::string fragment;
+        std::string compute;
+    };
+
+    bool parseShaderSections(const std::string& shaderSource, ShaderSections* outSections) {
+        if (outSections == nullptr) {
             return false;
         }
-        vertexShaderOut->clear();
-        fragmentShaderOut->clear();
+        outSections->vertex.clear();
+        outSections->fragment.clear();
+        outSections->compute.clear();
 
         enum class Section {
             None,
             Vertex,
             Fragment,
+            Compute,
         };
 
         Section currentSection = Section::None;
@@ -174,16 +196,21 @@ namespace {
                     currentSection = Section::Vertex;
                 } else if (trimmedLine.find("fragment") != std::string::npos) {
                     currentSection = Section::Fragment;
+                } else if (trimmedLine.find("compute") != std::string::npos) {
+                    currentSection = Section::Compute;
                 } else {
                     currentSection = Section::None;
                 }
             } else {
                 if (currentSection == Section::Vertex) {
-                    *vertexShaderOut += line;
-                    *vertexShaderOut += '\n';
+                    outSections->vertex += line;
+                    outSections->vertex += '\n';
                 } else if (currentSection == Section::Fragment) {
-                    *fragmentShaderOut += line;
-                    *fragmentShaderOut += '\n';
+                    outSections->fragment += line;
+                    outSections->fragment += '\n';
+                } else if (currentSection == Section::Compute) {
+                    outSections->compute += line;
+                    outSections->compute += '\n';
                 }
             }
 
@@ -193,7 +220,39 @@ namespace {
             cursor = lineEnd + 1;
         }
 
-        return !vertexShaderOut->empty() && !fragmentShaderOut->empty();
+        const bool hasGraphics = !outSections->vertex.empty() && !outSections->fragment.empty();
+        const bool hasCompute = !outSections->compute.empty();
+        return hasGraphics || hasCompute;
+    }
+
+    std::string NormalizePathString(const std::filesystem::path& path) {
+        return path.lexically_normal().string();
+    }
+
+    std::string PipelineSlotKey(const std::string& workspaceName, const std::string& slotName) {
+        return workspaceName + "::" + slotName;
+    }
+
+    bool ParseIncludeDirective(const std::string& line, std::string* outIncludeName) {
+        if (outIncludeName == nullptr) {
+            return false;
+        }
+        const std::string trimmed = trim(line);
+        if (trimmed.rfind("#include", 0) != 0) {
+            return false;
+        }
+
+        const std::size_t firstQuote = trimmed.find('"');
+        if (firstQuote == std::string::npos) {
+            return false;
+        }
+        const std::size_t secondQuote = trimmed.find('"', firstQuote + 1);
+        if (secondQuote == std::string::npos || secondQuote <= firstQuote + 1) {
+            return false;
+        }
+
+        *outIncludeName = trimmed.substr(firstQuote + 1, secondQuote - firstQuote - 1);
+        return !outIncludeName->empty();
     }
 
     std::string QuoteForPosixShell(const std::string& value) {
@@ -751,6 +810,88 @@ void Engine::ReleaseWorkspaceGeometry(WorkspaceState* workspace) {
     }
 }
 
+bool Engine::EnsureWorkspacePassTargets(WorkspaceState* workspace, const int width, const int height) {
+    if (workspace == nullptr || width <= 0 || height <= 0) {
+        return false;
+    }
+
+    const bool alreadyValid = workspace->passWidth == width &&
+                              workspace->passHeight == height &&
+                              workspace->passFbos[0] != 0 &&
+                              workspace->passFbos[1] != 0 &&
+                              workspace->passColorTextures[0] != 0 &&
+                              workspace->passColorTextures[1] != 0;
+    if (alreadyValid) {
+        return true;
+    }
+
+    ReleaseWorkspacePassTargets(workspace);
+
+    for (int i = 0; i < 2; ++i) {
+        glGenTextures(1, &workspace->passColorTextures[static_cast<std::size_t>(i)]);
+        glBindTexture(GL_TEXTURE_2D, workspace->passColorTextures[static_cast<std::size_t>(i)]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        glGenFramebuffers(1, &workspace->passFbos[static_cast<std::size_t>(i)]);
+        glBindFramebuffer(GL_FRAMEBUFFER, workspace->passFbos[static_cast<std::size_t>(i)]);
+        glFramebufferTexture2D(GL_FRAMEBUFFER,
+                               GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D,
+                               workspace->passColorTextures[static_cast<std::size_t>(i)],
+                               0);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            ReleaseWorkspacePassTargets(workspace);
+            return false;
+        }
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    if (workspace->gpuQueries[0] == 0 || workspace->gpuQueries[1] == 0) {
+        glGenQueries(2, workspace->gpuQueries.data());
+    }
+    workspace->gpuQueryPending = { false, false };
+    workspace->gpuQueryWriteIndex = 0;
+    workspace->lastGpuPassTimeMs = 0.0f;
+    workspace->passWriteIndex = 0;
+    workspace->passWidth = width;
+    workspace->passHeight = height;
+    return true;
+}
+
+void Engine::ReleaseWorkspacePassTargets(WorkspaceState* workspace) {
+    if (workspace == nullptr) {
+        return;
+    }
+
+    for (GLuint& fbo : workspace->passFbos) {
+        if (fbo != 0) {
+            glDeleteFramebuffers(1, &fbo);
+            fbo = 0;
+        }
+    }
+    for (GLuint& tex : workspace->passColorTextures) {
+        if (tex != 0) {
+            glDeleteTextures(1, &tex);
+            tex = 0;
+        }
+    }
+    if (workspace->gpuQueries[0] != 0 || workspace->gpuQueries[1] != 0) {
+        glDeleteQueries(2, workspace->gpuQueries.data());
+        workspace->gpuQueries = { 0, 0 };
+    }
+    workspace->gpuQueryPending = { false, false };
+    workspace->gpuQueryWriteIndex = 0;
+    workspace->passWidth = 0;
+    workspace->passHeight = 0;
+    workspace->passWriteIndex = 0;
+}
+
 void Engine::ActivateWorkspaceGeometry(const std::string& workspaceName) {
     auto workspaceIt = workspaces_.find(workspaceName);
     if (workspaceIt == workspaces_.end()) {
@@ -868,6 +1009,33 @@ bool Engine::InitUI() {
     ui_->SetLoadShowcaseWorkspaceCallback([this]() {
         HandleLoadShowcaseWorkspaceRequest();
     });
+    ui_->SetPipelineMoveCallback([this](const std::string& workspaceName, int delta) {
+        HandlePipelineMoveCommand(workspaceName, delta);
+    });
+    ui_->SetPipelineEditCallback([this](const EditorUI::PipelineEditCommand& command) {
+        HandlePipelineConfigChanged(command);
+    });
+    ui_->SetPipelineAddPassCallback([this](const std::string& workspaceName) {
+        HandlePipelineAddPassCommand(workspaceName);
+    });
+    ui_->SetPipelineSaveChainCallback([this](const std::string& path) {
+        return HandlePipelineSaveChainRequest(path);
+    });
+    ui_->SetPipelineResetCallback([this]() {
+        HandlePipelineResetRequest();
+    });
+    ui_->SetPipelineOpenFileCallback([this](const std::string& workspaceName, bool openCppFile) {
+        HandlePipelineOpenFileRequest(workspaceName, openCppFile);
+    });
+    ui_->SetPipelineConnectionCallback([this](const EditorUI::PipelineConnectionCommand& command) {
+        HandlePipelineConnectionCommand(command);
+    });
+    ui_->SetPipelineGlobalUniformCallback([this](const EditorUI::PipelineGlobalUniformCommand& command) {
+        HandlePipelineGlobalUniformCommand(command);
+    });
+    ui_->SetPipelineResourceExportCallback([this](const std::string& resourceName, const std::string& targetPath) {
+        return ExportPipelineResource(resourceName, targetPath);
+    });
 
     return true;
 }
@@ -961,18 +1129,17 @@ bool Engine::ActiveWorkspaceHasCompileError() const {
     return compileFailures_.contains(activeWorkspaceName_);
 }
 
-void Engine::SaveActiveWorkspaceRuntimeState() {
-    if (activeWorkspaceName_.empty()) {
+void Engine::SaveWorkspaceRuntimeState(const std::string& workspaceName) {
+    if (workspaceName.empty()) {
         return;
     }
 
-    auto workspaceIt = workspaces_.find(activeWorkspaceName_);
+    auto workspaceIt = workspaces_.find(workspaceName);
     if (workspaceIt == workspaces_.end()) {
         return;
     }
 
     auto& workspace = workspaceIt->second;
-    // Snapshot persisted runtime state before switching programs/workspaces.
     std::ranges::copy(ctx_.state_i, workspace.stateI.begin());
     std::ranges::copy(ctx_.state_f, workspace.stateF.begin());
     std::ranges::copy(ctx_.state_buffer, workspace.stateBuffer.begin());
@@ -983,6 +1150,19 @@ void Engine::SaveActiveWorkspaceRuntimeState() {
     } else {
         workspace.arenaOffset = 0;
     }
+}
+
+void Engine::SaveActiveWorkspaceRuntimeState() {
+    if (activeWorkspaceName_.empty()) {
+        return;
+    }
+
+    SaveWorkspaceRuntimeState(activeWorkspaceName_);
+    auto workspaceIt = workspaces_.find(activeWorkspaceName_);
+    if (workspaceIt == workspaces_.end()) {
+        return;
+    }
+    const auto& workspace = workspaceIt->second;
     DebugLog("SaveActiveWorkspaceRuntimeState(name=" + activeWorkspaceName_ +
              ", ctx.vao=" + std::to_string(ctx_.vao) +
              ", ctx.vbo=" + std::to_string(ctx_.vbo) +
@@ -1285,40 +1465,230 @@ void Engine::UpdateWorkspaceSourceFromDocument(const std::string& workspaceName,
     }
 }
 
-std::string Engine::BuildCompileSourceForWorkspace(const std::string& workspaceName) const {
+bool Engine::BuildCompileSourceForWorkspace(const std::string& workspaceName,
+                                            std::string* outSource,
+                                            std::vector<UniformDescriptor>* outUniformDescriptors,
+                                            std::vector<std::string>* outSamplerUniformNames,
+                                            std::vector<std::string>* outStorageBufferNames,
+                                            std::vector<std::string>* outShaderDependencies,
+                                            std::string* outError) const {
+    if (outSource == nullptr ||
+        outUniformDescriptors == nullptr ||
+        outSamplerUniformNames == nullptr ||
+        outStorageBufferNames == nullptr ||
+        outShaderDependencies == nullptr ||
+        outError == nullptr) {
+        return false;
+    }
+
+    outSource->clear();
+    outUniformDescriptors->clear();
+    outSamplerUniformNames->clear();
+    outStorageBufferNames->clear();
+    outShaderDependencies->clear();
+    outError->clear();
+
     auto workspaceIt = workspaces_.find(workspaceName);
     if (workspaceIt == workspaces_.end()) {
-        return {};
+        return false;
     }
 
     const auto& workspace = workspaceIt->second;
-    std::string vertexShader;
-    std::string fragmentShader;
+    std::unordered_map<std::string, std::string> shaderContentsByKey;
+    std::unordered_map<std::string, std::string> shaderPathByKey;
+    std::unordered_map<std::string, std::string> basenameToKey;
+    std::unordered_set<std::string> ambiguousBasenames;
 
-    std::ostringstream generatedSource;
-    if (!parseShaderSections(workspace.shaderSource, &vertexShader, &fragmentShader)) {
-        generatedSource << "#error \"shader.glsl must define '#type vertex' and '#type fragment' sections\"\n";
-        generatedSource << workspace.cppSource;
-        return generatedSource.str();
+    std::error_code fsError;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(
+             WORKSPACE_DIR,
+             std::filesystem::directory_options::skip_permission_denied,
+             fsError)) {
+        if (fsError || !entry.is_regular_file(fsError)) {
+            continue;
+        }
+        if (entry.path().extension() != ".glsl") {
+            continue;
+        }
+        const auto content = workspaceManager_ ? workspaceManager_->ReadFile(entry.path().string()) : std::nullopt;
+        if (!content.has_value()) {
+            continue;
+        }
+
+        std::error_code relativeError;
+        std::filesystem::path relativePath = std::filesystem::relative(entry.path(), WORKSPACE_DIR, relativeError);
+        if (relativeError) {
+            relativePath = entry.path().filename();
+        }
+        const std::string key = NormalizePathString(relativePath);
+        const std::string fullPath = NormalizePathString(entry.path());
+        shaderContentsByKey[key] = *content;
+        shaderPathByKey[key] = fullPath;
+
+        const std::string basename = entry.path().filename().string();
+        if (ambiguousBasenames.contains(basename)) {
+            continue;
+        }
+        if (const auto existing = basenameToKey.find(basename); existing != basenameToKey.end() && existing->second != key) {
+            basenameToKey.erase(existing);
+            ambiguousBasenames.insert(basename);
+        } else {
+            basenameToKey[basename] = key;
+        }
     }
 
+    std::error_code workspaceRelativeError;
+    std::filesystem::path workspaceShaderRelative = std::filesystem::relative(workspace.shaderPath,
+                                                                              WORKSPACE_DIR,
+                                                                              workspaceRelativeError);
+    if (workspaceRelativeError) {
+        workspaceShaderRelative = std::filesystem::path(workspaceName) / "shader.glsl";
+    }
+    const std::string rootShaderKey = NormalizePathString(workspaceShaderRelative);
+    shaderContentsByKey[rootShaderKey] = workspace.shaderSource;
+    shaderPathByKey[rootShaderKey] = NormalizePathString(workspace.shaderPath);
+    basenameToKey[std::filesystem::path(workspace.shaderPath).filename().string()] = rootShaderKey;
+
+    std::unordered_set<std::string> includeStack;
+    std::unordered_set<std::string> includedKeys;
+    std::function<bool(const std::string&, std::string*)> expandShaderKey;
+    expandShaderKey = [&](const std::string& key, std::string* outExpanded) -> bool {
+        if (outExpanded == nullptr) {
+            return false;
+        }
+        const auto sourceIt = shaderContentsByKey.find(key);
+        if (sourceIt == shaderContentsByKey.end()) {
+            *outError = "Missing include file: " + key;
+            return false;
+        }
+        if (includeStack.contains(key)) {
+            *outError = "Cyclic shader include detected at '" + key + "'";
+            return false;
+        }
+
+        includeStack.insert(key);
+        const std::string sourceText = sourceIt->second;
+        std::size_t cursor = 0;
+        while (cursor <= sourceText.size()) {
+            const std::size_t lineEnd = sourceText.find('\n', cursor);
+            const std::size_t lineLength = (lineEnd == std::string::npos) ? (sourceText.size() - cursor)
+                                                                           : (lineEnd - cursor);
+            const std::string line = sourceText.substr(cursor, lineLength);
+
+            std::string includeName;
+            if (ParseIncludeDirective(line, &includeName)) {
+                std::string resolvedKey;
+                const std::filesystem::path includeRelative =
+                    std::filesystem::path(key).parent_path() / std::filesystem::path(includeName);
+                const std::string relativeCandidate = NormalizePathString(includeRelative);
+                if (shaderContentsByKey.contains(relativeCandidate)) {
+                    resolvedKey = relativeCandidate;
+                } else if (shaderContentsByKey.contains(includeName)) {
+                    resolvedKey = includeName;
+                } else if (const auto basenameIt = basenameToKey.find(includeName); basenameIt != basenameToKey.end()) {
+                    resolvedKey = basenameIt->second;
+                }
+
+                if (resolvedKey.empty()) {
+                    *outError = "Failed to resolve shader include '" + includeName + "' from '" + key + "'";
+                    includeStack.erase(key);
+                    return false;
+                }
+
+                std::string includedExpanded;
+                if (!expandShaderKey(resolvedKey, &includedExpanded)) {
+                    includeStack.erase(key);
+                    return false;
+                }
+                includedKeys.insert(resolvedKey);
+                *outExpanded += includedExpanded;
+            } else {
+                *outExpanded += line;
+                *outExpanded += '\n';
+            }
+
+            if (lineEnd == std::string::npos) {
+                break;
+            }
+            cursor = lineEnd + 1;
+        }
+
+        includeStack.erase(key);
+        return true;
+    };
+
+    std::string expandedShaderSource;
+    if (!expandShaderKey(rootShaderKey, &expandedShaderSource)) {
+        std::ostringstream generatedSource;
+        generatedSource << "#error \"" << escapeForCStringLiteral(*outError) << "\"\n";
+        generatedSource << workspace.cppSource;
+        *outSource = generatedSource.str();
+        return true;
+    }
+
+    for (const auto& includeKey : includedKeys) {
+        if (const auto pathIt = shaderPathByKey.find(includeKey); pathIt != shaderPathByKey.end()) {
+            if (pathIt->second != NormalizePathString(workspace.shaderPath)) {
+                outShaderDependencies->push_back(pathIt->second);
+            }
+        }
+    }
+    std::ranges::sort(*outShaderDependencies);
+    outShaderDependencies->erase(std::unique(outShaderDependencies->begin(), outShaderDependencies->end()),
+                                 outShaderDependencies->end());
+
+    ShaderSections sections;
+    if (!parseShaderSections(expandedShaderSource, &sections)) {
+        *outError = "shader.glsl must define '#type vertex'+'#type fragment' and/or '#type compute' sections";
+        std::ostringstream generatedSource;
+        generatedSource << "#error \"" << escapeForCStringLiteral(*outError) << "\"\n";
+        generatedSource << workspace.cppSource;
+        *outSource = generatedSource.str();
+        return true;
+    }
+
+    const bool hasGraphics = !sections.vertex.empty() || !sections.fragment.empty();
+    if (hasGraphics && (sections.vertex.empty() || sections.fragment.empty())) {
+        *outError = "Graphics shader path requires both '#type vertex' and '#type fragment' sections";
+        std::ostringstream generatedSource;
+        generatedSource << "#error \"" << escapeForCStringLiteral(*outError) << "\"\n";
+        generatedSource << workspace.cppSource;
+        *outSource = generatedSource.str();
+        return true;
+    }
+
+    *outUniformDescriptors = ParseUniformDescriptors(expandedShaderSource);
+    *outSamplerUniformNames = ParseSamplerUniformNames(expandedShaderSource);
+    *outStorageBufferNames = ParseStorageBufferNames(expandedShaderSource);
+
     // Inject parsed shader sources and hash into the generated C++ translation unit.
-    const uint32_t shaderHash = static_cast<uint32_t>(std::hash<std::string>{}(workspace.shaderSource));
+    const uint32_t shaderHash = static_cast<uint32_t>(std::hash<std::string>{}(expandedShaderSource));
     const std::uint64_t stateAbiHash = ComputeStateAbiHashFromCppSource(workspace.cppSource);
+    std::ostringstream generatedSource;
     generatedSource << "static const unsigned int jitgl_workspace_shader_hash = " << shaderHash << "u;\n";
     generatedSource << "static const unsigned long long jitgl_workspace_state_abi_hash = "
                     << stateAbiHash << "ull;\n";
+    generatedSource << "static const bool jitgl_workspace_has_graphics = "
+                    << (hasGraphics ? "true" : "false") << ";\n";
+    generatedSource << "static const bool jitgl_workspace_has_compute = "
+                    << (!sections.compute.empty() ? "true" : "false") << ";\n";
     generatedSource << "static const char* jitgl_workspace_vertex_shader_source = \""
-                    << escapeForCStringLiteral(vertexShader) << "\";\n";
+                    << escapeForCStringLiteral(sections.vertex) << "\";\n";
     generatedSource << "static const char* jitgl_workspace_fragment_shader_source = \""
-                    << escapeForCStringLiteral(fragmentShader) << "\";\n";
+                    << escapeForCStringLiteral(sections.fragment) << "\";\n";
+    generatedSource << "static const char* jitgl_workspace_compute_shader_source = \""
+                    << escapeForCStringLiteral(sections.compute) << "\";\n";
     generatedSource << "#define JIT_WORKSPACE_VERTEX_SHADER jitgl_workspace_vertex_shader_source\n";
     generatedSource << "#define JIT_WORKSPACE_FRAGMENT_SHADER jitgl_workspace_fragment_shader_source\n";
+    generatedSource << "#define JIT_WORKSPACE_COMPUTE_SHADER jitgl_workspace_compute_shader_source\n";
     generatedSource << "#define JIT_WORKSPACE_SHADER_HASH jitgl_workspace_shader_hash\n";
     generatedSource << "#define JIT_WORKSPACE_STATE_ABI_HASH jitgl_workspace_state_abi_hash\n";
+    generatedSource << "#define JIT_WORKSPACE_HAS_GRAPHICS jitgl_workspace_has_graphics\n";
+    generatedSource << "#define JIT_WORKSPACE_HAS_COMPUTE jitgl_workspace_has_compute\n";
     generatedSource << workspace.cppSource;
 
-    return generatedSource.str();
+    *outSource = generatedSource.str();
+    return true;
 }
 
 void Engine::QueueCompileForWorkspace(const std::string& workspaceName, double nowSeconds, bool immediate) {
@@ -1327,13 +1697,26 @@ void Engine::QueueCompileForWorkspace(const std::string& workspaceName, double n
         return;
     }
 
-    const std::string generatedSource = BuildCompileSourceForWorkspace(workspaceName);
-    if (generatedSource.empty()) {
+    std::string generatedSource;
+    std::vector<UniformDescriptor> uniformDescriptors;
+    std::vector<std::string> samplerUniformNames;
+    std::vector<std::string> storageBufferNames;
+    std::vector<std::string> shaderDependencies;
+    std::string buildError;
+    if (!BuildCompileSourceForWorkspace(workspaceName,
+                                        &generatedSource,
+                                        &uniformDescriptors,
+                                        &samplerUniformNames,
+                                        &storageBufferNames,
+                                        &shaderDependencies,
+                                        &buildError)) {
         return;
     }
 
     const std::uint64_t stateAbiHash = ComputeStateAbiHashFromCppSource(workspaceIt->second.cppSource);
-    std::vector<UniformDescriptor> uniformDescriptors = ParseUniformDescriptors(workspaceIt->second.shaderSource);
+    if (!buildError.empty()) {
+        ui_->AddLogOutput("[Shader Include] " + buildError);
+    }
     DebugLog("QueueCompileForWorkspace(name=" + workspaceName +
              ", immediate=" + std::to_string(immediate) +
              ", uniforms=" + std::to_string(uniformDescriptors.size()) + ")");
@@ -1341,6 +1724,9 @@ void Engine::QueueCompileForWorkspace(const std::string& workspaceName, double n
                  generatedSource,
                  stateAbiHash,
                  std::move(uniformDescriptors),
+                 std::move(samplerUniformNames),
+                 std::move(storageBufferNames),
+                 std::move(shaderDependencies),
                  nowSeconds,
                  immediate);
 }
@@ -1368,6 +1754,7 @@ bool Engine::RegisterWorkspace(const WorkspaceDescriptor& descriptor) {
     workspace.shaderSource = std::move(*shaderSource);
     workspace.arenaStorage.resize(kWorkspaceArenaBytes, 0);
     workspace.arenaOffset = 0;
+    workspace.outputTextureName = workspace.name;
     if (auto uniformsJson = workspaceManager_->ReadFile(descriptor.uniformsPath); uniformsJson.has_value()) {
         (void)workspace.uniforms.LoadFromJson(*uniformsJson);
     }
@@ -1466,6 +1853,7 @@ bool Engine::DeleteWorkspaceFromUI(const std::string& workspaceName) {
     }
 
     ReleaseWorkspaceGeometry(&workspaceIt->second);
+    ReleaseWorkspacePassTargets(&workspaceIt->second);
     if (ctx_.vao == workspace.vao) {
         ctx_.vao = 0;
     }
@@ -1494,6 +1882,9 @@ bool Engine::DeleteWorkspaceFromUI(const std::string& workspaceName) {
     fileToWorkspace_.erase(workspace.shaderPath);
     latestSources_.erase(workspaceName);
     latestUniformDescriptors_.erase(workspaceName);
+    latestSamplerUniformNames_.erase(workspaceName);
+    latestStorageBufferNames_.erase(workspaceName);
+    latestShaderDependencies_.erase(workspaceName);
     latestStateAbiHashes_.erase(workspaceName);
     pendingCompilesAt_.erase(workspaceName);
     compileFailures_.erase(workspaceName);
@@ -1504,6 +1895,22 @@ bool Engine::DeleteWorkspaceFromUI(const std::string& workspaceName) {
     ignoreWatcherUntil_.erase(workspace.shaderPath);
 
     std::erase(workspaceOrder_, workspaceName);
+    pipelineConnections_.erase(workspaceName);
+    for (auto& [targetWorkspace, perInput] : pipelineConnections_) {
+        (void)targetWorkspace;
+        std::erase_if(perInput,
+                      [&](const auto& entry) {
+                          return entry.second.sourceWorkspace == workspaceName;
+                      });
+    }
+    std::erase_if(pipelineConnections_,
+                  [](const auto& entry) {
+                      return entry.second.empty();
+                  });
+    std::erase_if(pipelineGlobalUniforms_,
+                  [](const EditorUI::PipelineGlobalUniformView& uniform) {
+                      return uniform.name.empty();
+                  });
 
     {
         std::scoped_lock lock(pendingMutex_);
@@ -1571,9 +1978,6 @@ void Engine::SwitchToWorkspace(const std::string& workspaceName, bool focusCppDo
             previousWorkspace.activeClockStartSeconds = -1.0;
         }
 
-        if (activeProgram_) {
-            ShutdownProgramIfInitialized(activeProgram_);
-        }
         SaveActiveWorkspaceRuntimeState();
         PersistWorkspaceUniformState(activeWorkspaceName_);
         activeProgram_.reset();
@@ -1716,6 +2120,7 @@ void Engine::ProcessPendingReloads(double nowSeconds) {
     }
 
     for (const auto& filepath : filesToProcess) {
+        const std::string normalizedPath = NormalizePathString(std::filesystem::path(filepath));
         auto ignoredIt = ignoreWatcherUntil_.find(filepath);
         if (ignoredIt != ignoreWatcherUntil_.end() && nowSeconds < ignoredIt->second) {
             continue;
@@ -1723,12 +2128,42 @@ void Engine::ProcessPendingReloads(double nowSeconds) {
 
         const auto content = workspaceManager_->ReadFile(filepath);
         if (!content.has_value()) {
+            if (std::filesystem::path(filepath).extension() == ".glsl") {
+                bool triggered = false;
+                for (auto& [name, workspace] : workspaces_) {
+                    if (std::ranges::find(workspace.shaderDependencies, normalizedPath) ==
+                        workspace.shaderDependencies.end()) {
+                        continue;
+                    }
+                    QueueCompileForWorkspace(name, nowSeconds, true);
+                    triggered = true;
+                }
+                if (triggered) {
+                    dependencyFlashUntil_[normalizedPath] = nowSeconds + 1.5;
+                    ui_->AddLogOutput("[Watcher] Shared shader dependency changed (missing/unreadable): " + filepath);
+                }
+            }
             ui_->AddLogOutput("[Watcher] Failed to read changed file: " + filepath);
             continue;
         }
 
         const std::string workspaceName = WorkspaceForPath(filepath);
         if (workspaceName.empty()) {
+            if (std::filesystem::path(filepath).extension() == ".glsl") {
+                bool triggered = false;
+                for (auto& [name, workspace] : workspaces_) {
+                    if (std::ranges::find(workspace.shaderDependencies, normalizedPath) ==
+                        workspace.shaderDependencies.end()) {
+                        continue;
+                    }
+                    QueueCompileForWorkspace(name, nowSeconds, true);
+                    triggered = true;
+                }
+                if (triggered) {
+                    dependencyFlashUntil_[normalizedPath] = nowSeconds + 1.5;
+                    ui_->AddLogOutput("[Watcher] Shared shader dependency changed: " + filepath);
+                }
+            }
             continue;
         }
 
@@ -1746,8 +2181,9 @@ void Engine::ProcessPendingReloads(double nowSeconds) {
 
         UpdateWorkspaceSourceFromDocument(workspaceName, filepath, *content);
         ui_->UpdateDocumentContent(filepath, *content);
-        if (workspaceName == activeWorkspaceName_) {
-            QueueCompileForWorkspace(workspaceName, nowSeconds, true);
+        QueueCompileForWorkspace(workspaceName, nowSeconds, true);
+        if (std::filesystem::path(filepath).extension() == ".glsl") {
+            dependencyFlashUntil_[normalizedPath] = nowSeconds + 1.5;
         }
         ui_->AddLogOutput("[Watcher] External change detected: " + filepath);
     }
@@ -1787,6 +2223,9 @@ void Engine::QueueCompile(const std::string& workspaceName,
                           const std::string& source,
                           const std::uint64_t stateAbiHash,
                           std::vector<UniformDescriptor> uniformDescriptors,
+                          std::vector<std::string> samplerUniformNames,
+                          std::vector<std::string> storageBufferNames,
+                          std::vector<std::string> shaderDependencies,
                           double nowSeconds,
                           bool immediate) {
     const std::size_t sourceHash = std::hash<std::string>{}(source);
@@ -1806,6 +2245,9 @@ void Engine::QueueCompile(const std::string& workspaceName,
 
     latestSources_[workspaceName] = source;
     latestUniformDescriptors_[workspaceName] = std::move(uniformDescriptors);
+    latestSamplerUniformNames_[workspaceName] = std::move(samplerUniformNames);
+    latestStorageBufferNames_[workspaceName] = std::move(storageBufferNames);
+    latestShaderDependencies_[workspaceName] = std::move(shaderDependencies);
     latestStateAbiHashes_[workspaceName] = stateAbiHash;
     // Error-heavy workspaces get a longer debounce to avoid compile spam while user is fixing errors.
     double debounce = MIN_DEBOUNCE_SECONDS;
@@ -1865,6 +2307,18 @@ void Engine::EnqueueDueCompiles(const std::vector<std::string>& duePaths) {
         if (uniformDescriptorsIt == latestUniformDescriptors_.end()) {
             continue;
         }
+        auto samplerUniformsIt = latestSamplerUniformNames_.find(workspaceName);
+        if (samplerUniformsIt == latestSamplerUniformNames_.end()) {
+            continue;
+        }
+        auto storageBuffersIt = latestStorageBufferNames_.find(workspaceName);
+        if (storageBuffersIt == latestStorageBufferNames_.end()) {
+            continue;
+        }
+        auto shaderDependenciesIt = latestShaderDependencies_.find(workspaceName);
+        if (shaderDependenciesIt == latestShaderDependencies_.end()) {
+            continue;
+        }
         auto stateAbiHashIt = latestStateAbiHashes_.find(workspaceName);
         if (stateAbiHashIt == latestStateAbiHashes_.end()) {
             continue;
@@ -1905,7 +2359,10 @@ void Engine::EnqueueDueCompiles(const std::vector<std::string>& duePaths) {
             sourceIt->second,
             sourceHash,
             stateAbiHashIt->second,
-            uniformDescriptorsIt->second
+            uniformDescriptorsIt->second,
+            samplerUniformsIt->second,
+            storageBuffersIt->second,
+            shaderDependenciesIt->second
         });
         pendingCompilesAt_.erase(workspaceName);
     }
@@ -1974,7 +2431,10 @@ void Engine::CompileThreadMain(std::shared_ptr<std::atomic<bool>> running) {
                 std::move(program),
                 job.sourceHash,
                 job.stateAbiHash,
-                std::move(job.uniformDescriptors)
+                std::move(job.uniformDescriptors),
+                std::move(job.samplerUniformNames),
+                std::move(job.storageBufferNames),
+                std::move(job.shaderDependencies)
             });
         }
     }
@@ -2028,10 +2488,6 @@ bool Engine::ActivateProgramForWorkspace(const std::string& workspaceName) {
     }
 
     const auto& nextProgram = it->second;
-    if (activeProgram_ && activeProgram_ != nextProgram) {
-        ShutdownProgramIfInitialized(activeProgram_);
-    }
-
     activeProgram_ = nextProgram;
     InitializeProgramIfNeeded(activeProgram_);
 
@@ -2129,6 +2585,7 @@ bool Engine::LoadShowcaseWorkspaceFromAssets(const bool focusWorkspace) {
     recentErrors_.erase(descriptor->name);
     latestSources_.erase(descriptor->name);
     latestUniformDescriptors_.erase(descriptor->name);
+    latestStorageBufferNames_.erase(descriptor->name);
     pendingCompilesAt_.erase(descriptor->name);
 
     SyncWorkspaceUiState();
@@ -2460,6 +2917,315 @@ void Engine::HandleRequestFirewallAccess() {
 #endif
 }
 
+void Engine::HandlePipelineMoveCommand(const std::string& workspaceName, const int delta) {
+    if (workspaceName.empty() || delta == 0) {
+        return;
+    }
+
+    auto it = std::ranges::find(workspaceOrder_, workspaceName);
+    if (it == workspaceOrder_.end()) {
+        return;
+    }
+
+    const std::ptrdiff_t currentIndex = std::distance(workspaceOrder_.begin(), it);
+    const std::ptrdiff_t targetIndex = std::clamp(currentIndex + static_cast<std::ptrdiff_t>(delta),
+                                                  static_cast<std::ptrdiff_t>(0),
+                                                  static_cast<std::ptrdiff_t>(workspaceOrder_.size() - 1));
+    if (targetIndex == currentIndex) {
+        return;
+    }
+
+    std::iter_swap(workspaceOrder_.begin() + currentIndex, workspaceOrder_.begin() + targetIndex);
+    SyncWorkspaceUiState();
+    UpdatePipelineUiState();
+}
+
+void Engine::HandlePipelineAddPassCommand(const std::string& workspaceName) {
+    auto workspaceIt = workspaces_.find(workspaceName);
+    if (workspaceIt == workspaces_.end()) {
+        return;
+    }
+
+    workspaceIt->second.pipelineEnabled = true;
+    std::erase(workspaceOrder_, workspaceName);
+    workspaceOrder_.push_back(workspaceName);
+    SyncWorkspaceUiState();
+    UpdatePipelineUiState();
+}
+
+void Engine::HandlePipelineConfigChanged(const EditorUI::PipelineEditCommand& command) {
+    auto workspaceIt = workspaces_.find(command.workspaceName);
+    if (workspaceIt == workspaces_.end()) {
+        return;
+    }
+
+    auto& workspace = workspaceIt->second;
+    switch (command.action) {
+        case EditorUI::PipelineEditAction::SetOutputName: {
+            std::string outputName = trim(command.outputName);
+            if (outputName.empty()) {
+                outputName = workspace.name;
+            }
+            for (char& c : outputName) {
+                const bool valid = std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+                if (!valid) {
+                    c = '_';
+                }
+            }
+            workspace.outputTextureName = outputName;
+            break;
+        }
+
+        case EditorUI::PipelineEditAction::SetEnabled:
+            workspace.pipelineEnabled = command.enabled;
+            break;
+    }
+    UpdatePipelineUiState();
+}
+
+bool Engine::HandlePipelineSaveChainRequest(const std::string& path) const {
+    if (path.empty()) {
+        return false;
+    }
+
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+        return false;
+    }
+
+    const auto uniformTypeString = [](EditorUI::PipelineGlobalUniformType type) -> const char* {
+        switch (type) {
+            case EditorUI::PipelineGlobalUniformType::Float: return "float";
+            case EditorUI::PipelineGlobalUniformType::Int: return "int";
+            case EditorUI::PipelineGlobalUniformType::Bool: return "bool";
+            case EditorUI::PipelineGlobalUniformType::Vec4: return "vec4";
+        }
+        return "float";
+    };
+
+    out << "{\n";
+    out << "  \"version\": 1,\n";
+    out << "  \"order\": [";
+    bool wroteFirst = false;
+    for (const auto& workspaceName : workspaceOrder_) {
+        if (!workspaces_.contains(workspaceName)) {
+            continue;
+        }
+        if (wroteFirst) {
+            out << ", ";
+        }
+        wroteFirst = true;
+        out << "\"" << EscapeJsonString(workspaceName) << "\"";
+    }
+    out << "],\n";
+
+    out << "  \"passes\": [\n";
+    bool wrotePass = false;
+    for (const auto& workspaceName : workspaceOrder_) {
+        const auto workspaceIt = workspaces_.find(workspaceName);
+        if (workspaceIt == workspaces_.end()) {
+            continue;
+        }
+        if (wrotePass) {
+            out << ",\n";
+        }
+        wrotePass = true;
+        const auto& workspace = workspaceIt->second;
+        out << "    {\"workspace\": \"" << EscapeJsonString(workspaceName) << "\", "
+            << "\"enabled\": " << (workspace.pipelineEnabled ? "true" : "false") << ", "
+            << "\"output\": \"" << EscapeJsonString(workspace.outputTextureName) << "\"}";
+    }
+    out << "\n  ],\n";
+
+    out << "  \"connections\": [\n";
+    bool wroteConnection = false;
+    for (const auto& [targetWorkspace, perInput] : pipelineConnections_) {
+        for (const auto& [targetInput, binding] : perInput) {
+            if (wroteConnection) {
+                out << ",\n";
+            }
+            wroteConnection = true;
+            out << "    {\"target_workspace\": \"" << EscapeJsonString(targetWorkspace) << "\", "
+                << "\"target_input\": \"" << EscapeJsonString(targetInput) << "\", "
+                << "\"source_workspace\": \"" << EscapeJsonString(binding.sourceWorkspace) << "\", "
+                << "\"source_slot\": \"" << EscapeJsonString(binding.sourceSlot) << "\"}";
+        }
+    }
+    out << "\n  ],\n";
+
+    out << "  \"global_uniforms\": [\n";
+    bool wroteUniform = false;
+    for (const auto& uniform : pipelineGlobalUniforms_) {
+        if (wroteUniform) {
+            out << ",\n";
+        }
+        wroteUniform = true;
+        out << "    {\"name\": \"" << EscapeJsonString(uniform.name) << "\", "
+            << "\"type\": \"" << uniformTypeString(uniform.type) << "\", "
+            << "\"float\": " << uniform.floatValue << ", "
+            << "\"int\": " << uniform.intValue << ", "
+            << "\"bool\": " << (uniform.boolValue ? "true" : "false") << ", "
+            << "\"vec4\": [" << uniform.vec4Value[0] << ", "
+            << uniform.vec4Value[1] << ", "
+            << uniform.vec4Value[2] << ", "
+            << uniform.vec4Value[3] << "]}";
+    }
+    out << "\n  ]\n";
+    out << "}\n";
+    return out.good();
+}
+
+void Engine::HandlePipelineResetRequest() {
+    workspaceOrder_.clear();
+    workspaceOrder_.reserve(workspaces_.size());
+    for (const auto& [name, workspace] : workspaces_) {
+        (void)workspace;
+        workspaceOrder_.push_back(name);
+    }
+    std::ranges::sort(workspaceOrder_);
+
+    for (auto& [name, workspace] : workspaces_) {
+        workspace.pipelineEnabled = true;
+        workspace.outputTextureName = name;
+    }
+    pipelineConnections_.clear();
+    pipelineGlobalUniforms_.clear();
+    dependencyFlashUntil_.clear();
+
+    SyncWorkspaceUiState();
+    UpdatePipelineUiState();
+}
+
+void Engine::HandlePipelineOpenFileRequest(const std::string& workspaceName, const bool openCppFile) {
+    auto workspaceIt = workspaces_.find(workspaceName);
+    if (workspaceIt == workspaces_.end()) {
+        return;
+    }
+
+    if (openCppFile) {
+        SwitchToWorkspace(workspaceName, true);
+        return;
+    }
+
+    SwitchToWorkspace(workspaceName, false);
+    activeFilePath_ = workspaceIt->second.shaderPath;
+    ui_->SetActiveDocument(activeFilePath_);
+}
+
+void Engine::HandlePipelineConnectionCommand(const EditorUI::PipelineConnectionCommand& command) {
+    if (command.targetWorkspace.empty() || command.targetSlot.empty()) {
+        return;
+    }
+    if (!workspaces_.contains(command.targetWorkspace)) {
+        return;
+    }
+
+    if (command.clear) {
+        if (auto workspaceIt = pipelineConnections_.find(command.targetWorkspace);
+            workspaceIt != pipelineConnections_.end()) {
+            workspaceIt->second.erase(command.targetSlot);
+            if (workspaceIt->second.empty()) {
+                pipelineConnections_.erase(workspaceIt);
+            }
+        }
+        UpdatePipelineUiState();
+        return;
+    }
+
+    if (command.sourceSlot.empty()) {
+        return;
+    }
+
+    std::string resolvedSourceWorkspace = command.sourceWorkspace;
+    if (resolvedSourceWorkspace.empty()) {
+        for (const auto& workspaceName : workspaceOrder_) {
+            const auto workspaceIt = workspaces_.find(workspaceName);
+            if (workspaceIt == workspaces_.end()) {
+                continue;
+            }
+            const std::string outputName = workspaceIt->second.outputTextureName.empty()
+                                               ? workspaceName
+                                               : workspaceIt->second.outputTextureName;
+            if (outputName == command.sourceSlot || workspaceName == command.sourceSlot) {
+                resolvedSourceWorkspace = workspaceName;
+                break;
+            }
+        }
+    }
+
+    pipelineConnections_[command.targetWorkspace][command.targetSlot] = PipelineConnectionBinding{
+        resolvedSourceWorkspace,
+        command.sourceSlot
+    };
+    UpdatePipelineUiState();
+}
+
+void Engine::HandlePipelineGlobalUniformCommand(const EditorUI::PipelineGlobalUniformCommand& command) {
+    if (command.uniform.name.empty()) {
+        return;
+    }
+
+    if (command.action == EditorUI::PipelineGlobalUniformCommand::Action::Remove) {
+        std::erase_if(pipelineGlobalUniforms_, [&](const EditorUI::PipelineGlobalUniformView& uniform) {
+            return uniform.name == command.uniform.name;
+        });
+        UpdatePipelineUiState();
+        return;
+    }
+
+    auto existing = std::ranges::find_if(pipelineGlobalUniforms_,
+                                         [&](const EditorUI::PipelineGlobalUniformView& uniform) {
+                                             return uniform.name == command.uniform.name;
+                                         });
+    if (existing == pipelineGlobalUniforms_.end()) {
+        pipelineGlobalUniforms_.push_back(command.uniform);
+    } else {
+        *existing = command.uniform;
+    }
+    UpdatePipelineUiState();
+}
+
+bool Engine::ExportPipelineResource(const std::string& resourceName, const std::string& targetPath) const {
+    if (resourceName.empty() || targetPath.empty()) {
+        return false;
+    }
+    const auto resourceIt = sharedTextures_.find(resourceName);
+    if (resourceIt == sharedTextures_.end()) {
+        return false;
+    }
+    if (resourceIt->second.texture == 0 || resourceIt->second.width <= 0 || resourceIt->second.height <= 0) {
+        return false;
+    }
+
+    const int width = resourceIt->second.width;
+    const int height = resourceIt->second.height;
+    std::vector<unsigned char> rgba(static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u, 0u);
+
+    GLint previousPackAlignment = 4;
+    glGetIntegerv(GL_PACK_ALIGNMENT, &previousPackAlignment);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glBindTexture(GL_TEXTURE_2D, resourceIt->second.texture);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glPixelStorei(GL_PACK_ALIGNMENT, previousPackAlignment);
+
+    std::ofstream out(targetPath, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+        return false;
+    }
+    out << "P6\n" << width << " " << height << "\n255\n";
+    for (int y = height - 1; y >= 0; --y) {
+        const std::size_t rowOffset = static_cast<std::size_t>(y) * static_cast<std::size_t>(width) * 4u;
+        for (int x = 0; x < width; ++x) {
+            const std::size_t pixelOffset = rowOffset + static_cast<std::size_t>(x) * 4u;
+            out.put(static_cast<char>(rgba[pixelOffset + 0]));
+            out.put(static_cast<char>(rgba[pixelOffset + 1]));
+            out.put(static_cast<char>(rgba[pixelOffset + 2]));
+        }
+    }
+    return out.good();
+}
+
 void Engine::HandleCompileFailure(const CompileResult& result) {
     DebugLog("HandleCompileFailure(workspace=" + result.workspaceName +
              ", sourceHash=" + std::to_string(result.sourceHash) + ")");
@@ -2537,6 +3303,16 @@ void Engine::HandleCompileSuccess(const CompileResult& result) {
     }
 
     workspaceIt->second.uniforms.Rebuild(result.uniformDescriptors);
+    workspaceIt->second.samplerUniformNames = result.samplerUniformNames;
+    workspaceIt->second.storageBufferNames = result.storageBufferNames;
+    workspaceIt->second.shaderDependencies = result.shaderDependencies;
+    workspaceIt->second.samplerLocationProgram = 0;
+    workspaceIt->second.samplerLocationCache.clear();
+    workspaceIt->second.globalUniformLocationProgram = 0;
+    workspaceIt->second.globalUniformLocationCache.clear();
+    if (workspaceIt->second.outputTextureName.empty()) {
+        workspaceIt->second.outputTextureName = workspaceIt->second.name;
+    }
     if (result.workspaceName == activeWorkspaceName_) {
         ctx_.reset_arena();
         ui_->SetUniformValues(workspaceIt->second.uniforms.Values());
@@ -2584,29 +3360,143 @@ void Engine::ProcessCompileResults() {
     }
 }
 
-void Engine::ApplyActiveWorkspaceUniforms() {
-    static GLuint lastLoggedProgramHandle = std::numeric_limits<GLuint>::max();
-    static std::string lastLoggedWorkspace;
+bool Engine::ResolvePipelineSamplerBinding(const WorkspaceState& workspace,
+                                           const std::string& samplerName,
+                                           std::string* outResourceName,
+                                           bool* outIsExplicit) const {
+    if (outResourceName == nullptr || outIsExplicit == nullptr) {
+        return false;
+    }
+    outResourceName->clear();
+    *outIsExplicit = false;
 
-    if (activeWorkspaceName_.empty()) {
+    if (auto workspaceIt = pipelineConnections_.find(workspace.name);
+        workspaceIt != pipelineConnections_.end()) {
+        if (auto inputIt = workspaceIt->second.find(samplerName);
+            inputIt != workspaceIt->second.end() && !inputIt->second.sourceSlot.empty()) {
+            *outResourceName = inputIt->second.sourceSlot;
+            *outIsExplicit = true;
+            return true;
+        }
+    }
+
+    if (sharedTextures_.contains(samplerName)) {
+        *outResourceName = samplerName;
+        *outIsExplicit = false;
+        return true;
+    }
+
+    return false;
+}
+
+void Engine::BindSharedSamplerUniforms(WorkspaceState* workspace, const GLuint programHandle) {
+    if (workspace == nullptr || programHandle == 0 || workspace->samplerUniformNames.empty() || sharedTextures_.empty()) {
         return;
     }
 
-    auto workspaceIt = workspaces_.find(activeWorkspaceName_);
+    GLint maxUnits = 0;
+    glGetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &maxUnits);
+    if (maxUnits <= 0) {
+        return;
+    }
+
+    int textureUnit = 0;
+    if (workspace->samplerLocationProgram != programHandle) {
+        workspace->samplerLocationProgram = programHandle;
+        workspace->samplerLocationCache.clear();
+    }
+
+    for (const auto& samplerName : workspace->samplerUniformNames) {
+        std::string resourceName;
+        bool explicitBinding = false;
+        if (!ResolvePipelineSamplerBinding(*workspace, samplerName, &resourceName, &explicitBinding)) {
+            continue;
+        }
+        (void)explicitBinding;
+
+        const auto resourceIt = sharedTextures_.find(resourceName);
+        if (resourceIt == sharedTextures_.end() || resourceIt->second.texture == 0) {
+            continue;
+        }
+        if (textureUnit >= maxUnits) {
+            break;
+        }
+
+        GLint location = -1;
+        if (const auto cacheIt = workspace->samplerLocationCache.find(samplerName);
+            cacheIt != workspace->samplerLocationCache.end()) {
+            location = cacheIt->second;
+        } else {
+            location = glGetUniformLocation(programHandle, samplerName.c_str());
+            workspace->samplerLocationCache[samplerName] = location;
+        }
+        if (location < 0) {
+            continue;
+        }
+
+        glActiveTexture(GL_TEXTURE0 + textureUnit);
+        glBindTexture(GL_TEXTURE_2D, resourceIt->second.texture);
+        glUniform1i(location, textureUnit);
+        ++textureUnit;
+    }
+    glActiveTexture(GL_TEXTURE0);
+}
+
+void Engine::ApplyPipelineGlobalUniforms(WorkspaceState* workspace, const GLuint programHandle) {
+    if (workspace == nullptr || programHandle == 0 || pipelineGlobalUniforms_.empty()) {
+        return;
+    }
+
+    if (workspace->globalUniformLocationProgram != programHandle) {
+        workspace->globalUniformLocationProgram = programHandle;
+        workspace->globalUniformLocationCache.clear();
+    }
+
+    for (const auto& uniform : pipelineGlobalUniforms_) {
+        if (uniform.name.empty()) {
+            continue;
+        }
+
+        GLint location = -1;
+        if (const auto locationIt = workspace->globalUniformLocationCache.find(uniform.name);
+            locationIt != workspace->globalUniformLocationCache.end()) {
+            location = locationIt->second;
+        } else {
+            location = glGetUniformLocation(programHandle, uniform.name.c_str());
+            workspace->globalUniformLocationCache[uniform.name] = location;
+        }
+        if (location < 0) {
+            continue;
+        }
+
+        switch (uniform.type) {
+            case EditorUI::PipelineGlobalUniformType::Float:
+                glUniform1f(location, uniform.floatValue);
+                break;
+            case EditorUI::PipelineGlobalUniformType::Int:
+                glUniform1i(location, uniform.intValue);
+                break;
+            case EditorUI::PipelineGlobalUniformType::Bool:
+                glUniform1i(location, uniform.boolValue ? 1 : 0);
+                break;
+            case EditorUI::PipelineGlobalUniformType::Vec4:
+                glUniform4f(location,
+                            uniform.vec4Value[0],
+                            uniform.vec4Value[1],
+                            uniform.vec4Value[2],
+                            uniform.vec4Value[3]);
+                break;
+        }
+    }
+}
+
+void Engine::ApplyWorkspaceUniforms(const std::string& workspaceName) {
+    auto workspaceIt = workspaces_.find(workspaceName);
     if (workspaceIt == workspaces_.end()) {
         return;
     }
 
     const GLuint programHandle = static_cast<GLuint>(ctx_.state_i[0]);
-    if (programHandle != lastLoggedProgramHandle || activeWorkspaceName_ != lastLoggedWorkspace) {
-        DebugLog("ApplyActiveWorkspaceUniforms(workspace=" + activeWorkspaceName_ +
-                 ", programHandle=" + std::to_string(programHandle) +
-                 ", glIsProgram=" + std::to_string(programHandle != 0 &&
-                                                   glIsProgram(programHandle) == GL_TRUE) +
-                 ", uniformCount=" + std::to_string(workspaceIt->second.uniforms.Values().size()) + ")");
-        lastLoggedProgramHandle = programHandle;
-        lastLoggedWorkspace = activeWorkspaceName_;
-    }
     if (programHandle == 0) {
         workspaceIt->second.uniforms.BindProgram(0);
         return;
@@ -2614,32 +3504,374 @@ void Engine::ApplyActiveWorkspaceUniforms() {
 
     workspaceIt->second.uniforms.BindProgram(programHandle);
     glUseProgram(programHandle);
+    BindSharedSamplerUniforms(&workspaceIt->second, programHandle);
     workspaceIt->second.uniforms.UploadDirty();
+    ApplyPipelineGlobalUniforms(&workspaceIt->second, programHandle);
 }
 
-void Engine::RenderSceneToTexture() {
-    if (sceneFbo_ == 0) {
+void Engine::UpdatePipelineUiState() {
+    if (!ui_) {
         return;
     }
 
-    glBindFramebuffer(GL_FRAMEBUFFER, sceneFbo_);
-    glViewport(0, 0, sceneWidth_, sceneHeight_);
-
-    glClearColor(0.05f, 0.05f, 0.05f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-    if (activeProgram_) {
-        const auto& fn = activeProgram_->functions;
-        if (fn.update) {
-            fn.update(&ctx_);
+    std::vector<EditorUI::PipelinePassView> passViews;
+    passViews.reserve(workspaceOrder_.size());
+    std::unordered_map<std::string, std::vector<std::string>> outputOwners;
+    outputOwners.reserve(workspaceOrder_.size() * 2);
+    for (const auto& workspaceName : workspaceOrder_) {
+        const auto workspaceIt = workspaces_.find(workspaceName);
+        if (workspaceIt == workspaces_.end()) {
+            continue;
         }
-        ApplyActiveWorkspaceUniforms();
-        if (fn.render) {
-            fn.render(&ctx_);
+
+        EditorUI::PipelinePassView view;
+        view.workspaceName = workspaceName;
+        view.outputName = workspaceIt->second.outputTextureName.empty() ? workspaceName
+                                                                         : workspaceIt->second.outputTextureName;
+        view.cppPath = workspaceIt->second.cppPath;
+        view.shaderPath = workspaceIt->second.shaderPath;
+        view.inputSamplers = workspaceIt->second.samplerUniformNames;
+        view.inputBuffers = workspaceIt->second.storageBufferNames;
+        view.outputTextures.push_back(view.outputName);
+        if (view.outputName != workspaceName) {
+            view.outputTextures.push_back(workspaceName);
+        }
+        view.enabled = workspaceIt->second.pipelineEnabled;
+        view.active = (workspaceName == activeWorkspaceName_);
+        view.compiled = compiledPrograms_.contains(workspaceName);
+        view.hasCompileError = compileFailures_.contains(workspaceName);
+        view.gpuTimeMs = workspaceIt->second.lastGpuPassTimeMs;
+        ShaderSections shaderSections;
+        const bool parsedShader = parseShaderSections(workspaceIt->second.shaderSource, &shaderSections);
+        const bool hasCompute = parsedShader && !shaderSections.compute.empty();
+        const bool hasRaster = parsedShader && (!shaderSections.vertex.empty() || !shaderSections.fragment.empty());
+        view.passType = hasCompute && hasRaster ? EditorUI::PipelinePassType::Hybrid
+                                                : hasCompute ? EditorUI::PipelinePassType::Compute
+                                                             : EditorUI::PipelinePassType::Raster;
+        passViews.push_back(std::move(view));
+        outputOwners[passViews.back().outputName].push_back(passViews.back().workspaceName);
+        outputOwners[passViews.back().workspaceName].push_back(passViews.back().workspaceName);
+    }
+
+    std::vector<EditorUI::PipelineResourceView> resources;
+    resources.reserve(sharedTextures_.size());
+    for (const auto& [name, resource] : sharedTextures_) {
+        EditorUI::PipelineResourceView view;
+        view.name = name;
+        view.texture = resource.texture;
+        view.width = resource.width;
+        view.height = resource.height;
+        resources.push_back(std::move(view));
+    }
+    std::ranges::sort(resources, [](const auto& lhs, const auto& rhs) {
+        return lhs.name < rhs.name;
+    });
+
+    std::vector<EditorUI::PipelineConnectionView> connections;
+    std::unordered_set<std::string> explicitTargetInputs;
+    explicitTargetInputs.reserve(64);
+    for (const auto& [targetWorkspace, perInput] : pipelineConnections_) {
+        for (const auto& [targetInput, binding] : perInput) {
+            if (binding.sourceSlot.empty()) {
+                continue;
+            }
+            EditorUI::PipelineConnectionView connection;
+            connection.sourceWorkspace = binding.sourceWorkspace.empty() ? "<resource>" : binding.sourceWorkspace;
+            connection.sourceSlot = binding.sourceSlot;
+            connection.targetWorkspace = targetWorkspace;
+            connection.targetSlot = targetInput;
+            connection.explicitConnection = true;
+            connections.push_back(std::move(connection));
+            explicitTargetInputs.insert(PipelineSlotKey(targetWorkspace, targetInput));
         }
     }
 
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    for (const auto& pass : passViews) {
+        for (const auto& inputName : pass.inputSamplers) {
+            const std::string key = PipelineSlotKey(pass.workspaceName, inputName);
+            if (explicitTargetInputs.contains(key)) {
+                continue;
+            }
+            auto ownerIt = outputOwners.find(inputName);
+            if (ownerIt == outputOwners.end() || ownerIt->second.empty()) {
+                continue;
+            }
+            EditorUI::PipelineConnectionView connection;
+            connection.sourceWorkspace = ownerIt->second.front();
+            connection.sourceSlot = inputName;
+            connection.targetWorkspace = pass.workspaceName;
+            connection.targetSlot = inputName;
+            connection.explicitConnection = false;
+            connections.push_back(std::move(connection));
+        }
+    }
+
+    std::unordered_map<std::string, std::vector<std::string>> dependenciesByPath;
+    dependenciesByPath.reserve(workspaces_.size() * 2);
+    for (const auto& [workspaceName, workspace] : workspaces_) {
+        dependenciesByPath[NormalizePathString(workspace.shaderPath)].push_back(workspaceName);
+        for (const auto& dependencyPath : workspace.shaderDependencies) {
+            dependenciesByPath[dependencyPath].push_back(workspaceName);
+        }
+    }
+
+    std::vector<EditorUI::PipelineDependencyView> dependencyViews;
+    dependencyViews.reserve(dependenciesByPath.size());
+    const double now = glfwGetTime();
+    for (auto& [path, dependents] : dependenciesByPath) {
+        std::ranges::sort(dependents);
+        dependents.erase(std::unique(dependents.begin(), dependents.end()), dependents.end());
+
+        EditorUI::PipelineDependencyView view;
+        view.path = path;
+        view.dependentWorkspaces = std::move(dependents);
+        if (auto flashIt = dependencyFlashUntil_.find(path); flashIt != dependencyFlashUntil_.end()) {
+            view.flashing = now < flashIt->second;
+        }
+        dependencyViews.push_back(std::move(view));
+    }
+    std::ranges::sort(dependencyViews, [](const auto& lhs, const auto& rhs) {
+        return lhs.path < rhs.path;
+    });
+
+    ui_->SetPipelinePasses(std::move(passViews));
+    ui_->SetPipelineResources(std::move(resources));
+    ui_->SetPipelineConnections(std::move(connections));
+    ui_->SetPipelineDependencies(std::move(dependencyViews));
+    ui_->SetPipelineGlobalUniforms(pipelineGlobalUniforms_);
+}
+
+void Engine::RenderSceneToTexture() {
+    if (sceneWidth_ <= 0 || sceneHeight_ <= 0) {
+        sharedTextures_.clear();
+        UpdatePipelineUiState();
+        return;
+    }
+
+    const bool renderActiveWorkspaceOnly =
+        (ui_ != nullptr && ui_->GetRendererOutputMode() == EditorUI::RendererOutputMode::ActiveWorkspace);
+    if (renderActiveWorkspaceOnly) {
+        sharedTextures_.clear();
+        if (sceneFbo_ == 0 || sceneColorTex_ == 0) {
+            UpdatePipelineUiState();
+            return;
+        }
+
+        glBindFramebuffer(GL_FRAMEBUFFER, sceneFbo_);
+        glViewport(0, 0, sceneWidth_, sceneHeight_);
+        glClearColor(0.05f, 0.05f, 0.05f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        if (!activeWorkspaceName_.empty()) {
+            auto workspaceIt = workspaces_.find(activeWorkspaceName_);
+            auto programIt = compiledPrograms_.find(activeWorkspaceName_);
+            if (workspaceIt != workspaces_.end() &&
+                programIt != compiledPrograms_.end() &&
+                programIt->second) {
+                auto& workspace = workspaceIt->second;
+                const auto& program = programIt->second;
+
+                LoadWorkspaceRuntimeState(activeWorkspaceName_);
+                ActivateWorkspaceGeometry(activeWorkspaceName_);
+                ctx_.width = sceneWidth_;
+                ctx_.height = sceneHeight_;
+                InitializeProgramIfNeeded(program);
+
+                const int readQueryIndex = 1 - workspace.gpuQueryWriteIndex;
+                if (workspace.gpuQueryPending[static_cast<std::size_t>(readQueryIndex)]) {
+                    GLuint available = GL_FALSE;
+                    glGetQueryObjectuiv(workspace.gpuQueries[static_cast<std::size_t>(readQueryIndex)],
+                                        GL_QUERY_RESULT_AVAILABLE,
+                                        &available);
+                    if (available == GL_TRUE) {
+                        GLuint64 elapsedNanoseconds = 0;
+                        glGetQueryObjectui64v(workspace.gpuQueries[static_cast<std::size_t>(readQueryIndex)],
+                                              GL_QUERY_RESULT,
+                                              &elapsedNanoseconds);
+                        workspace.lastGpuPassTimeMs =
+                            static_cast<float>(static_cast<double>(elapsedNanoseconds) / 1000000.0);
+                        workspace.gpuQueryPending[static_cast<std::size_t>(readQueryIndex)] = false;
+                    }
+                }
+
+                const int queryIndex = workspace.gpuQueryWriteIndex;
+                glBeginQuery(GL_TIME_ELAPSED, workspace.gpuQueries[static_cast<std::size_t>(queryIndex)]);
+
+                bool dispatchedCompute = false;
+                if (program->functions.compute) {
+                    program->functions.compute(&ctx_);
+                    dispatchedCompute = true;
+                }
+                if (dispatchedCompute) {
+                    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+                }
+
+                if (program->functions.update) {
+                    program->functions.update(&ctx_);
+                }
+                ApplyWorkspaceUniforms(activeWorkspaceName_);
+                if (program->functions.render) {
+                    program->functions.render(&ctx_);
+                }
+
+                glEndQuery(GL_TIME_ELAPSED);
+                workspace.gpuQueryPending[static_cast<std::size_t>(queryIndex)] = true;
+                workspace.gpuQueryWriteIndex = 1 - workspace.gpuQueryWriteIndex;
+                SaveWorkspaceRuntimeState(activeWorkspaceName_);
+            }
+        }
+
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        ui_->SetRendererTexture(sceneColorTex_, sceneWidth_, sceneHeight_);
+        UpdatePipelineUiState();
+
+        if (!activeWorkspaceName_.empty()) {
+            LoadWorkspaceRuntimeState(activeWorkspaceName_);
+            ActivateWorkspaceGeometry(activeWorkspaceName_);
+            ctx_.width = sceneWidth_;
+            ctx_.height = sceneHeight_;
+        }
+        return;
+    }
+
+    // Publish previous-frame resources before the frame starts (for temporal sampling).
+    sharedTextures_.clear();
+    for (auto& [workspaceName, workspace] : workspaces_) {
+        const std::string outputName = workspace.outputTextureName.empty() ? workspaceName : workspace.outputTextureName;
+        const int prevFrameIndex = 1 - workspace.passWriteIndex;
+        const GLuint prevFrameTexture = workspace.passColorTextures[static_cast<std::size_t>(prevFrameIndex)];
+        if (prevFrameTexture == 0) {
+            continue;
+        }
+
+        const SharedTextureResource resource{ prevFrameTexture, sceneWidth_, sceneHeight_ };
+        sharedTextures_[outputName] = resource;
+        sharedTextures_[workspaceName] = resource;
+        sharedTextures_[outputName + "_prev"] = resource;
+        sharedTextures_[workspaceName + "_prev"] = resource;
+    }
+
+    GLuint finalTexture = 0;
+    int finalWidth = sceneWidth_;
+    int finalHeight = sceneHeight_;
+
+    for (const auto& workspaceName : workspaceOrder_) {
+        auto workspaceIt = workspaces_.find(workspaceName);
+        if (workspaceIt == workspaces_.end()) {
+            continue;
+        }
+        auto& workspace = workspaceIt->second;
+        if (!workspace.pipelineEnabled) {
+            continue;
+        }
+
+        auto programIt = compiledPrograms_.find(workspaceName);
+        if (programIt == compiledPrograms_.end() || !programIt->second) {
+            continue;
+        }
+
+        if (!EnsureWorkspacePassTargets(&workspace, sceneWidth_, sceneHeight_)) {
+            continue;
+        }
+
+        LoadWorkspaceRuntimeState(workspaceName);
+        ActivateWorkspaceGeometry(workspaceName);
+        ctx_.width = sceneWidth_;
+        ctx_.height = sceneHeight_;
+
+        const auto& program = programIt->second;
+        InitializeProgramIfNeeded(program);
+
+        const int readQueryIndex = 1 - workspace.gpuQueryWriteIndex;
+        if (workspace.gpuQueryPending[static_cast<std::size_t>(readQueryIndex)]) {
+            GLuint available = GL_FALSE;
+            glGetQueryObjectuiv(workspace.gpuQueries[static_cast<std::size_t>(readQueryIndex)],
+                                GL_QUERY_RESULT_AVAILABLE,
+                                &available);
+            if (available == GL_TRUE) {
+                GLuint64 elapsedNanoseconds = 0;
+                glGetQueryObjectui64v(workspace.gpuQueries[static_cast<std::size_t>(readQueryIndex)],
+                                      GL_QUERY_RESULT,
+                                      &elapsedNanoseconds);
+                workspace.lastGpuPassTimeMs = static_cast<float>(static_cast<double>(elapsedNanoseconds) / 1000000.0);
+                workspace.gpuQueryPending[static_cast<std::size_t>(readQueryIndex)] = false;
+            }
+        }
+
+        const int writeIndex = workspace.passWriteIndex;
+        const GLuint passFbo = workspace.passFbos[static_cast<std::size_t>(writeIndex)];
+        glBindFramebuffer(GL_FRAMEBUFFER, passFbo);
+        glViewport(0, 0, sceneWidth_, sceneHeight_);
+
+        const int queryIndex = workspace.gpuQueryWriteIndex;
+        glBeginQuery(GL_TIME_ELAPSED, workspace.gpuQueries[static_cast<std::size_t>(queryIndex)]);
+
+        bool dispatchedCompute = false;
+        if (program->functions.compute) {
+            program->functions.compute(&ctx_);
+            dispatchedCompute = true;
+        }
+        if (dispatchedCompute) {
+            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+        }
+
+        if (program->functions.update) {
+            program->functions.update(&ctx_);
+        }
+        ApplyWorkspaceUniforms(workspaceName);
+        if (program->functions.render) {
+            program->functions.render(&ctx_);
+        }
+
+        glEndQuery(GL_TIME_ELAPSED);
+        workspace.gpuQueryPending[static_cast<std::size_t>(queryIndex)] = true;
+        workspace.gpuQueryWriteIndex = 1 - workspace.gpuQueryWriteIndex;
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+        finalTexture = workspace.passColorTextures[static_cast<std::size_t>(writeIndex)];
+        finalWidth = sceneWidth_;
+        finalHeight = sceneHeight_;
+
+        const std::string outputName = workspace.outputTextureName.empty() ? workspaceName : workspace.outputTextureName;
+        const SharedTextureResource outputResource{ finalTexture, sceneWidth_, sceneHeight_ };
+        sharedTextures_[outputName] = outputResource;
+        sharedTextures_[workspaceName] = outputResource;
+
+        const int prevFrameIndex = 1 - writeIndex;
+        const GLuint prevFrameTexture = workspace.passColorTextures[static_cast<std::size_t>(prevFrameIndex)];
+        if (prevFrameTexture != 0) {
+            const SharedTextureResource prevResource{ prevFrameTexture, sceneWidth_, sceneHeight_ };
+            sharedTextures_[outputName + "_prev"] = prevResource;
+            sharedTextures_[workspaceName + "_prev"] = prevResource;
+        }
+
+        workspace.passWriteIndex = prevFrameIndex;
+        SaveWorkspaceRuntimeState(workspaceName);
+    }
+
+    if (finalTexture == 0) {
+        if (sceneFbo_ == 0) {
+            return;
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER, sceneFbo_);
+        glViewport(0, 0, sceneWidth_, sceneHeight_);
+        glClearColor(0.05f, 0.05f, 0.05f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        finalTexture = sceneColorTex_;
+        finalWidth = sceneWidth_;
+        finalHeight = sceneHeight_;
+    }
+
+    ui_->SetRendererTexture(finalTexture, finalWidth, finalHeight);
+    UpdatePipelineUiState();
+
+    if (!activeWorkspaceName_.empty()) {
+        LoadWorkspaceRuntimeState(activeWorkspaceName_);
+        ActivateWorkspaceGeometry(activeWorkspaceName_);
+        ctx_.width = sceneWidth_;
+        ctx_.height = sceneHeight_;
+    }
 }
 
 void Engine::Run() {
@@ -2767,6 +3999,7 @@ void Engine::Shutdown() {
     for (auto& [workspaceName, workspace] : workspaces_) {
         PersistWorkspaceUniformState(workspaceName);
         ReleaseWorkspaceGeometry(&workspace);
+        ReleaseWorkspacePassTargets(&workspace);
     }
 
     compileFailures_.clear();
@@ -2775,6 +4008,9 @@ void Engine::Shutdown() {
     ignoreWatcherUntil_.clear();
     latestSources_.clear();
     latestUniformDescriptors_.clear();
+    latestSamplerUniformNames_.clear();
+    latestStorageBufferNames_.clear();
+    latestShaderDependencies_.clear();
     latestStateAbiHashes_.clear();
     pendingCompilesAt_.clear();
     inFlightSourceHashes_.clear();
@@ -2784,6 +4020,9 @@ void Engine::Shutdown() {
     workspaceDirty_.clear();
     activeWorkspaceName_.clear();
     activeFilePath_.clear();
+    pipelineConnections_.clear();
+    pipelineGlobalUniforms_.clear();
+    dependencyFlashUntil_.clear();
 
     if (jit_) {
         if (!detachedCompileThread) {

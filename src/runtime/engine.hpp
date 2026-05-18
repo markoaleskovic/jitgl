@@ -107,4 +107,18 @@ inline GLuint jit_link_program(GLuint vs, GLuint fs) {
     return p;
 }
 
+inline GLuint jit_link_compute_program(GLuint cs) {
+    GLuint p = glCreateProgram();
+    glAttachShader(p, cs);
+    glLinkProgram(p);
+    GLint success;
+    glGetProgramiv(p, GL_LINK_STATUS, &success);
+    if (!success) {
+        std::array<char, 512> info{};
+        glGetProgramInfoLog(p, static_cast<GLsizei>(info.size()), nullptr, info.data());
+        std::printf("[JIT Compute Link Error] %s\n", info.data());
+    }
+    return p;
+}
+
 #endif // ENGINE_HPP_JIT_PREAMBLE

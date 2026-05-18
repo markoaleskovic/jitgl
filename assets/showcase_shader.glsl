@@ -10,6 +10,7 @@ void main() {
 
 #type fragment
 #version 330 core
+#include "shared.glsl"
 in vec2 vUv;
 out vec4 FragColor;
 
@@ -74,6 +75,7 @@ void main() {
     float waves = sin(base * 1.35 + radius * 8.0 - t * 2.2);
     float glowMask = exp(-radius * (1.2 + uGlow));
     float colorMix = smoothstep(-0.25, 0.35, waves);
+    colorMix = clamp(colorMix * (0.9 + 0.1 * jitgl_wave01(uTime * 0.25)), 0.0, 1.0);
 
     vec3 color = mix(uColorA, uColorB, colorMix);
     color += uAccentColor.rgb * uAccentColor.a * pow(abs(waves), 2.2) * glowMask * (0.7 + uGlow);

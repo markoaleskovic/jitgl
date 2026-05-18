@@ -443,6 +443,7 @@ std::shared_ptr<JitProgram> JitEngine::CompileSource(const std::string& sourceNa
     log(std::format("[JIT] Hot-swap successful for {}.", sourceName));
     if (functions.init) log("  -> init()");
     if (functions.update) log("  -> update()");
+    if (functions.compute) log("  -> dispatchCompute()");
     if (functions.render) log("  -> renderFrame()");
     if (functions.shutdown) log("  -> shutdown()");
 
@@ -468,12 +469,17 @@ bool JitEngine::lookupFunctions(const clang::Interpreter& interpreter, JitFuncti
 
     outFunctions->init = AddressToFunction<JitInitFn>(tryLookup("init"));
     outFunctions->update = AddressToFunction<JitUpdateFn>(tryLookup("update"));
+    outFunctions->compute = AddressToFunction<JitComputeFn>(tryLookup("dispatchCompute"));
     outFunctions->render = AddressToFunction<JitRenderFn>(tryLookup("renderFrame"));
     outFunctions->shutdown = AddressToFunction<JitShutdownFn>(tryLookup("shutdown"));
 
-    if (!outFunctions->init && !outFunctions->update && !outFunctions->render && !outFunctions->shutdown) {
+    if (!outFunctions->init &&
+        !outFunctions->update &&
+        !outFunctions->compute &&
+        !outFunctions->render &&
+        !outFunctions->shutdown) {
         log("[JIT] Warning: compiled successfully but found no entry points "
-            "(init / update / renderFrame / shutdown). Did you forget extern \"C\"?");
+            "(init / update / dispatchCompute / renderFrame / shutdown). Did you forget extern \"C\"?");
         return false;
     }
 

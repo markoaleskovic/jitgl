@@ -122,6 +122,100 @@ public:
         float loopEndSeconds = 10.0f;
     };
 
+    enum class RendererOutputMode : std::uint8_t {
+        ActiveWorkspace,
+        PipelineChain
+    };
+
+    enum class PipelineEditAction : std::uint8_t {
+        SetOutputName,
+        SetEnabled,
+    };
+
+    struct PipelineEditCommand {
+        PipelineEditAction action = PipelineEditAction::SetOutputName;
+        std::string workspaceName;
+        std::string outputName;
+        bool enabled = true;
+    };
+
+    enum class PipelinePassType : std::uint8_t {
+        Raster,
+        Compute,
+        Hybrid,
+    };
+
+    struct PipelinePassView {
+        std::string workspaceName;
+        std::string outputName;
+        std::string cppPath;
+        std::string shaderPath;
+        std::vector<std::string> inputSamplers;
+        std::vector<std::string> inputBuffers;
+        std::vector<std::string> outputTextures;
+        std::vector<std::string> outputBuffers;
+        bool enabled = true;
+        bool active = false;
+        bool compiled = false;
+        bool hasCompileError = false;
+        PipelinePassType passType = PipelinePassType::Raster;
+        float gpuTimeMs = 0.0f;
+    };
+
+    struct PipelineResourceView {
+        std::string name;
+        unsigned int texture = 0;
+        int width = 0;
+        int height = 0;
+    };
+
+    struct PipelineConnectionView {
+        std::string sourceWorkspace;
+        std::string sourceSlot;
+        std::string targetWorkspace;
+        std::string targetSlot;
+        bool explicitConnection = false;
+    };
+
+    struct PipelineDependencyView {
+        std::string path;
+        std::vector<std::string> dependentWorkspaces;
+        bool flashing = false;
+    };
+
+    enum class PipelineGlobalUniformType : std::uint8_t {
+        Float,
+        Int,
+        Bool,
+        Vec4,
+    };
+
+    struct PipelineGlobalUniformView {
+        std::string name;
+        PipelineGlobalUniformType type = PipelineGlobalUniformType::Float;
+        float floatValue = 0.0f;
+        int intValue = 0;
+        bool boolValue = false;
+        std::array<float, 4> vec4Value{ 0.0f, 0.0f, 0.0f, 0.0f };
+    };
+
+    struct PipelineConnectionCommand {
+        std::string sourceWorkspace;
+        std::string sourceSlot;
+        std::string targetWorkspace;
+        std::string targetSlot;
+        bool clear = false;
+    };
+
+    struct PipelineGlobalUniformCommand {
+        enum class Action : std::uint8_t {
+            Upsert,
+            Remove,
+        };
+        Action action = Action::Upsert;
+        PipelineGlobalUniformView uniform;
+    };
+
     EditorUI();
     ~EditorUI();
 
@@ -160,6 +254,7 @@ public:
     void SetNetworkDiagnostics(NetworkDiagnostics diagnostics);
     void QueueIncomingWorkspaceShareOffer(IncomingWorkspaceShareOffer offer);
     void SetRendererTexture(unsigned int texture, int width, int height);
+    RendererOutputMode GetRendererOutputMode() const;
     void SetCompilationStatus(bool isCompiling, bool hasError, bool isStalled = false);
     void SetUniformValues(std::vector<UniformValue> values);
     void SetUniformEditCallback(std::function<void(const UniformEditCommand&)> cb);
@@ -167,6 +262,20 @@ public:
     void SetPlaybackState(PlaybackState state);
     void SetPlaybackCommandCallback(std::function<void(const PlaybackCommand&)> cb);
     void SetLoadShowcaseWorkspaceCallback(std::function<void()> cb);
+    void SetPipelinePasses(std::vector<PipelinePassView> passes);
+    void SetPipelineResources(std::vector<PipelineResourceView> resources);
+    void SetPipelineConnections(std::vector<PipelineConnectionView> connections);
+    void SetPipelineDependencies(std::vector<PipelineDependencyView> dependencies);
+    void SetPipelineGlobalUniforms(std::vector<PipelineGlobalUniformView> globals);
+    void SetPipelineMoveCallback(std::function<void(const std::string&, int)> cb);
+    void SetPipelineEditCallback(std::function<void(const PipelineEditCommand&)> cb);
+    void SetPipelineAddPassCallback(std::function<void(const std::string&)> cb);
+    void SetPipelineSaveChainCallback(std::function<bool(const std::string&)> cb);
+    void SetPipelineResetCallback(std::function<void()> cb);
+    void SetPipelineOpenFileCallback(std::function<void(const std::string&, bool)> cb);
+    void SetPipelineConnectionCallback(std::function<void(const PipelineConnectionCommand&)> cb);
+    void SetPipelineGlobalUniformCallback(std::function<void(const PipelineGlobalUniformCommand&)> cb);
+    void SetPipelineResourceExportCallback(std::function<bool(const std::string&, const std::string&)> cb);
     bool ShouldLoadShowcaseWorkspaceOnStartup() const;
     void SetupDarkTheme() const;
     void SetupLightTheme() const;
@@ -227,6 +336,7 @@ private:
     unsigned int rendererTexture_ = 0;
     int rendererTextureWidth_ = 0;
     int rendererTextureHeight_ = 0;
+    RendererOutputMode rendererOutputMode_ = RendererOutputMode::PipelineChain;
 
     bool isCompiling_ = false;
     bool hasCompileError_ = false;
@@ -237,6 +347,22 @@ private:
     PlaybackState playbackState_{};
     std::function<void(const PlaybackCommand&)> onPlaybackCommand_;
     std::function<void()> onLoadShowcaseWorkspace_;
+    std::vector<PipelinePassView> pipelinePasses_;
+    std::vector<PipelineResourceView> pipelineResources_;
+    std::vector<PipelineConnectionView> pipelineConnections_;
+    std::vector<PipelineDependencyView> pipelineDependencies_;
+    std::vector<PipelineGlobalUniformView> pipelineGlobalUniforms_;
+    std::function<void(const std::string&, int)> onPipelineMove_;
+    std::function<void(const PipelineEditCommand&)> onPipelineEdit_;
+    std::function<void(const std::string&)> onPipelineAddPass_;
+    std::function<bool(const std::string&)> onPipelineSaveChain_;
+    std::function<void()> onPipelineReset_;
+    std::function<void(const std::string&, bool)> onPipelineOpenFile_;
+    std::function<void(const PipelineConnectionCommand&)> onPipelineConnection_;
+    std::function<void(const PipelineGlobalUniformCommand&)> onPipelineGlobalUniform_;
+    std::function<bool(const std::string&, const std::string&)> onPipelineResourceExport_;
+    bool showGlobalUniformsWindow_ = false;
+    int selectedPipelineAddPassIndex_ = 0;
     bool openCreateWorkspacePopup_ = false;
     std::array<char, 128> newWorkspaceNameBuffer_{};
 
@@ -272,6 +398,7 @@ private:
                        bool* pendingSelectionConsumed);
     void AutosaveDirtyDocuments(double currentTime);
     void DrawRendererTab();
+    void DrawPipelineTab();
     void DrawPlaybackTransportBar();
     void DrawUniformsTab();
     void DrawConsoleTab(const std::string& currentWorkspace);
@@ -328,6 +455,7 @@ private:
     bool themeApplyPending_ = false;
     bool showUniformControlsPanel_ = false;
     bool showPlaybackControlsPanel_ = false;
+    bool rendererTabActive_ = false;
     bool rendererFullscreen_ = false;
     int focusEditorRequestFramesRemaining_ = 0;
 

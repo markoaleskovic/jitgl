@@ -9,6 +9,7 @@ This explains why the default workspace code caches program handles, uniform loc
 * `ctx->state_buffer` is a stable 4096-byte POD buffer for transferable per-workspace state.
 * `jit_alloc(...)` allocates from a host-managed arena that resets automatically on hot-reload.
 * You can request a cold reset from code via `ctx->reset_state()` / `jit_request_hard_reset(ctx)`.
+* `#include "shared.glsl"` is supported recursively, and include changes trigger recompiles in dependent workspaces.
 * Without this storage, expensive setup work (shader compile/link, uniform lookups) would repeat unnecessarily.
 
 ---
@@ -49,6 +50,8 @@ const uint32_t cachedShaderHash = STATE_I(3);
 * Use `STATE_F` for persistent float values (timers, parameters, interpolation state).
 * If `glGetUniformLocation` returns -1, the uniform may be optimized out or misnamed.
 * Auto-injected shader macros are `JIT_WORKSPACE_VERTEX_SHADER`, `JIT_WORKSPACE_FRAGMENT_SHADER`, `JIT_WORKSPACE_SHADER_HASH`.
+* Compute macros/hooks are also available: `JIT_WORKSPACE_COMPUTE_SHADER`, `JIT_WORKSPACE_HAS_COMPUTE`, and `dispatchCompute(ctx)`.
 * Auto-injected ABI macro is `JIT_WORKSPACE_STATE_ABI_HASH`; call `jit_state_guard(ctx, JIT_WORKSPACE_STATE_ABI_HASH)` in `init()`.
+* Pipeline resources are auto-bound by sampler name; `<outputName>_prev` samples previous-frame output for temporal effects.
 
 > **Note:** Open this anytime from **Help -> Runtime State Guide**.

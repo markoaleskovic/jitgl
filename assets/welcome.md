@@ -10,6 +10,8 @@ Live C++ + GLSL playground with per-workspace runtime state.
 * Edits auto-save and hot-reload while preserving workspace-specific state arrays.
 * Runtime state now includes a fixed `state_buffer`, per-run arena allocation (`jit_alloc(...)`), and ABI guards.
 * Use **File -> Hard Reset Runtime State** to cold-boot active runtime data without restarting JITGL.
+* Shaders support recursive `#include "shared.glsl"` from the workspace root and `#type compute`.
+* Pipeline resources are published per workspace output name, with automatic `<name>_prev` bindings.
 
 ---
 
@@ -32,7 +34,9 @@ Live C++ + GLSL playground with per-workspace runtime state.
 * Use `EngineContext* ctx` signature for those entry points.
 * Shader/state macros are injected:
   * `JIT_WORKSPACE_VERTEX_SHADER`, `JIT_WORKSPACE_FRAGMENT_SHADER`, `JIT_WORKSPACE_SHADER_HASH`
+  * `JIT_WORKSPACE_COMPUTE_SHADER`, `JIT_WORKSPACE_HAS_GRAPHICS`, `JIT_WORKSPACE_HAS_COMPUTE`
   * `JIT_WORKSPACE_STATE_ABI_HASH` (best-effort hash of local struct/class layouts in `scene.cpp`)
+* Optional compute entry point: `extern "C" void dispatchCompute(EngineContext* ctx)`.
 
 ### shader.glsl Compile Requirements
 * Must include both sections: `#type vertex` and `#type fragment`.

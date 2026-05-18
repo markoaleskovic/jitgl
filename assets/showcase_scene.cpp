@@ -32,6 +32,10 @@ extern "C" void update(EngineContext* ctx) {
     (void)ctx;
 }
 
+extern "C" void dispatchCompute(EngineContext* ctx) {
+    (void)ctx;
+}
+
 extern "C" void renderFrame(EngineContext* ctx) {
     const GLuint program = static_cast<GLuint>(STATE_I(0));
     const GLint uTime = static_cast<GLint>(STATE_I(1));

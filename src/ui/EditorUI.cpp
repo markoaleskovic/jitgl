@@ -7,6 +7,7 @@
 #include <imgui_internal.h>
 #include <algorithm>
 #include <cstddef>
+#include <cstdio>
 #include <cmath>
 #include <fstream>
 #include <ranges>
@@ -43,6 +44,16 @@ namespace {
         return std::to_string(index + 1) + ": " + workspaceName;
     }
 
+    std::string TrimString(std::string value) {
+        while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) {
+            value.erase(value.begin());
+        }
+        while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) {
+            value.pop_back();
+        }
+        return value;
+    }
+
     double AgeSeconds(double nowSeconds, double eventSeconds) {
         if (eventSeconds <= 0.0 || nowSeconds <= 0.0 || nowSeconds < eventSeconds) {
             return -1.0;
@@ -52,6 +63,29 @@ namespace {
 
     const char* YesNo(bool value) {
         return value ? "Yes" : "No";
+    }
+
+    const char* PipelinePassTypeTag(const EditorUI::PipelinePassType type) {
+        switch (type) {
+            case EditorUI::PipelinePassType::Raster: return "[R]";
+            case EditorUI::PipelinePassType::Compute: return "[C]";
+            case EditorUI::PipelinePassType::Hybrid: return "[R+C]";
+        }
+        return "[R]";
+    }
+
+    const char* PipelineGlobalUniformTypeLabel(const EditorUI::PipelineGlobalUniformType type) {
+        switch (type) {
+            case EditorUI::PipelineGlobalUniformType::Float: return "float";
+            case EditorUI::PipelineGlobalUniformType::Int: return "int";
+            case EditorUI::PipelineGlobalUniformType::Bool: return "bool";
+            case EditorUI::PipelineGlobalUniformType::Vec4: return "vec4";
+        }
+        return "float";
+    }
+
+    std::string PipelineSlotKey(const std::string& workspaceName, const std::string& slotName) {
+        return workspaceName + "::" + slotName;
     }
 }
 
@@ -454,6 +488,7 @@ void EditorUI::NewFrame() {
 
 void EditorUI::Draw() {
     HandleGlobalShortcuts();
+    rendererTabActive_ = false;
 
     if (rendererFullscreen_) {
         DrawRendererFullscreen();
@@ -726,6 +761,11 @@ void EditorUI::SetRendererTexture(unsigned int texture, int width, int height) {
     rendererTextureWidth_ = width;
     rendererTextureHeight_ = height;
 }
+
+EditorUI::RendererOutputMode EditorUI::GetRendererOutputMode() const {
+    return rendererOutputMode_;
+}
+
 void EditorUI::SetCompilationStatus(bool isCompiling, bool hasError, bool isStalled) {
     isCompiling_ = isCompiling;
     hasCompileError_ = hasError;
@@ -754,6 +794,62 @@ void EditorUI::SetPlaybackCommandCallback(std::function<void(const PlaybackComma
 
 void EditorUI::SetLoadShowcaseWorkspaceCallback(std::function<void()> cb) {
     onLoadShowcaseWorkspace_ = std::move(cb);
+}
+
+void EditorUI::SetPipelinePasses(std::vector<PipelinePassView> passes) {
+    pipelinePasses_ = std::move(passes);
+}
+
+void EditorUI::SetPipelineResources(std::vector<PipelineResourceView> resources) {
+    pipelineResources_ = std::move(resources);
+}
+
+void EditorUI::SetPipelineConnections(std::vector<PipelineConnectionView> connections) {
+    pipelineConnections_ = std::move(connections);
+}
+
+void EditorUI::SetPipelineDependencies(std::vector<PipelineDependencyView> dependencies) {
+    pipelineDependencies_ = std::move(dependencies);
+}
+
+void EditorUI::SetPipelineGlobalUniforms(std::vector<PipelineGlobalUniformView> globals) {
+    pipelineGlobalUniforms_ = std::move(globals);
+}
+
+void EditorUI::SetPipelineMoveCallback(std::function<void(const std::string&, int)> cb) {
+    onPipelineMove_ = std::move(cb);
+}
+
+void EditorUI::SetPipelineEditCallback(std::function<void(const PipelineEditCommand&)> cb) {
+    onPipelineEdit_ = std::move(cb);
+}
+
+void EditorUI::SetPipelineAddPassCallback(std::function<void(const std::string&)> cb) {
+    onPipelineAddPass_ = std::move(cb);
+}
+
+void EditorUI::SetPipelineSaveChainCallback(std::function<bool(const std::string&)> cb) {
+    onPipelineSaveChain_ = std::move(cb);
+}
+
+void EditorUI::SetPipelineResetCallback(std::function<void()> cb) {
+    onPipelineReset_ = std::move(cb);
+}
+
+void EditorUI::SetPipelineOpenFileCallback(std::function<void(const std::string&, bool)> cb) {
+    onPipelineOpenFile_ = std::move(cb);
+}
+
+void EditorUI::SetPipelineConnectionCallback(std::function<void(const PipelineConnectionCommand&)> cb) {
+    onPipelineConnection_ = std::move(cb);
+}
+
+void EditorUI::SetPipelineGlobalUniformCallback(std::function<void(const PipelineGlobalUniformCommand&)> cb) {
+    onPipelineGlobalUniform_ = std::move(cb);
+}
+
+void EditorUI::SetPipelineResourceExportCallback(std::function<bool(const std::string&, const std::string&)> cb) {
+    onPipelineResourceExport_ = std::move(cb);
 }
 
 bool EditorUI::ShouldLoadShowcaseWorkspaceOnStartup() const {
@@ -2122,6 +2218,7 @@ void EditorUI::DrawRendererTab() {
     if (!ImGui::BeginTabItem("Renderer")) {
         return;
     }
+    rendererTabActive_ = true;
 
     if (rendererTexture_ != 0 && rendererTextureWidth_ > 0 && rendererTextureHeight_ > 0) {
         const ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -2149,6 +2246,584 @@ void EditorUI::DrawRendererTab() {
                      ImVec2(1.0f, 0.0f));
     } else {
         ImGui::TextUnformatted("Renderer not ready.");
+    }
+
+    ImGui::EndTabItem();
+}
+
+void EditorUI::DrawPipelineTab() {
+    if (!ImGui::BeginTabItem("Pipeline")) {
+        return;
+    }
+
+    std::vector<std::string> disabledPasses;
+    disabledPasses.reserve(pipelinePasses_.size());
+    std::vector<std::string> enabledPasses;
+    enabledPasses.reserve(pipelinePasses_.size());
+    for (const auto& pass : pipelinePasses_) {
+        if (pass.enabled) {
+            enabledPasses.push_back(pass.workspaceName);
+        } else {
+            disabledPasses.push_back(pass.workspaceName);
+        }
+    }
+    if (selectedPipelineAddPassIndex_ >= static_cast<int>(disabledPasses.size())) {
+        selectedPipelineAddPassIndex_ = 0;
+    }
+
+    ImGui::PushID("PipelineToolbar");
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float toolbarButtonWidth = 108.0f;
+    const float addButtonWidth = 56.0f;
+    const float saveButtonWidth = 90.0f;
+    const float resetButtonWidth = 74.0f;
+    const float availableWidth = ImGui::GetContentRegionAvail().x;
+    const float comboWidth = std::clamp(availableWidth * 0.45f, 120.0f, 280.0f);
+
+    if (disabledPasses.empty()) {
+        ImGui::BeginDisabled();
+    }
+    ImGui::SetNextItemWidth(comboWidth);
+    if (ImGui::BeginCombo("Add Pass", disabledPasses.empty() ? "None" :
+                          disabledPasses[static_cast<std::size_t>(selectedPipelineAddPassIndex_)].c_str())) {
+        for (std::size_t i = 0; i < disabledPasses.size(); ++i) {
+            const bool selected = (selectedPipelineAddPassIndex_ == static_cast<int>(i));
+            if (ImGui::Selectable(disabledPasses[i].c_str(), selected)) {
+                selectedPipelineAddPassIndex_ = static_cast<int>(i);
+            }
+            if (selected) {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    if (ImGui::GetContentRegionAvail().x > (addButtonWidth + style.ItemSpacing.x)) {
+        ImGui::SameLine();
+    }
+    if (ImGui::Button("Add", ImVec2(addButtonWidth, 0.0f)) &&
+        !disabledPasses.empty() &&
+        onPipelineAddPass_) {
+        onPipelineAddPass_(disabledPasses[static_cast<std::size_t>(selectedPipelineAddPassIndex_)]);
+    }
+    if (disabledPasses.empty()) {
+        ImGui::EndDisabled();
+    }
+
+    if (ImGui::GetContentRegionAvail().x > (toolbarButtonWidth + style.ItemSpacing.x)) {
+        ImGui::SameLine();
+    }
+    if (ImGui::Button("Global Uniforms", ImVec2(toolbarButtonWidth, 0.0f))) {
+        showGlobalUniformsWindow_ = !showGlobalUniformsWindow_;
+    }
+    ImGui::PopID();
+
+    std::string orderText = "(none)";
+    if (!enabledPasses.empty()) {
+        orderText.clear();
+        for (std::size_t i = 0; i < enabledPasses.size(); ++i) {
+            if (i > 0) {
+                orderText += " -> ";
+            }
+            orderText += std::to_string(i + 1);
+            orderText += ":";
+            orderText += enabledPasses[i];
+        }
+    }
+    ImGui::TextUnformatted("Execute Order:");
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextUnformatted(orderText.c_str());
+    ImGui::PopTextWrapPos();
+
+    if (ImGui::Button("Save Chain", ImVec2(saveButtonWidth, 0.0f))) {
+        nfdchar_t* outPath = nullptr;
+        nfdfilteritem_t filterItem[1] = {{"JITGL Chain", "jchain"}};
+        const nfdresult_t result = NFD_SaveDialog(&outPath, filterItem, 1, nullptr, "pipeline.jchain");
+        if (result == NFD_OKAY) {
+            const bool saved = onPipelineSaveChain_ ? onPipelineSaveChain_(outPath) : false;
+            AddLogOutput(saved ? "[Pipeline] Chain saved." : "[Pipeline Error] Failed to save chain.");
+            NFD_FreePath(outPath);
+        }
+    }
+    if (ImGui::GetContentRegionAvail().x > (resetButtonWidth + style.ItemSpacing.x)) {
+        ImGui::SameLine();
+    }
+    if (ImGui::Button("Reset", ImVec2(resetButtonWidth, 0.0f)) && onPipelineReset_) {
+        onPipelineReset_();
+    }
+
+    ImGui::Separator();
+
+    const float graphHeight = std::max(210.0f, ImGui::GetContentRegionAvail().y * 0.56f);
+    if (ImGui::BeginChild("PipelineGraphCanvas", ImVec2(0.0f, graphHeight), true)) {
+        if (pipelinePasses_.empty()) {
+            ImGui::TextDisabled("No pipeline passes loaded.");
+        } else {
+            std::unordered_map<std::string, ImVec2> inputAnchors;
+            std::unordered_map<std::string, ImVec2> outputAnchors;
+            inputAnchors.reserve(128);
+            outputAnchors.reserve(128);
+
+            static std::string bindTargetWorkspace;
+            static std::string bindTargetInput;
+
+            float maxGpuMs = 0.001f;
+            for (const auto& pass : pipelinePasses_) {
+                maxGpuMs = std::max(maxGpuMs, pass.gpuTimeMs);
+            }
+
+            for (std::size_t i = 0; i < pipelinePasses_.size(); ++i) {
+                auto pass = pipelinePasses_[i];
+                ImGui::PushID(pass.workspaceName.c_str());
+
+                const std::size_t inputCount = pass.inputSamplers.size() + pass.inputBuffers.size();
+                const std::size_t outputCount = pass.outputTextures.size() + pass.outputBuffers.size();
+                const std::size_t slotRows = std::max<std::size_t>(1, std::max(inputCount, outputCount));
+                const float nodeHeight = 116.0f + static_cast<float>(slotRows) * 19.0f;
+                if (!ImGui::BeginChild("PipelineNode", ImVec2(0.0f, nodeHeight), true)) {
+                    ImGui::EndChild();
+                    ImGui::PopID();
+                    continue;
+                }
+
+                const ImVec4 statusColor = pass.compiled && !pass.hasCompileError
+                                               ? (IsLightTheme() ? ImVec4(0.18f, 0.65f, 0.22f, 1.0f)
+                                                                 : ImVec4(0.45f, 1.0f, 0.45f, 1.0f))
+                                               : (IsLightTheme() ? ImVec4(0.78f, 0.22f, 0.22f, 1.0f)
+                                                                 : ImVec4(1.0f, 0.38f, 0.38f, 1.0f));
+                ImGui::ColorButton("Status", statusColor, ImGuiColorEditFlags_NoTooltip, ImVec2(10.0f, 10.0f));
+                ImGui::SameLine();
+                ImGui::Text("%s %s", PipelinePassTypeTag(pass.passType), pass.workspaceName.c_str());
+                if (pass.active) {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("[active]");
+                }
+
+                ImGui::SameLine();
+                bool enabled = pass.enabled;
+                if (ImGui::Checkbox("Enabled", &enabled)) {
+                    pipelinePasses_[i].enabled = enabled;
+                    if (onPipelineEdit_) {
+                        PipelineEditCommand command;
+                        command.action = PipelineEditAction::SetEnabled;
+                        command.workspaceName = pass.workspaceName;
+                        command.enabled = enabled;
+                        command.outputName = pass.outputName;
+                        onPipelineEdit_(command);
+                    }
+                }
+
+                ImGui::SameLine();
+                if (ImGui::ArrowButton("Up", ImGuiDir_Up) && onPipelineMove_) {
+                    onPipelineMove_(pass.workspaceName, -1);
+                }
+                ImGui::SameLine();
+                if (ImGui::ArrowButton("Down", ImGuiDir_Down) && onPipelineMove_) {
+                    onPipelineMove_(pass.workspaceName, +1);
+                }
+
+                ImGui::SameLine();
+                const float gpuNorm = std::clamp(pass.gpuTimeMs / maxGpuMs, 0.0f, 1.0f);
+                const std::string gpuLabel = std::to_string(pass.gpuTimeMs).substr(0, 5) + " ms";
+                ImGui::ProgressBar(gpuNorm, ImVec2(120.0f, 0.0f), gpuLabel.c_str());
+
+                ImGui::TextDisabled("%s", pass.compiled ? (pass.hasCompileError ? "Status: Error" : "Status: OK")
+                                                        : "Status: No Program");
+
+                if (!pass.cppPath.empty() || !pass.shaderPath.empty()) {
+                    if (!pass.cppPath.empty()) {
+                        if (ImGui::SmallButton("scene.cpp") && onPipelineOpenFile_) {
+                            onPipelineOpenFile_(pass.workspaceName, true);
+                        }
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip("%s", pass.cppPath.c_str());
+                        }
+                    }
+                    if (!pass.shaderPath.empty()) {
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("shader.glsl") && onPipelineOpenFile_) {
+                            onPipelineOpenFile_(pass.workspaceName, false);
+                        }
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip("%s", pass.shaderPath.c_str());
+                        }
+                    }
+                }
+
+                if (ImGui::BeginPopupContextItem("PipelinePassContext")) {
+                    static std::string editingWorkspace;
+                    static std::array<char, 128> outputNameBuffer{};
+
+                    if (editingWorkspace != pass.workspaceName) {
+                        editingWorkspace = pass.workspaceName;
+                        std::snprintf(outputNameBuffer.data(),
+                                      outputNameBuffer.size(),
+                                      "%s",
+                                      pass.outputName.c_str());
+                    }
+
+                    const bool submitFromEnter = ImGui::InputText("Output Name",
+                                                                  outputNameBuffer.data(),
+                                                                  outputNameBuffer.size(),
+                                                                  ImGuiInputTextFlags_EnterReturnsTrue);
+                    bool submitFromButton = false;
+                    if (ImGui::Button("Apply")) {
+                        submitFromButton = true;
+                    }
+                    if ((submitFromEnter || submitFromButton) && onPipelineEdit_) {
+                        PipelineEditCommand command;
+                        command.action = PipelineEditAction::SetOutputName;
+                        command.workspaceName = pass.workspaceName;
+                        command.outputName = outputNameBuffer.data();
+                        command.enabled = pass.enabled;
+                        onPipelineEdit_(command);
+                        pipelinePasses_[i].outputName = outputNameBuffer.data();
+                        ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::EndPopup();
+                }
+
+                if (ImGui::BeginTable("PipelineNodeSlots", 2, ImGuiTableFlags_SizingStretchProp)) {
+                    ImGui::TableSetupColumn("Inputs");
+                    ImGui::TableSetupColumn("Outputs");
+                    ImGui::TableHeadersRow();
+
+                    std::size_t inputIndex = 0;
+                    std::size_t outputIndex = 0;
+                    for (std::size_t row = 0; row < slotRows; ++row) {
+                        ImGui::TableNextRow();
+
+                        ImGui::TableSetColumnIndex(0);
+                        if (inputIndex < pass.inputSamplers.size()) {
+                            const std::string& slotName = pass.inputSamplers[inputIndex++];
+                            ImGui::PushID(slotName.c_str());
+                            ImGui::Text("[U] %s", slotName.c_str());
+                            const ImVec2 minRect = ImGui::GetItemRectMin();
+                            const ImVec2 maxRect = ImGui::GetItemRectMax();
+                            inputAnchors[PipelineSlotKey(pass.workspaceName, slotName)] =
+                                ImVec2(minRect.x, (minRect.y + maxRect.y) * 0.5f);
+                            ImGui::SameLine();
+                            if (ImGui::SmallButton("Bind")) {
+                                bindTargetWorkspace = pass.workspaceName;
+                                bindTargetInput = slotName;
+                                ImGui::OpenPopup("PipelineBindInput");
+                            }
+                            if (ImGui::BeginPopupContextItem("InputContext")) {
+                                if (ImGui::MenuItem("Use Name-Match (Auto)")) {
+                                    if (onPipelineConnection_) {
+                                        PipelineConnectionCommand command;
+                                        command.targetWorkspace = pass.workspaceName;
+                                        command.targetSlot = slotName;
+                                        command.clear = true;
+                                        onPipelineConnection_(command);
+                                    }
+                                }
+                                ImGui::EndPopup();
+                            }
+                            ImGui::PopID();
+                        } else if (inputIndex < (pass.inputSamplers.size() + pass.inputBuffers.size())) {
+                            const std::string& slotName = pass.inputBuffers[inputIndex - pass.inputSamplers.size()];
+                            ++inputIndex;
+                            ImGui::Text("[S] %s", slotName.c_str());
+                            const ImVec2 minRect = ImGui::GetItemRectMin();
+                            const ImVec2 maxRect = ImGui::GetItemRectMax();
+                            inputAnchors[PipelineSlotKey(pass.workspaceName, slotName)] =
+                                ImVec2(minRect.x, (minRect.y + maxRect.y) * 0.5f);
+                        }
+
+                        ImGui::TableSetColumnIndex(1);
+                        if (outputIndex < pass.outputTextures.size()) {
+                            const std::string& slotName = pass.outputTextures[outputIndex++];
+                            ImGui::Text("[T] %s", slotName.c_str());
+                            const ImVec2 minRect = ImGui::GetItemRectMin();
+                            const ImVec2 maxRect = ImGui::GetItemRectMax();
+                            outputAnchors[PipelineSlotKey(pass.workspaceName, slotName)] =
+                                ImVec2(maxRect.x, (minRect.y + maxRect.y) * 0.5f);
+                        } else if (outputIndex < (pass.outputTextures.size() + pass.outputBuffers.size())) {
+                            const std::string& slotName = pass.outputBuffers[outputIndex - pass.outputTextures.size()];
+                            ++outputIndex;
+                            ImGui::Text("[S] %s", slotName.c_str());
+                            const ImVec2 minRect = ImGui::GetItemRectMin();
+                            const ImVec2 maxRect = ImGui::GetItemRectMax();
+                            outputAnchors[PipelineSlotKey(pass.workspaceName, slotName)] =
+                                ImVec2(maxRect.x, (minRect.y + maxRect.y) * 0.5f);
+                        }
+                    }
+
+                    ImGui::EndTable();
+                }
+
+                ImGui::EndChild();
+                ImGui::Spacing();
+                ImGui::PopID();
+            }
+
+            if (ImGui::BeginPopup("PipelineBindInput")) {
+                ImGui::Text("Bind %s.%s",
+                            bindTargetWorkspace.c_str(),
+                            bindTargetInput.c_str());
+                ImGui::Separator();
+                if (ImGui::Selectable("Use Name-Match (Auto)")) {
+                    if (onPipelineConnection_) {
+                        PipelineConnectionCommand command;
+                        command.targetWorkspace = bindTargetWorkspace;
+                        command.targetSlot = bindTargetInput;
+                        command.clear = true;
+                        onPipelineConnection_(command);
+                    }
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::Separator();
+                for (const auto& sourcePass : pipelinePasses_) {
+                    for (const auto& textureSlot : sourcePass.outputTextures) {
+                        const std::string label = sourcePass.workspaceName + " :: " + textureSlot;
+                        if (ImGui::Selectable(label.c_str())) {
+                            if (onPipelineConnection_) {
+                                PipelineConnectionCommand command;
+                                command.sourceWorkspace = sourcePass.workspaceName;
+                                command.sourceSlot = textureSlot;
+                                command.targetWorkspace = bindTargetWorkspace;
+                                command.targetSlot = bindTargetInput;
+                                command.clear = false;
+                                onPipelineConnection_(command);
+                            }
+                            ImGui::CloseCurrentPopup();
+                        }
+                    }
+                }
+                ImGui::EndPopup();
+            }
+
+            ImDrawList* drawList = ImGui::GetWindowDrawList();
+            const ImU32 implicitColor = IsLightTheme() ? IM_COL32(90, 90, 90, 210) : IM_COL32(170, 170, 170, 170);
+            const ImU32 explicitColor = IsLightTheme() ? IM_COL32(22, 122, 224, 255) : IM_COL32(90, 180, 255, 255);
+            for (const auto& connection : pipelineConnections_) {
+                const std::string sourceKey = PipelineSlotKey(connection.sourceWorkspace, connection.sourceSlot);
+                const std::string targetKey = PipelineSlotKey(connection.targetWorkspace, connection.targetSlot);
+                const auto sourceIt = outputAnchors.find(sourceKey);
+                const auto targetIt = inputAnchors.find(targetKey);
+                if (sourceIt == outputAnchors.end() || targetIt == inputAnchors.end()) {
+                    continue;
+                }
+
+                const ImVec2 p0 = sourceIt->second;
+                const ImVec2 p3 = targetIt->second;
+                const float bend = std::max(45.0f, std::abs(p3.x - p0.x) * 0.35f);
+                const ImVec2 p1 = ImVec2(p0.x + bend, p0.y);
+                const ImVec2 p2 = ImVec2(p3.x - bend, p3.y);
+                drawList->AddBezierCubic(p0,
+                                         p1,
+                                         p2,
+                                         p3,
+                                         connection.explicitConnection ? explicitColor : implicitColor,
+                                         connection.explicitConnection ? 2.3f : 1.5f);
+            }
+        }
+        ImGui::EndChild();
+    }
+
+    if (ImGui::BeginTable("PipelineBottomSplit", 2,
+                          ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV,
+                          ImVec2(0.0f, 0.0f))) {
+        ImGui::TableSetupColumn("ResourceInspector", ImGuiTableColumnFlags_WidthStretch, 0.52f);
+        ImGui::TableSetupColumn("DependencyTree", ImGuiTableColumnFlags_WidthStretch, 0.48f);
+        ImGui::TableNextRow();
+
+        ImGui::TableSetColumnIndex(0);
+        if (ImGui::BeginChild("PipelineResourceInspector", ImVec2(0.0f, 0.0f), true)) {
+            ImGui::TextUnformatted("Resource Inspector");
+            ImGui::Separator();
+            if (pipelineResources_.empty()) {
+                ImGui::TextDisabled("No shared textures or buffers are published yet.");
+            } else {
+                for (const auto& resource : pipelineResources_) {
+                    ImGui::PushID(resource.name.c_str());
+                    ImGui::Text("%s (%dx%d)", resource.name.c_str(), resource.width, resource.height);
+                    if (resource.texture != 0 && resource.width > 0 && resource.height > 0) {
+                        const float previewWidth = std::min(220.0f, ImGui::GetContentRegionAvail().x);
+                        const float aspect = static_cast<float>(resource.width) /
+                                             std::max(1.0f, static_cast<float>(resource.height));
+                        const float previewHeight = std::max(48.0f, previewWidth / std::max(0.01f, aspect));
+                        ImGui::Image(static_cast<ImTextureID>(resource.texture),
+                                     ImVec2(previewWidth, previewHeight),
+                                     ImVec2(0.0f, 1.0f),
+                                     ImVec2(1.0f, 0.0f));
+                    } else {
+                        ImGui::TextDisabled("Preview unavailable");
+                    }
+
+                    if (ImGui::Button("Bind..")) {
+                        ImGui::OpenPopup("BindResourcePopup");
+                    }
+                    if (ImGui::BeginPopup("BindResourcePopup")) {
+                        bool bound = false;
+                        for (const auto& pass : pipelinePasses_) {
+                            for (const auto& input : pass.inputSamplers) {
+                                const std::string label = pass.workspaceName + " -> " + input;
+                                if (ImGui::Selectable(label.c_str())) {
+                                    if (onPipelineConnection_) {
+                                        PipelineConnectionCommand command;
+                                        command.sourceWorkspace.clear();
+                                        command.sourceSlot = resource.name;
+                                        command.targetWorkspace = pass.workspaceName;
+                                        command.targetSlot = input;
+                                        command.clear = false;
+                                        onPipelineConnection_(command);
+                                    }
+                                    bound = true;
+                                }
+                            }
+                        }
+                        if (bound) {
+                            ImGui::CloseCurrentPopup();
+                        }
+                        ImGui::EndPopup();
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Export..")) {
+                        nfdchar_t* outPath = nullptr;
+                        const std::string defaultName = resource.name + ".ppm";
+                        nfdfilteritem_t filterItem[1] = {{"PPM Image", "ppm"}};
+                        const nfdresult_t result = NFD_SaveDialog(&outPath,
+                                                                   filterItem,
+                                                                   1,
+                                                                   nullptr,
+                                                                   defaultName.c_str());
+                        if (result == NFD_OKAY) {
+                            const bool exported = onPipelineResourceExport_
+                                                      ? onPipelineResourceExport_(resource.name, outPath)
+                                                      : false;
+                            AddLogOutput(exported ? "[Pipeline] Resource exported."
+                                                  : "[Pipeline Error] Resource export failed.");
+                            NFD_FreePath(outPath);
+                        }
+                    }
+
+                    ImGui::Separator();
+                    ImGui::PopID();
+                }
+            }
+        }
+        ImGui::EndChild();
+
+        ImGui::TableSetColumnIndex(1);
+        if (ImGui::BeginChild("PipelineDependencyTree", ImVec2(0.0f, 0.0f), true)) {
+            ImGui::TextUnformatted("Dependency Tree (#include)");
+            ImGui::Separator();
+            if (pipelineDependencies_.empty()) {
+                ImGui::TextDisabled("No include dependencies detected.");
+            } else {
+                for (const auto& dependency : pipelineDependencies_) {
+                    const std::size_t slash = dependency.path.find_last_of("/\\");
+                    const std::string displayName = (slash == std::string::npos)
+                                                        ? dependency.path
+                                                        : dependency.path.substr(slash + 1);
+                    const std::string treeLabel = displayName + "##" + dependency.path;
+                    if (dependency.flashing) {
+                        const float pulse = 0.55f + 0.45f * std::sin(static_cast<float>(ImGui::GetTime() * 8.0));
+                        const ImVec4 flashColor = IsLightTheme() ? ImVec4(0.85f * pulse, 0.38f * pulse, 0.10f, 1.0f)
+                                                                 : ImVec4(1.0f, 0.55f * pulse, 0.20f, 1.0f);
+                        ImGui::PushStyleColor(ImGuiCol_Text, flashColor);
+                    }
+                    if (ImGui::TreeNode(treeLabel.c_str())) {
+                        if (displayName != dependency.path) {
+                            ImGui::TextDisabled("%s", dependency.path.c_str());
+                        }
+                        for (const auto& workspace : dependency.dependentWorkspaces) {
+                            ImGui::BulletText("%s", workspace.c_str());
+                        }
+                        ImGui::TreePop();
+                    }
+                    if (dependency.flashing) {
+                        ImGui::PopStyleColor();
+                    }
+                }
+            }
+        }
+        ImGui::EndChild();
+
+        ImGui::EndTable();
+    }
+
+    if (showGlobalUniformsWindow_) {
+        bool open = showGlobalUniformsWindow_;
+        if (ImGui::Begin("Global Uniforms", &open, ImGuiWindowFlags_AlwaysAutoResize)) {
+            static std::array<char, 96> newUniformName{};
+            static int newUniformType = 0;
+
+            ImGui::InputText("Name", newUniformName.data(), newUniformName.size());
+            const std::array<const char*, 4> uniformTypes = { "float", "int", "bool", "vec4" };
+            ImGui::Combo("Type", &newUniformType, uniformTypes.data(), static_cast<int>(uniformTypes.size()));
+            if (ImGui::Button("Add Global")) {
+                const std::string uniformName = TrimString(newUniformName.data());
+                if (!uniformName.empty() && onPipelineGlobalUniform_) {
+                    PipelineGlobalUniformCommand command;
+                    command.action = PipelineGlobalUniformCommand::Action::Upsert;
+                    command.uniform.name = uniformName;
+                    command.uniform.type = static_cast<PipelineGlobalUniformType>(newUniformType);
+                    command.uniform.floatValue = 0.0f;
+                    command.uniform.intValue = 0;
+                    command.uniform.boolValue = false;
+                    command.uniform.vec4Value = { 0.0f, 0.0f, 0.0f, 0.0f };
+                    onPipelineGlobalUniform_(command);
+                    newUniformName[0] = '\0';
+                }
+            }
+
+            ImGui::Separator();
+            if (pipelineGlobalUniforms_.empty()) {
+                ImGui::TextDisabled("No global uniforms configured.");
+            } else {
+                for (std::size_t i = 0; i < pipelineGlobalUniforms_.size(); ++i) {
+                    auto uniform = pipelineGlobalUniforms_[i];
+                    ImGui::PushID(uniform.name.c_str());
+                    ImGui::Text("%s (%s)",
+                                uniform.name.c_str(),
+                                PipelineGlobalUniformTypeLabel(uniform.type));
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("Remove")) {
+                        if (onPipelineGlobalUniform_) {
+                            PipelineGlobalUniformCommand command;
+                            command.action = PipelineGlobalUniformCommand::Action::Remove;
+                            command.uniform = uniform;
+                            onPipelineGlobalUniform_(command);
+                        }
+                        ImGui::PopID();
+                        continue;
+                    }
+
+                    bool changed = false;
+                    switch (uniform.type) {
+                        case PipelineGlobalUniformType::Float:
+                            changed = ImGui::DragFloat("Value", &uniform.floatValue, 0.01f, -10000.0f, 10000.0f);
+                            break;
+                        case PipelineGlobalUniformType::Int:
+                            changed = ImGui::DragInt("Value", &uniform.intValue, 1.0f, -100000, 100000);
+                            break;
+                        case PipelineGlobalUniformType::Bool:
+                            changed = ImGui::Checkbox("Value", &uniform.boolValue);
+                            break;
+                        case PipelineGlobalUniformType::Vec4:
+                            changed = ImGui::DragFloat4("Value", uniform.vec4Value.data(), 0.01f, -10000.0f, 10000.0f);
+                            break;
+                    }
+
+                    if (changed) {
+                        pipelineGlobalUniforms_[i] = uniform;
+                        if (onPipelineGlobalUniform_) {
+                            PipelineGlobalUniformCommand command;
+                            command.action = PipelineGlobalUniformCommand::Action::Upsert;
+                            command.uniform = uniform;
+                            onPipelineGlobalUniform_(command);
+                        }
+                    }
+
+                    ImGui::Separator();
+                    ImGui::PopID();
+                }
+            }
+        }
+        ImGui::End();
+        showGlobalUniformsWindow_ = open;
     }
 
     ImGui::EndTabItem();
@@ -2250,38 +2925,43 @@ void EditorUI::DrawPlaybackTransportBar() {
 }
 
 void EditorUI::DrawUniformsTab() {
+    if (!rendererFullscreen_ && !showUniformControlsPanel_ && !showPlaybackControlsPanel_) {
+        return;
+    }
+
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const float margin = 12.0f;
     const float topOffset = rendererFullscreen_ ? margin : 40.0f;
+    float panelsY = topOffset + 8.0f;
+    if (rendererFullscreen_) {
+        ImGui::SetNextWindowViewport(viewport->ID);
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - margin,
+                                       viewport->WorkPos.y + topOffset),
+                                ImGuiCond_Always,
+                                ImVec2(1.0f, 0.0f));
 
-    ImGui::SetNextWindowViewport(viewport->ID);
-    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - margin,
-                                   viewport->WorkPos.y + topOffset),
-                            ImGuiCond_Always,
-                            ImVec2(1.0f, 0.0f));
+        const ImGuiWindowFlags toggleFlags = ImGuiWindowFlags_NoDecoration |
+                                             ImGuiWindowFlags_AlwaysAutoResize |
+                                             ImGuiWindowFlags_NoSavedSettings |
+                                             ImGuiWindowFlags_NoDocking |
+                                             ImGuiWindowFlags_NoNav;
 
-    const ImGuiWindowFlags toggleFlags = ImGuiWindowFlags_NoDecoration |
-                                         ImGuiWindowFlags_AlwaysAutoResize |
-                                         ImGuiWindowFlags_NoSavedSettings |
-                                         ImGuiWindowFlags_NoDocking |
-                                         ImGuiWindowFlags_NoNav;
-
-    float toggleHeight = 0.0f;
-    if (ImGui::Begin("UniformControlsToggle", nullptr, toggleFlags)) {
-        const char* uniformButtonLabel = showUniformControlsPanel_ ? "Hide Uniforms" : "Show Uniforms";
-        if (ImGui::Button(uniformButtonLabel)) {
-            showUniformControlsPanel_ = !showUniformControlsPanel_;
+        float toggleHeight = 0.0f;
+        if (ImGui::Begin("UniformControlsToggle", nullptr, toggleFlags)) {
+            const char* uniformButtonLabel = showUniformControlsPanel_ ? "Hide Uniforms" : "Show Uniforms";
+            if (ImGui::Button(uniformButtonLabel)) {
+                showUniformControlsPanel_ = !showUniformControlsPanel_;
+            }
+            ImGui::SameLine();
+            const char* playbackButtonLabel = showPlaybackControlsPanel_ ? "Hide Playback" : "Show Playback";
+            if (ImGui::Button(playbackButtonLabel)) {
+                showPlaybackControlsPanel_ = !showPlaybackControlsPanel_;
+            }
+            toggleHeight = ImGui::GetWindowSize().y;
         }
-        ImGui::SameLine();
-        const char* playbackButtonLabel = showPlaybackControlsPanel_ ? "Hide Playback" : "Show Playback";
-        if (ImGui::Button(playbackButtonLabel)) {
-            showPlaybackControlsPanel_ = !showPlaybackControlsPanel_;
-        }
-        toggleHeight = ImGui::GetWindowSize().y;
+        ImGui::End();
+        panelsY = topOffset + toggleHeight + 8.0f;
     }
-    ImGui::End();
-
-    float panelsY = topOffset + toggleHeight + 8.0f;
 
     const ImGuiWindowFlags panelFlags = ImGuiWindowFlags_NoDocking |
                                         ImGuiWindowFlags_NoSavedSettings |
@@ -2690,9 +3370,62 @@ void EditorUI::DrawConsolePane() {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, utilityPaneChildBg);
     ImGui::Begin("Utility View", nullptr, flags);
 
+    {
+        const ImGuiStyle& style = ImGui::GetStyle();
+        const float labelWidth = ImGui::CalcTextSize("Render:").x;
+        const float workspaceWidth = ImGui::CalcTextSize("Workspace").x + style.FramePadding.x * 2.0f +
+                                     ImGui::GetFrameHeight();
+        const float pipelineWidth = ImGui::CalcTextSize("Pipeline").x + style.FramePadding.x * 2.0f +
+                                    ImGui::GetFrameHeight();
+        constexpr float toggleButtonWidth = 104.0f;
+        const float controlsWidth = labelWidth + style.ItemInnerSpacing.x + workspaceWidth + style.ItemSpacing.x +
+                                    pipelineWidth + style.ItemSpacing.x + toggleButtonWidth + style.ItemSpacing.x +
+                                    toggleButtonWidth;
+        const float startX = std::max(0.0f, ImGui::GetWindowContentRegionMax().x - controlsWidth);
+        ImGui::SetCursorPosX(startX);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Render:");
+        ImGui::SameLine();
+
+        if (ImGui::RadioButton("Workspace", rendererOutputMode_ == RendererOutputMode::ActiveWorkspace)) {
+            rendererOutputMode_ = RendererOutputMode::ActiveWorkspace;
+        }
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Pipeline", rendererOutputMode_ == RendererOutputMode::PipelineChain)) {
+            rendererOutputMode_ = RendererOutputMode::PipelineChain;
+        }
+
+        ImGui::SameLine();
+        const bool uniformPanelWasOpen = showUniformControlsPanel_;
+        if (uniformPanelWasOpen) {
+            ImGui::PushStyleColor(ImGuiCol_Button, IsLightTheme() ? ImVec4(0.75f, 0.82f, 0.92f, 1.0f)
+                                                                  : ImVec4(0.22f, 0.37f, 0.53f, 1.0f));
+        }
+        if (ImGui::Button("Uniforms", ImVec2(toggleButtonWidth, 0.0f))) {
+            showUniformControlsPanel_ = !showUniformControlsPanel_;
+        }
+        if (uniformPanelWasOpen) {
+            ImGui::PopStyleColor();
+        }
+
+        ImGui::SameLine();
+        const bool playbackPanelWasOpen = showPlaybackControlsPanel_;
+        if (playbackPanelWasOpen) {
+            ImGui::PushStyleColor(ImGuiCol_Button, IsLightTheme() ? ImVec4(0.75f, 0.82f, 0.92f, 1.0f)
+                                                                  : ImVec4(0.22f, 0.37f, 0.53f, 1.0f));
+        }
+        if (ImGui::Button("Playback", ImVec2(toggleButtonWidth, 0.0f))) {
+            showPlaybackControlsPanel_ = !showPlaybackControlsPanel_;
+        }
+        if (playbackPanelWasOpen) {
+            ImGui::PopStyleColor();
+        }
+    }
+
     const std::string currentWorkspace = ResolveCurrentWorkspaceName();
     if (ImGui::BeginTabBar("UtilityTabs", ImGuiTabBarFlags_None)) {
         DrawRendererTab();
+        DrawPipelineTab();
         DrawConsoleTab(currentWorkspace);
         DrawLogsTab(currentWorkspace);
         ImGui::EndTabBar();

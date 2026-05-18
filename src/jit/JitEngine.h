@@ -12,6 +12,7 @@ namespace clang { class Interpreter; }
 
 using JitInitFn   = void(*)(EngineContext*);
 using JitUpdateFn = void(*)(EngineContext*);
+using JitComputeFn = void(*)(EngineContext*);
 using JitRenderFn = void(*)(EngineContext*);
 using JitShutdownFn = void(*)(EngineContext*);
 
@@ -19,6 +20,7 @@ struct JitFunctions {
     // Any callback may be null; user code can implement only the hooks it needs.
     JitInitFn    init     = nullptr;
     JitUpdateFn  update   = nullptr;
+    JitComputeFn compute  = nullptr;
     JitRenderFn  render   = nullptr;
     JitShutdownFn shutdown = nullptr;
 };
