@@ -439,6 +439,7 @@ private:
     bool ctrlMinusChordHeld_ = false;
     bool ctrlNewWorkspaceChordHeld_ = false;
     bool ctrlThemeToggleChordHeld_ = false;
+    bool ctrlRenderModeChordHeld_ = false;
     bool ctrlFullscreenChordHeld_ = false;
     bool showWelcomeOnStartup_ = true;
     bool welcomePopupOpenedThisSession_ = false;

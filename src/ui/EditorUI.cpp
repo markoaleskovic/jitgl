@@ -1188,6 +1188,13 @@ void EditorUI::HandleGlobalShortcuts() {
     TriggerChordAction(canUseCtrlShortcuts && IsKeyDown(window, GLFW_KEY_T),
                        &ctrlThemeToggleChordHeld_,
                        [this]() { ToggleTheme(); });
+    TriggerChordAction(canUseCtrlShortcuts && IsKeyDown(window, GLFW_KEY_P),
+                       &ctrlRenderModeChordHeld_,
+                       [this]() {
+                           rendererOutputMode_ = (rendererOutputMode_ == RendererOutputMode::ActiveWorkspace)
+                                                     ? RendererOutputMode::PipelineChain
+                                                     : RendererOutputMode::ActiveWorkspace;
+                       });
     TriggerChordAction(canUseCtrlShortcuts && IsKeyDown(window, GLFW_KEY_F),
                        &ctrlFullscreenChordHeld_,
                        [this]() {
@@ -1404,6 +1411,11 @@ void EditorUI::DrawViewMenu() {
     }
     if (ImGui::MenuItem(IsLightTheme() ? "Switch to Dark Theme" : "Switch to Light Theme", "Ctrl+T")) {
         ToggleTheme();
+    }
+    const bool workspaceRenderSelected = (rendererOutputMode_ == RendererOutputMode::ActiveWorkspace);
+    if (ImGui::MenuItem("Render Source: Workspace", "Ctrl+P", workspaceRenderSelected)) {
+        rendererOutputMode_ = workspaceRenderSelected ? RendererOutputMode::PipelineChain
+                                                      : RendererOutputMode::ActiveWorkspace;
     }
     ImGui::Separator();
     (void)ImGui::MenuItem("Uniform Controls", nullptr, &showUniformControlsPanel_);
