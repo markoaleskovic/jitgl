@@ -8,6 +8,7 @@
 #include <mutex>
 #include <functional>
 #include <unordered_map>
+#include <unordered_set>
 #include "TextEditor.h"
 #include "imgui_markdown.h"
 #include "system/AppPreferences.h"
@@ -367,6 +368,12 @@ private:
     std::function<void(const PipelineConnectionCommand&)> onPipelineConnection_;
     std::function<void(const PipelineGlobalUniformCommand&)> onPipelineGlobalUniform_;
     std::function<bool(const std::string&, const std::string&)> onPipelineResourceExport_;
+    void* pipelineNodeEditorConfig_ = nullptr;
+    void* pipelineNodeEditorContext_ = nullptr;
+    std::unordered_set<std::string> pipelinePositionedNodes_;
+    std::unordered_map<std::string, std::uint64_t> pipelineStableEditorIds_;
+    std::uint64_t pipelineNextStableEditorId_ = 1;
+    bool pipelineNavigateToContent_ = true;
     bool showGlobalUniformsWindow_ = false;
     int selectedPipelineAddPassIndex_ = 0;
     bool openCreateWorkspacePopup_ = false;
@@ -426,6 +433,7 @@ private:
     void ApplyEditorPalette(Document& doc) const;
     bool IsLightTheme() const;
     void DrawRendererFullscreen();
+    std::uint64_t AcquirePipelineEditorStableId(const std::string& key);
 
     float currentDpiScale_ = 1.0f;
     float pendingDpiScale_ = 1.0f;
