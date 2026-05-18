@@ -3438,7 +3438,7 @@ bool Engine::ResolvePipelineSamplerBinding(const WorkspaceState& workspace,
 }
 
 void Engine::BindSharedSamplerUniforms(WorkspaceState* workspace, const GLuint programHandle) {
-    if (workspace == nullptr || programHandle == 0 || workspace->samplerUniformNames.empty() || sharedTextures_.empty()) {
+    if (workspace == nullptr || programHandle == 0 || workspace->samplerUniformNames.empty()) {
         return;
     }
 
@@ -3457,19 +3457,6 @@ void Engine::BindSharedSamplerUniforms(WorkspaceState* workspace, const GLuint p
     for (const auto& samplerName : workspace->samplerUniformNames) {
         std::string resourceName;
         bool explicitBinding = false;
-        if (!ResolvePipelineSamplerBinding(*workspace, samplerName, &resourceName, &explicitBinding)) {
-            continue;
-        }
-        (void)explicitBinding;
-
-        const auto resourceIt = sharedTextures_.find(resourceName);
-        if (resourceIt == sharedTextures_.end() || resourceIt->second.texture == 0) {
-            continue;
-        }
-        if (textureUnit >= maxUnits) {
-            break;
-        }
-
         GLint location = -1;
         if (const auto cacheIt = workspace->samplerLocationCache.find(samplerName);
             cacheIt != workspace->samplerLocationCache.end()) {
@@ -3482,10 +3469,22 @@ void Engine::BindSharedSamplerUniforms(WorkspaceState* workspace, const GLuint p
             continue;
         }
 
-        glActiveTexture(GL_TEXTURE0 + textureUnit);
-        glBindTexture(GL_TEXTURE_2D, resourceIt->second.texture);
-        glUniform1i(location, textureUnit);
-        ++textureUnit;
+        GLuint textureToBind = 0;
+        if (ResolvePipelineSamplerBinding(*workspace, samplerName, &resourceName, &explicitBinding)) {
+            (void)explicitBinding;
+            if (const auto resourceIt = sharedTextures_.find(resourceName);
+                resourceIt != sharedTextures_.end()) {
+                textureToBind = resourceIt->second.texture;
+            }
+        }
+
+        const int assignedUnit = (textureUnit < maxUnits) ? textureUnit : (maxUnits - 1);
+        glActiveTexture(GL_TEXTURE0 + assignedUnit);
+        glBindTexture(GL_TEXTURE_2D, textureToBind);
+        glUniform1i(location, assignedUnit);
+        if (textureUnit < maxUnits) {
+            ++textureUnit;
+        }
     }
     glActiveTexture(GL_TEXTURE0);
 }

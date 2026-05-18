@@ -416,6 +416,14 @@ private:
     void DrawUniformsTab();
     void DrawConsoleTab(const std::string& currentWorkspace);
     void DrawLogsTab(const std::string& currentWorkspace);
+    void AppendWorkspaceOutputLine(const std::string& text, bool isConsoleChannel);
+    void CollectPipelinePassGroups(std::vector<std::string>* disabledPasses,
+                                   std::vector<std::string>* enabledPasses) const;
+    std::string BuildPipelineOrderText(const std::vector<std::string>& enabledPasses) const;
+    void DrawPipelineMainLayout(const std::string& orderText, bool forceAutoLayout);
+    void DrawPipelineNodeCanvas(bool forceAutoLayout);
+    void DrawPipelineInspectorPanel(const std::string& orderText);
+    void DrawPipelineGlobalUniformWindow();
     std::string ResolveCurrentWorkspaceName();
     void DrawWelcomePopup();
     void DrawShowcaseGuidePopup();
