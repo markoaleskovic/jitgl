@@ -9,6 +9,7 @@
 
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
+#include <imgui.h>
 
 #include <algorithm>
 #include <array>
@@ -961,6 +962,11 @@ bool Engine::InitGL() {
 
 bool Engine::InitUI() {
     ui_ = std::make_unique<EditorUI>();
+    // Install our scroll callback before ImGui_ImplGlfw_Init runs (via
+    // EditorUI::Init), so ImGui's install_callbacks chains to ours instead of
+    // overwriting it. Without this our scroll-wheel input would be lost.
+    glfwSetWindowUserPointer(window_, this);
+    glfwSetScrollCallback(window_, &Engine::GlfwScrollTrampoline);
     ui_->Init(window_);
     if (sceneColorTex_ != 0 && sceneWidth_ > 0 && sceneHeight_ > 0) {
         ui_->SetRendererTexture(sceneColorTex_, sceneWidth_, sceneHeight_);
@@ -1050,6 +1056,13 @@ bool Engine::InitUI() {
     ui_->SetPipelineResourceExportCallback([this](const std::string& resourceName, const std::string& targetPath) {
         return ExportPipelineResource(resourceName, targetPath);
     });
+    ui_->SetInputCaptureEnabledCallback([this](const bool enabled) {
+        inputsEnabled_ = enabled;
+        prevKeyStateValid_ = false;
+        prevMouseButtonStateValid_ = false;
+        prevMousePosValid_ = false;
+    });
+    ui_->SetInputCaptureEnabled(inputsEnabled_);
 
     return true;
 }
@@ -3294,6 +3307,19 @@ void Engine::HandleCompileFailure(const CompileResult& result) {
              ", sourceHash=" + std::to_string(result.sourceHash) + ")");
     ui_->AddLogOutput("[JIT] Compile failed for workspace '" + result.workspaceName +
                       "'. Keeping previous program.");
+    // Disable input capture so the user is not still driving a now-stale or
+    // half-broken program. They re-enable explicitly once the compile succeeds.
+    if (inputsEnabled_) {
+        inputsEnabled_ = false;
+        prevKeyStateValid_ = false;
+        prevMouseButtonStateValid_ = false;
+        prevMousePosValid_ = false;
+        if (ui_) {
+            ui_->SetInputCaptureEnabled(false);
+            ui_->SetInputCaptureActive(false);
+            ui_->AddLogOutput("[Input] Capture disabled (compile failure).");
+        }
+    }
     if (const auto hashIt = latestSourceHashes_.find(result.workspaceName);
         hashIt != latestSourceHashes_.end() && hashIt->second == result.sourceHash) {
         compileFailures_[result.workspaceName] = CompileFailureState{ result.sourceHash, false };
@@ -3720,6 +3746,141 @@ void Engine::UpdatePipelineUiState() {
     ui_->SetPipelineGlobalUniforms(pipelineGlobalUniforms_);
 }
 
+void Engine::GlfwScrollTrampoline(GLFWwindow* window, double xoffset, double yoffset) {
+    if (window == nullptr) {
+        return;
+    }
+    if (auto* engine = static_cast<Engine*>(glfwGetWindowUserPointer(window)); engine != nullptr) {
+        engine->HandleScrollEvent(xoffset, yoffset);
+    }
+}
+
+void Engine::HandleScrollEvent(double xoffset, double yoffset) {
+    // GLFW dispatches multiple scroll events per frame on high-resolution
+    // touchpads; accumulate so a fast flick is not lost.
+    pendingScrollX_ += static_cast<float>(xoffset);
+    pendingScrollY_ += static_cast<float>(yoffset);
+}
+
+void Engine::UpdateInputState() {
+    InputState& input = ctx_.input;
+    input = InputState{};
+
+    if (window_ == nullptr) {
+        prevKeyStateValid_ = false;
+        prevMousePosValid_ = false;
+        pendingScrollX_ = 0.0f;
+        pendingScrollY_ = 0.0f;
+        return;
+    }
+
+    // The three gates: master toggle, OS-level window focus, and renderer
+    // panel focus. io.WantCaptureKeyboard catches the case where typing in
+    // the editor would otherwise also move the scene. We deliberately do
+    // NOT use io.WantCaptureMouse for the mouse gate -- the renderer image
+    // is itself an ImGui window, so WantCaptureMouse is true whenever the
+    // cursor is over it, which would block every mouse event.
+    ImGuiIO& io = ImGui::GetIO();
+    const EditorUI::RendererViewportState viewport =
+        ui_ ? ui_->GetRendererViewportState() : EditorUI::RendererViewportState{};
+    const bool windowFocused = (glfwGetWindowAttrib(window_, GLFW_FOCUSED) != 0);
+    const bool gateKeyboard = inputsEnabled_ && windowFocused && viewport.focused && !io.WantCaptureKeyboard;
+    const bool gateMouse = inputsEnabled_ && windowFocused && viewport.focused;
+
+    if (ui_) {
+        ui_->SetInputCaptureActive(gateKeyboard || gateMouse);
+    }
+
+    // Always reset accumulated scroll so we don't leak deltas into a future
+    // gated-on frame.
+    const float scrollX = pendingScrollX_;
+    const float scrollY = pendingScrollY_;
+    pendingScrollX_ = 0.0f;
+    pendingScrollY_ = 0.0f;
+
+    if (!gateKeyboard && !gateMouse) {
+        prevKeyStateValid_ = false;
+        prevMouseButtonStateValid_ = false;
+        prevMousePosValid_ = false;
+        return;
+    }
+
+    input.inputsEnabled = 1;
+
+    // Keyboard -----------------------------------------------------------
+    if (gateKeyboard) {
+        for (std::size_t k = 0; k < InputState::kKeyCount; ++k) {
+            const int glfwState = glfwGetKey(window_, static_cast<int>(k));
+            const std::uint8_t pressed = (glfwState == GLFW_PRESS) ? 1 : 0;
+            input.keyDown[k] = pressed;
+            if (prevKeyStateValid_) {
+                if (pressed && !prevKeyDown_[k]) input.keyPressed[k] = 1;
+                if (!pressed && prevKeyDown_[k]) input.keyReleased[k] = 1;
+            }
+            prevKeyDown_[k] = pressed;
+        }
+        prevKeyStateValid_ = true;
+    } else {
+        prevKeyStateValid_ = false;
+    }
+
+    // Mouse buttons + position ------------------------------------------
+    if (gateMouse) {
+        for (std::size_t b = 0; b < InputState::kMouseButtonCount; ++b) {
+            const int glfwState = glfwGetMouseButton(window_, static_cast<int>(b));
+            const std::uint8_t pressed = (glfwState == GLFW_PRESS) ? 1 : 0;
+            input.mouseDown[b] = pressed;
+            if (prevMouseButtonStateValid_) {
+                if (pressed && !prevMouseDown_[b]) input.mousePressed[b] = 1;
+                if (!pressed && prevMouseDown_[b]) input.mouseReleased[b] = 1;
+            }
+            prevMouseDown_[b] = pressed;
+        }
+        prevMouseButtonStateValid_ = true;
+
+        double rawX = 0.0;
+        double rawY = 0.0;
+        glfwGetCursorPos(window_, &rawX, &rawY);
+
+        // Map the raw cursor (window content-area pixels) into the renderer
+        // FBO pixel coords using the rect captured by EditorUI last frame.
+        // Outside the rect we report (0,0) and clear mouseInViewport.
+        const float minX = viewport.screenMinX;
+        const float minY = viewport.screenMinY;
+        const float maxX = viewport.screenMaxX;
+        const float maxY = viewport.screenMaxY;
+        const float rectW = std::max(maxX - minX, 1.0f);
+        const float rectH = std::max(maxY - minY, 1.0f);
+        const bool inside = viewport.visible &&
+                            static_cast<float>(rawX) >= minX && static_cast<float>(rawX) < maxX &&
+                            static_cast<float>(rawY) >= minY && static_cast<float>(rawY) < maxY;
+        if (inside) {
+            const float u = (static_cast<float>(rawX) - minX) / rectW;
+            const float v = (static_cast<float>(rawY) - minY) / rectH;
+            input.mouseX = u * static_cast<float>(viewport.textureWidth);
+            input.mouseY = v * static_cast<float>(viewport.textureHeight);
+            // OpenGL conventions: NDC y points up, so flip v.
+            input.mouseNdcX = u * 2.0f - 1.0f;
+            input.mouseNdcY = 1.0f - v * 2.0f;
+            input.mouseInViewport = 1;
+        }
+
+        if (prevMousePosValid_) {
+            input.mouseDX = static_cast<float>(rawX - prevMouseRawX_);
+            input.mouseDY = static_cast<float>(rawY - prevMouseRawY_);
+        }
+        prevMouseRawX_ = rawX;
+        prevMouseRawY_ = rawY;
+        prevMousePosValid_ = true;
+
+        input.mouseScrollX = scrollX;
+        input.mouseScrollY = scrollY;
+    } else {
+        prevMouseButtonStateValid_ = false;
+        prevMousePosValid_ = false;
+    }
+}
+
 void Engine::RenderSceneToTexture() {
     if (sceneWidth_ <= 0 || sceneHeight_ <= 0) {
         sharedTextures_.clear();
@@ -3957,6 +4118,23 @@ void Engine::Run() {
     while (!glfwWindowShouldClose(window_)) {
         const double frameStartSeconds = glfwGetTime();
         glfwPollEvents();
+
+        // Hotkey is read directly from GLFW so it bypasses the gates and can
+        // always rescue the user from a scene that has captured Escape.
+        const bool hotkeyDown = (glfwGetKey(window_, GLFW_KEY_F1) == GLFW_PRESS);
+        if (hotkeyDown && !inputHotkeyHeld_) {
+            inputsEnabled_ = !inputsEnabled_;
+            prevKeyStateValid_ = false;
+            prevMouseButtonStateValid_ = false;
+            prevMousePosValid_ = false;
+            if (ui_) {
+                ui_->SetInputCaptureEnabled(inputsEnabled_);
+                ui_->AddLogOutput(std::string("[Input] Capture ") + (inputsEnabled_ ? "ON" : "OFF") + " (F1)");
+            }
+        }
+        inputHotkeyHeld_ = hotkeyDown;
+
+        UpdateInputState();
 
         if (ctx_.consume_reset_state_request()) {
             HardResetActiveWorkspaceState("requested by scene code", false);

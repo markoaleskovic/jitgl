@@ -5,6 +5,33 @@
 #include <cstddef>
 #include <cstdint>
 
+// Per-frame snapshot of keyboard and mouse state, populated by the host before
+// each JIT callback. JIT code reads this through KEY_DOWN / MOUSE_DOWN helpers
+// in engine.hpp; it should never write to it. When input capture is disabled
+// the host zeroes this whole struct so JIT code sees a quiet world.
+struct InputState {
+    static constexpr std::size_t kKeyCount = 512;
+    static constexpr std::size_t kMouseButtonCount = 8;
+
+    std::array<std::uint8_t, kKeyCount> keyDown{};
+    std::array<std::uint8_t, kKeyCount> keyPressed{};
+    std::array<std::uint8_t, kKeyCount> keyReleased{};
+    std::array<std::uint8_t, kMouseButtonCount> mouseDown{};
+    std::array<std::uint8_t, kMouseButtonCount> mousePressed{};
+    std::array<std::uint8_t, kMouseButtonCount> mouseReleased{};
+    float mouseX = 0.0f;
+    float mouseY = 0.0f;
+    float mouseDX = 0.0f;
+    float mouseDY = 0.0f;
+    float mouseScrollX = 0.0f;
+    float mouseScrollY = 0.0f;
+    float mouseNdcX = 0.0f;
+    float mouseNdcY = 0.0f;
+    std::uint8_t inputsEnabled = 0;
+    std::uint8_t mouseInViewport = 0;
+    std::uint8_t _pad[6]{};
+};
+
 // Plain data, owned by Engine, passed into every JIT callback.
 // Never delete or store this pointer -- the host manages its lifetime.
 struct EngineContext {
@@ -36,6 +63,11 @@ struct EngineContext {
 
     // Request a host-side hard reset (consumed on the next frame).
     bool reset_state_requested = false;
+
+    // Per-frame keyboard/mouse snapshot. Populated by Engine::UpdateInputState
+    // before every update()/render()/compute() invocation. Zeroed when the
+    // user has disabled input capture (or when ImGui is consuming input).
+    InputState input{};
 
     // Helper to get memory that lives only for the current run/reload.
     void* allocate(std::size_t size, std::size_t alignment = alignof(std::max_align_t)) {

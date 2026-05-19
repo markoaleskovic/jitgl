@@ -284,6 +284,33 @@ public:
     void SetRendererTexture(unsigned int texture, int width, int height);
     RendererOutputMode GetRendererOutputMode() const;
     void SetCompilationStatus(bool isCompiling, bool hasError, bool isStalled = false);
+
+    // Per-frame snapshot of the renderer viewport state, used by the host to
+    // map raw window-pixel mouse coords into JIT-visible viewport coords and
+    // to apply the focus / hover gates. Populated by DrawRendererTab and
+    // DrawRendererFullscreen each time the image is drawn; zeroed when the
+    // renderer tab is not active.
+    struct RendererViewportState {
+        bool visible = false;          // renderer image was drawn this frame
+        bool focused = false;          // host window containing the image has focus
+        bool hovered = false;          // cursor inside the image rect
+        float screenMinX = 0.0f;       // image top-left in OS window coords
+        float screenMinY = 0.0f;
+        float screenMaxX = 0.0f;       // image bottom-right
+        float screenMaxY = 0.0f;
+        int textureWidth = 0;          // FBO pixel size
+        int textureHeight = 0;
+    };
+
+    RendererViewportState GetRendererViewportState() const { return rendererViewportState_; }
+
+    // Master switch for forwarding input to JIT code. Drives the UI checkbox
+    // and the visual indicator. Engine owns the source of truth and pushes
+    // updates here.
+    void SetInputCaptureEnabled(bool enabled);
+    bool IsInputCaptureEnabled() const { return inputCaptureEnabled_; }
+    void SetInputCaptureActive(bool active) { inputCaptureActive_ = active; }
+    void SetInputCaptureEnabledCallback(std::function<void(bool)> cb) { onInputCaptureEnabledChanged_ = std::move(cb); }
     void SetUniformValues(std::vector<UniformValue> values);
     void SetUniformEditCallback(std::function<void(const UniformEditCommand&)> cb);
     void SetUniformJsonSnapshotCallback(std::function<std::string()> cb);
@@ -384,6 +411,11 @@ private:
     bool isCompiling_ = false;
     bool hasCompileError_ = false;
     bool isStalled_ = false;
+    bool inputCaptureEnabled_ = false;
+    bool inputCaptureActive_ = false;
+    std::function<void(bool)> onInputCaptureEnabledChanged_;
+    RendererViewportState rendererViewportState_{};
+    RendererViewportState pendingRendererViewportState_{};
     std::vector<UniformValue> uniformValues_;
     std::function<void(const UniformEditCommand&)> onUniformEdit_;
     std::function<std::string()> onUniformJsonSnapshot_;
@@ -454,6 +486,9 @@ private:
                        bool* pendingSelectionConsumed);
     void AutosaveDirtyDocuments(double currentTime);
     void DrawRendererTab();
+    void DrawInputCaptureToolbar();
+    void UpdateRendererViewportStateFromImage(bool drawn, float minX, float minY, float maxX, float maxY);
+    void DrawInputCaptureIndicator(bool drawn, float minX, float minY, float maxX, float maxY);
     void DrawPipelineTab();
     void DrawPlaybackTransportBar();
     void DrawUniformsTab();

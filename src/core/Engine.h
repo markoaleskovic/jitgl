@@ -306,6 +306,27 @@ private:
     bool vsyncEnabled_ = true;
     int  targetFramerate_ = 60;
 
+    // Master toggle for forwarding keyboard/mouse to JIT code. Defaults off
+    // so a freshly-launched editor never silently grabs input. F1 flips it
+    // pre-snapshot so the user can always disable input even if a runaway
+    // scene captures Escape.
+    bool inputsEnabled_ = false;
+    // Per-frame edge-detection state, lives in the host so hot-reloads do
+    // not produce spurious press events for a key that was already held.
+    std::array<std::uint8_t, InputState::kKeyCount> prevKeyDown_{};
+    std::array<std::uint8_t, InputState::kMouseButtonCount> prevMouseDown_{};
+    bool prevKeyStateValid_ = false;
+    bool prevMouseButtonStateValid_ = false;
+    bool inputHotkeyHeld_ = false;
+    double prevMouseRawX_ = 0.0;
+    double prevMouseRawY_ = 0.0;
+    bool prevMousePosValid_ = false;
+    float pendingScrollX_ = 0.0f;
+    float pendingScrollY_ = 0.0f;
+    static void GlfwScrollTrampoline(GLFWwindow* window, double xoffset, double yoffset);
+    void HandleScrollEvent(double xoffset, double yoffset);
+    void UpdateInputState();
+
     unsigned int CreateShaderProgram(const char* vsSource, const char* fsSource);
 
     bool shutdown_ = false;

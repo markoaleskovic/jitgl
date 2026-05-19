@@ -87,7 +87,20 @@ namespace {
 
     class TextureLayout {
     public:
-        static bool DrawCentered(unsigned int texture, int width, int height, const char* fallbackText) {
+        struct PlacedImage {
+            bool drawn = false;
+            ImVec2 screenMin{};
+            ImVec2 screenMax{};
+        };
+
+        static bool DrawCentered(unsigned int texture,
+                                 int width,
+                                 int height,
+                                 const char* fallbackText,
+                                 PlacedImage* outPlacedImage = nullptr) {
+            if (outPlacedImage != nullptr) {
+                *outPlacedImage = {};
+            }
             if (texture == 0 || width <= 0 || height <= 0) {
                 ImGui::TextUnformatted(fallbackText);
                 return false;
@@ -100,7 +113,14 @@ namespace {
             const float offsetY = (avail.y - imageSize.y) * 0.5f;
             ImGui::SetCursorPos(ImVec2(cursor.x + (offsetX > 0.0f ? offsetX : 0.0f),
                                        cursor.y + (offsetY > 0.0f ? offsetY : 0.0f)));
+            const ImVec2 imageScreenMin = ImGui::GetCursorScreenPos();
             ImGui::Image(static_cast<ImTextureID>(texture), imageSize, ImVec2(0.0f, 1.0f), ImVec2(1.0f, 0.0f));
+            if (outPlacedImage != nullptr) {
+                outPlacedImage->drawn = true;
+                outPlacedImage->screenMin = imageScreenMin;
+                outPlacedImage->screenMax = ImVec2(imageScreenMin.x + imageSize.x,
+                                                   imageScreenMin.y + imageSize.y);
+            }
             return true;
         }
 
@@ -559,6 +579,11 @@ void EditorUI::NewFrame() {
 void EditorUI::Draw() {
     HandleGlobalShortcuts();
     rendererTabActive_ = false;
+    // Wipe the cached renderer rect each frame. DrawRendererTab /
+    // DrawRendererFullscreen repopulate it when they actually draw the
+    // image; if neither runs (renderer tab not selected, etc.) the host
+    // sees visible=false and stops forwarding mouse position.
+    rendererViewportState_ = RendererViewportState{};
 
     if (rendererFullscreen_) {
         DrawRendererFullscreen();
@@ -2280,10 +2305,19 @@ void EditorUI::DrawRendererFullscreen() {
             return;
         }
 
+        DrawInputCaptureToolbar();
+        TextureLayout::PlacedImage placedImage;
         TextureLayout::DrawCentered(rendererTexture_,
                                     rendererTextureWidth_,
                                     rendererTextureHeight_,
-                                    "Renderer not ready.");
+                                    "Renderer not ready.",
+                                    &placedImage);
+        UpdateRendererViewportStateFromImage(placedImage.drawn,
+                                             placedImage.screenMin.x, placedImage.screenMin.y,
+                                             placedImage.screenMax.x, placedImage.screenMax.y);
+        DrawInputCaptureIndicator(placedImage.drawn,
+                                  placedImage.screenMin.x, placedImage.screenMin.y,
+                                  placedImage.screenMax.x, placedImage.screenMax.y);
     }
     ImGui::End();
     ImGui::PopStyleColor();
@@ -2295,12 +2329,96 @@ void EditorUI::DrawRendererTab() {
     }
     rendererTabActive_ = true;
 
+    DrawInputCaptureToolbar();
+
+    TextureLayout::PlacedImage placedImage;
     TextureLayout::DrawCentered(rendererTexture_,
                                 rendererTextureWidth_,
                                 rendererTextureHeight_,
-                                "Renderer not ready.");
+                                "Renderer not ready.",
+                                &placedImage);
+    UpdateRendererViewportStateFromImage(placedImage.drawn,
+                                         placedImage.screenMin.x, placedImage.screenMin.y,
+                                         placedImage.screenMax.x, placedImage.screenMax.y);
+    DrawInputCaptureIndicator(placedImage.drawn,
+                              placedImage.screenMin.x, placedImage.screenMin.y,
+                              placedImage.screenMax.x, placedImage.screenMax.y);
 
     ImGui::EndTabItem();
+}
+
+void EditorUI::DrawInputCaptureToolbar() {
+    // Single-row toolbar above the rendered image so the toggle is always
+    // discoverable and right next to the thing it affects.
+    const bool previous = inputCaptureEnabled_;
+    bool checkboxValue = previous;
+    if (ImGui::Checkbox("Capture Input", &checkboxValue) && checkboxValue != previous) {
+        inputCaptureEnabled_ = checkboxValue;
+        if (onInputCaptureEnabledChanged_) {
+            onInputCaptureEnabledChanged_(checkboxValue);
+        }
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(F1 toggles)");
+    if (inputCaptureEnabled_) {
+        ImGui::SameLine();
+        const ImVec4 badgeColor = inputCaptureActive_ ? ImVec4(0.18f, 0.78f, 0.34f, 1.0f)
+                                                       : ImVec4(0.85f, 0.65f, 0.20f, 1.0f);
+        ImGui::TextColored(badgeColor, "%s", inputCaptureActive_ ? "INPUT ACTIVE" : "input idle");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s",
+                              inputCaptureActive_
+                                  ? "JIT scene is receiving keyboard / mouse input."
+                                  : "Capture is enabled but the renderer panel is not focused, "
+                                    "or ImGui is consuming input. Click the image to focus.");
+        }
+    }
+}
+
+void EditorUI::UpdateRendererViewportStateFromImage(bool drawn,
+                                                    float minX, float minY,
+                                                    float maxX, float maxY) {
+    RendererViewportState state{};
+    state.visible = drawn;
+    if (drawn) {
+        state.focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+        const ImVec2 mouse = ImGui::GetMousePos();
+        state.hovered = (mouse.x >= minX && mouse.x < maxX && mouse.y >= minY && mouse.y < maxY);
+        state.screenMinX = minX;
+        state.screenMinY = minY;
+        state.screenMaxX = maxX;
+        state.screenMaxY = maxY;
+        state.textureWidth = rendererTextureWidth_;
+        state.textureHeight = rendererTextureHeight_;
+    }
+    pendingRendererViewportState_ = state;
+    rendererViewportState_ = state;
+}
+
+void EditorUI::DrawInputCaptureIndicator(bool drawn,
+                                         float minX, float minY,
+                                         float maxX, float maxY) {
+    if (!drawn || !inputCaptureEnabled_) {
+        return;
+    }
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    if (drawList == nullptr) {
+        return;
+    }
+    const ImU32 color = inputCaptureActive_
+                            ? IM_COL32(46, 200, 87, 230)
+                            : IM_COL32(217, 167, 51, 200);
+    const float thickness = inputCaptureActive_ ? 2.5f : 1.5f;
+    drawList->AddRect(ImVec2(minX - 1.0f, minY - 1.0f),
+                      ImVec2(maxX + 1.0f, maxY + 1.0f),
+                      color,
+                      0.0f,
+                      0,
+                      thickness);
+}
+
+void EditorUI::SetInputCaptureEnabled(bool enabled) {
+    inputCaptureEnabled_ = enabled;
 }
 
 void EditorUI::DrawPipelineTab() {
