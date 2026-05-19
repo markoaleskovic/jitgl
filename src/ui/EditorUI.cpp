@@ -10,9 +10,12 @@
 #include <cstdio>
 #include <cstring>
 #include <cmath>
+#include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <ranges>
 #include <sstream>
+#include <system_error>
 #include <type_traits>
 #include <nfd.hpp>
 
@@ -531,12 +534,11 @@ void EditorUI::Init(GLFWwindow *win) {
     LoadShowcasePreference();
     LoadNetworkPreference();
     LoadAllSettingsFromPrefs();
-    openWelcomePopupRequested_ = showWelcomeOnStartup_;
-    welcomePopupOpenedThisSession_ = false;
     doNotShowWelcomeAgain_ = false;
-    openShowcaseGuidePopupRequested_ = loadShowcaseWorkspaceOnStartup_;
-    showcaseGuidePopupOpenedThisSession_ = false;
     disableShowcaseStartupFromGuide_ = !loadShowcaseWorkspaceOnStartup_;
+    openGuidesPopupRequested_ = showWelcomeOnStartup_;
+    guidesPopupOpenedThisSession_ = false;
+    currentGuidePageIndex_ = 0;
 
     initialized_ = true;
     shutdown_ = false;
@@ -597,9 +599,7 @@ void EditorUI::Draw() {
     DrawUniformsTab();
     DrawIncomingWorkspaceSharePopup();
     DrawNetworkDiagnosticsWindow();
-    DrawWelcomePopup();
-    DrawShowcaseGuidePopup();
-    DrawRuntimeGuidePopup();
+    DrawGuidesPopup();
     DrawSettingsWindow();
     DrawFpsOverlay();
 }
@@ -724,6 +724,51 @@ void EditorUI::SetExportWorkspaceCallback(std::function<bool(const std::string&)
 
 void EditorUI::SetImportWorkspaceCallback(std::function<bool(const std::string&)> cb) {
     onImportWorkspace_ = std::move(cb);
+}
+
+void EditorUI::SetOpenFolderCallback(std::function<bool(const std::string&)> cb) {
+    onOpenFolder_ = std::move(cb);
+}
+
+std::string EditorUI::GetWorkspaceRootPath() const {
+    return appPreferences_.GetString("workspace.root_dir", std::string{});
+}
+
+void EditorUI::SetWorkspaceRootPath(const std::string& path) {
+    workspaceRootPath_ = path;
+    appPreferences_.SetString("workspace.root_dir", path);
+    (void)appPreferences_.Save();
+}
+
+void EditorUI::ClearWorkspaceState() {
+    openDocuments.clear();
+    workspaceNames_.clear();
+    {
+        std::scoped_lock lock(workspaceMutex_);
+        activeWorkspaceName_.clear();
+    }
+    activeDocumentPath_.clear();
+    pendingDocumentSelectionPath_.clear();
+    {
+        std::scoped_lock lock(consoleMutex);
+        workspaceConsoleLines_.clear();
+    }
+    {
+        std::scoped_lock lock(logMutex);
+        workspaceLogLines_.clear();
+    }
+    pipelinePasses_.clear();
+    pipelineResources_.clear();
+    pipelineConnections_.clear();
+    pipelineDependencies_.clear();
+    pipelineGlobalUniforms_.clear();
+    uniformValues_.clear();
+    rendererTexture_ = 0;
+    rendererTextureWidth_ = 0;
+    rendererTextureHeight_ = 0;
+    isCompiling_ = false;
+    hasCompileError_ = false;
+    isStalled_ = false;
 }
 
 void EditorUI::SetShareWorkspaceCallback(std::function<void(const std::vector<std::string>&, bool)> cb) {
@@ -972,94 +1017,130 @@ void EditorUI::SetDpiScale(float newScale) {
     pendingDpiScale_ = newScale;
 }
 
-void EditorUI::DrawWelcomePopup() {
-    const ManagedCenteredModal popup("Welcome to JITGL",
-                                     &openWelcomePopupRequested_,
-                                     &welcomePopupOpenedThisSession_);
-    if (!popup.Begin(ImVec2(860.0f, 680.0f),
-                     ImVec2(720.0f, 520.0f),
-                     [this]() { doNotShowWelcomeAgain_ = !showWelcomeOnStartup_; })) {
+void EditorUI::DrawGuidesPopup() {
+    if (guidePages_.empty()) {
         return;
     }
 
-    const float footerReserve = ImGui::GetFrameHeightWithSpacing() * 2.5f;
-    if (ImGui::BeginChild("WelcomeScrollableContent", ImVec2(0.0f, -footerReserve), false,
-                          ImGuiWindowFlags_AlwaysVerticalScrollbar)) {
-        DrawMarkdown(welcomeMarkdown_, IsLightTheme());
-    }
-    ImGui::EndChild();
-
-    ImGui::Separator();
-    ImGui::Checkbox("Do not show this again", &doNotShowWelcomeAgain_);
-
-    const float startButtonWidth = 90.0f;
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - startButtonWidth);
-    if (ImGui::Button("Start", ImVec2(startButtonWidth, 0.0f))) {
-        showWelcomeOnStartup_ = !doNotShowWelcomeAgain_;
-        SaveWelcomePreference();
-        popup.CloseCurrent();
-    }
-
-    ImGui::EndPopup();
-}
-
-void EditorUI::DrawRuntimeGuidePopup() {
-    const ManagedCenteredModal popup("Runtime State Guide",
-                                     &openRuntimeGuidePopupRequested_,
-                                     &runtimeGuidePopupOpenedThisSession_);
-    if (!popup.Begin(ImVec2(900.0f, 720.0f), ImVec2(760.0f, 560.0f))) {
-        return;
-    }
-
-    const float footerReserve = ImGui::GetFrameHeightWithSpacing() * 2.1f;
-    if (ImGui::BeginChild("RuntimeGuideScrollableContent", ImVec2(0.0f, -footerReserve), false,
-                          ImGuiWindowFlags_AlwaysVerticalScrollbar)) {
-        DrawMarkdown(guideMarkdown_, IsLightTheme());
-    }
-    ImGui::EndChild();
-
-    ImGui::Separator();
-    const float closeButtonWidth = 90.0f;
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - closeButtonWidth);
-    if (ImGui::Button("Close", ImVec2(closeButtonWidth, 0.0f))) {
-        popup.CloseCurrent();
-    }
-
-    ImGui::EndPopup();
-}
-
-void EditorUI::DrawShowcaseGuidePopup() {
-    const ManagedCenteredModal popup("Showcase Workspace Guide",
-                                     &openShowcaseGuidePopupRequested_,
-                                     &showcaseGuidePopupOpenedThisSession_);
-    if (!popup.Begin(ImVec2(940.0f, 740.0f),
+    const ManagedCenteredModal popup("Guides",
+                                     &openGuidesPopupRequested_,
+                                     &guidesPopupOpenedThisSession_);
+    if (!popup.Begin(ImVec2(960.0f, 760.0f),
                      ImVec2(760.0f, 560.0f),
-                     [this]() { disableShowcaseStartupFromGuide_ = !loadShowcaseWorkspaceOnStartup_; })) {
+                     [this]() {
+                         doNotShowWelcomeAgain_ = !showWelcomeOnStartup_;
+                         disableShowcaseStartupFromGuide_ = !loadShowcaseWorkspaceOnStartup_;
+                         if (currentGuidePageIndex_ < 0 ||
+                             currentGuidePageIndex_ >= static_cast<int>(guidePages_.size())) {
+                             currentGuidePageIndex_ = 0;
+                         }
+                     })) {
         return;
     }
 
-    const float footerReserve = ImGui::GetFrameHeightWithSpacing() * 2.8f;
-    if (ImGui::BeginChild("ShowcaseGuideScrollableContent", ImVec2(0.0f, -footerReserve), false,
+    const int pageCount = static_cast<int>(guidePages_.size());
+    if (currentGuidePageIndex_ < 0 || currentGuidePageIndex_ >= pageCount) {
+        currentGuidePageIndex_ = 0;
+    }
+    const GuidePage& page = guidePages_[static_cast<std::size_t>(currentGuidePageIndex_)];
+    const bool onWelcomePage = (page.filename == "welcome.md");
+    const bool onShowcasePage = (page.filename == "showcase_guide.md");
+
+    // Tab row: one button per page; the active page is highlighted.
+    ImGui::PushID("GuidesTabs");
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float availableWidth = ImGui::GetContentRegionAvail().x;
+    const float spacing = style.ItemSpacing.x;
+    const float tabWidth = std::max(80.0f, (availableWidth - spacing * static_cast<float>(pageCount - 1)) /
+                                            static_cast<float>(pageCount));
+    for (int i = 0; i < pageCount; ++i) {
+        if (i > 0) {
+            ImGui::SameLine();
+        }
+        const bool isActive = (i == currentGuidePageIndex_);
+        if (isActive) {
+            ImGui::PushStyleColor(ImGuiCol_Button, style.Colors[ImGuiCol_ButtonActive]);
+        }
+        if (ImGui::Button(guidePages_[static_cast<std::size_t>(i)].title.c_str(),
+                          ImVec2(tabWidth, 0.0f))) {
+            currentGuidePageIndex_ = i;
+        }
+        if (isActive) {
+            ImGui::PopStyleColor();
+        }
+    }
+    ImGui::PopID();
+
+    ImGui::Spacing();
+    ImGui::TextDisabled("Page %d / %d  -  %s",
+                        currentGuidePageIndex_ + 1,
+                        pageCount,
+                        page.title.c_str());
+    ImGui::Separator();
+
+    // Reserve enough room for the footer: separator + (per-page extras row) +
+    // navigation row. Showcase page has an extra row of inline controls.
+    float footerReserve = ImGui::GetFrameHeightWithSpacing() * 2.4f;
+    if (onWelcomePage || onShowcasePage) {
+        footerReserve += ImGui::GetFrameHeightWithSpacing() * 1.0f;
+    }
+
+    if (ImGui::BeginChild("GuidesScrollableContent", ImVec2(0.0f, -footerReserve), false,
                           ImGuiWindowFlags_AlwaysVerticalScrollbar)) {
-        DrawMarkdown(showcaseGuideMarkdown_, IsLightTheme());
+        DrawMarkdown(page.markdown, IsLightTheme());
     }
     ImGui::EndChild();
 
     ImGui::Separator();
-    ImGui::Checkbox("Disable showcase workspace + guide on startup", &disableShowcaseStartupFromGuide_);
 
-    if (ImGui::Button("Load Showcase Workspace Now")) {
-        if (onLoadShowcaseWorkspace_) {
-            onLoadShowcaseWorkspace_();
+    // Per-page extras: welcome lets the user opt out of startup; showcase
+    // exposes the workspace-load and startup-toggle controls.
+    if (onWelcomePage) {
+        ImGui::Checkbox("Do not show this on startup", &doNotShowWelcomeAgain_);
+    } else if (onShowcasePage) {
+        ImGui::Checkbox("Disable showcase workspace + guide on startup",
+                        &disableShowcaseStartupFromGuide_);
+        ImGui::SameLine();
+        if (ImGui::Button("Load Showcase Workspace Now")) {
+            if (onLoadShowcaseWorkspace_) {
+                onLoadShowcaseWorkspace_();
+            }
         }
     }
 
-    const float closeButtonWidth = 100.0f;
+    const float navButtonWidth = 100.0f;
+    const float closeButtonWidth = 90.0f;
+    const bool hasPrev = currentGuidePageIndex_ > 0;
+    const bool hasNext = currentGuidePageIndex_ < pageCount - 1;
+
+    if (!hasPrev) ImGui::BeginDisabled();
+    if (ImGui::Button("< Previous", ImVec2(navButtonWidth, 0.0f))) {
+        currentGuidePageIndex_ = std::max(0, currentGuidePageIndex_ - 1);
+    }
+    if (!hasPrev) ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    if (!hasNext) ImGui::BeginDisabled();
+    if (ImGui::Button("Next >", ImVec2(navButtonWidth, 0.0f))) {
+        currentGuidePageIndex_ = std::min(pageCount - 1, currentGuidePageIndex_ + 1);
+    }
+    if (!hasNext) ImGui::EndDisabled();
+
     ImGui::SameLine();
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - closeButtonWidth);
-    if (ImGui::Button("Continue", ImVec2(closeButtonWidth, 0.0f))) {
-        loadShowcaseWorkspaceOnStartup_ = !disableShowcaseStartupFromGuide_;
-        SaveShowcasePreference();
+    if (ImGui::Button("Close", ImVec2(closeButtonWidth, 0.0f))) {
+        // Persist welcome-on-startup choice (controlled from welcome page).
+        const bool newShowWelcome = !doNotShowWelcomeAgain_;
+        if (newShowWelcome != showWelcomeOnStartup_) {
+            showWelcomeOnStartup_ = newShowWelcome;
+            SaveWelcomePreference();
+        }
+        // Persist showcase-startup choice (controlled from showcase page).
+        const bool newShowcaseStartup = !disableShowcaseStartupFromGuide_;
+        if (newShowcaseStartup != loadShowcaseWorkspaceOnStartup_) {
+            loadShowcaseWorkspaceOnStartup_ = newShowcaseStartup;
+            SaveShowcasePreference();
+        }
         popup.CloseCurrent();
     }
 
@@ -1171,9 +1252,46 @@ void EditorUI::LoadMarkdownFiles() {
         return buffer.str();
     };
 
-    welcomeMarkdown_ = loadFile("assets/welcome.md");
-    guideMarkdown_ = loadFile("assets/guide.md");
-    showcaseGuideMarkdown_ = loadFile("assets/showcase_guide.md");
+    guidePages_.clear();
+    const std::array<std::pair<const char*, const char*>, 4> pageDescriptors{{
+        {"Welcome",       "welcome.md"},
+        {"Showcase",      "showcase_guide.md"},
+        {"Runtime State", "guide.md"},
+        {"Inputs",        "inputs.md"},
+    }};
+    guidePages_.reserve(pageDescriptors.size() + 1);
+    for (const auto& [title, filename] : pageDescriptors) {
+        GuidePage page;
+        page.title = title;
+        page.filename = filename;
+        page.markdown = loadFile(std::string("assets/") + filename);
+        guidePages_.emplace_back(std::move(page));
+    }
+
+    // engine.hpp is the JIT preamble auto-prepended to every scene.cpp. We
+    // surface it here so users can browse the macros / helpers / key codes
+    // without leaving the app. Loaded from disk so it stays in sync with the
+    // file the JIT engine actually uses.
+    GuidePage enginePage;
+    enginePage.title = "engine.hpp";
+    enginePage.filename = "engine.hpp";
+    const std::string engineSource = loadFile("runtime/engine.hpp");
+    std::string engineDoc;
+    engineDoc.reserve(engineSource.size() + 512);
+    engineDoc.append("# engine.hpp\n\n");
+    engineDoc.append("This header is auto-prepended to every workspace's `scene.cpp` ");
+    engineDoc.append("by the JIT engine. It defines the input macros, `STATE_I` / `STATE_F` ");
+    engineDoc.append("helpers, key/mouse code constants, and the `jit_*` runtime helpers ");
+    engineDoc.append("referenced throughout the other guides. The contents below are the ");
+    engineDoc.append("actual file as shipped with this build.\n\n");
+    engineDoc.append("```cpp\n");
+    engineDoc.append(engineSource);
+    if (engineDoc.empty() || engineDoc.back() != '\n') {
+        engineDoc.push_back('\n');
+    }
+    engineDoc.append("```\n");
+    enginePage.markdown = std::move(engineDoc);
+    guidePages_.emplace_back(std::move(enginePage));
 }
 
 void EditorUI::TriggerChordAction(bool held, bool* chordState, const std::function<void()>& action) {
@@ -1357,6 +1475,36 @@ void EditorUI::DrawFileMenu(const std::vector<std::string>& workspaceNamesSnapsh
         return;
     }
 
+    if (ImGui::MenuItem("Open Folder...", "Ctrl+O")) {
+        nfdchar_t* outPath = nullptr;
+        const nfdresult_t result = NFD_PickFolder(&outPath,
+                                                  workspaceRootPath_.empty() ? nullptr
+                                                                              : workspaceRootPath_.c_str());
+        if (result == NFD_OKAY && outPath != nullptr) {
+            const std::string chosenPath = outPath;
+            NFD_FreePath(outPath);
+            bool opened = false;
+            if (onOpenFolder_) {
+                opened = onOpenFolder_(chosenPath);
+            }
+            if (opened) {
+                AddLogOutput("[Workspace] Open folder: " + chosenPath);
+            } else {
+                AddLogOutput("[Workspace Error] Failed to open folder '" + chosenPath + "'.");
+            }
+        }
+    }
+
+    if (!workspaceRootPath_.empty()) {
+        const std::string folderLine = "Folder: " + workspaceRootPath_;
+        ImGui::Separator();
+        ImGui::TextDisabled("%s", folderLine.c_str());
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", workspaceRootPath_.c_str());
+        }
+        ImGui::Separator();
+    }
+
     if (ImGui::MenuItem("New Workspace...", "Ctrl+N")) {
         openCreateWorkspacePopup_ = true;
     }
@@ -1492,28 +1640,27 @@ void EditorUI::DrawHelpMenu() {
         return;
     }
 
-    if (ImGui::MenuItem("Getting Started")) {
-        openWelcomePopupRequested_ = true;
-        welcomePopupOpenedThisSession_ = false;
+    if (ImGui::MenuItem("Guides...")) {
+        openGuidesPopupRequested_ = true;
+        guidesPopupOpenedThisSession_ = false;
     }
-    if (ImGui::MenuItem("Runtime State Guide")) {
-        openRuntimeGuidePopupRequested_ = true;
-        runtimeGuidePopupOpenedThisSession_ = false;
+    if (ImGui::BeginMenu("Jump to page")) {
+        for (std::size_t i = 0; i < guidePages_.size(); ++i) {
+            if (ImGui::MenuItem(guidePages_[i].title.c_str())) {
+                currentGuidePageIndex_ = static_cast<int>(i);
+                openGuidesPopupRequested_ = true;
+                guidesPopupOpenedThisSession_ = false;
+            }
+        }
+        ImGui::EndMenu();
     }
-    if (ImGui::MenuItem("Showcase Guide")) {
-        openShowcaseGuidePopupRequested_ = true;
-        showcaseGuidePopupOpenedThisSession_ = false;
-    }
+    ImGui::Separator();
     bool startupEnabled = loadShowcaseWorkspaceOnStartup_;
     if (ImGui::MenuItem("Enable Showcase Startup", nullptr, &startupEnabled)) {
         loadShowcaseWorkspaceOnStartup_ = startupEnabled;
         SaveShowcasePreference();
-        if (loadShowcaseWorkspaceOnStartup_) {
-            openShowcaseGuidePopupRequested_ = true;
-            showcaseGuidePopupOpenedThisSession_ = false;
-            if (onLoadShowcaseWorkspace_) {
-                onLoadShowcaseWorkspace_();
-            }
+        if (loadShowcaseWorkspaceOnStartup_ && onLoadShowcaseWorkspace_) {
+            onLoadShowcaseWorkspace_();
         }
     }
     if (ImGui::MenuItem("Load Showcase Workspace Now")) {
@@ -2360,6 +2507,33 @@ void EditorUI::DrawInputCaptureToolbar() {
     }
     ImGui::SameLine();
     ImGui::TextDisabled("(F1 toggles)");
+
+    // Cursor-recenter toggle. When active and input capture is gated on,
+    // the host warps the OS cursor to the viewport center each frame and
+    // hides it -- the canonical setup for mouse-look cameras.
+    ImGui::SameLine();
+    const bool recenterPrev = cursorRecenterEnabled_;
+    const char* recenterLabel = recenterPrev ? "Recenter Cursor: ON" : "Recenter Cursor: OFF";
+    if (recenterPrev) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonActive]);
+    }
+    if (ImGui::Button(recenterLabel)) {
+        cursorRecenterEnabled_ = !recenterPrev;
+        if (onCursorRecenterEnabledChanged_) {
+            onCursorRecenterEnabledChanged_(cursorRecenterEnabled_);
+        }
+    }
+    if (recenterPrev) {
+        ImGui::PopStyleColor();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Warp the OS cursor to the renderer center every frame "
+                          "and hide it. Use this for mouse-look / FPS-style scenes "
+                          "so mouseDX / mouseDY keep delivering deltas without the "
+                          "cursor drifting off-screen.\nShortcut: F2");
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(F2)");
     if (inputCaptureEnabled_) {
         ImGui::SameLine();
         const ImVec4 badgeColor = inputCaptureActive_ ? ImVec4(0.18f, 0.78f, 0.34f, 1.0f)
@@ -2419,6 +2593,10 @@ void EditorUI::DrawInputCaptureIndicator(bool drawn,
 
 void EditorUI::SetInputCaptureEnabled(bool enabled) {
     inputCaptureEnabled_ = enabled;
+}
+
+void EditorUI::SetCursorRecenterEnabled(bool enabled) {
+    cursorRecenterEnabled_ = enabled;
 }
 
 void EditorUI::DrawPipelineTab() {
@@ -2804,6 +2982,259 @@ void EditorUI::DrawPipelineGlobalUniformWindow() {
     }
     ImGui::End();
     showGlobalUniformsWindow_ = open;
+}
+
+void EditorUI::SetActiveWorkspaceDirectory(const std::string& workspaceDir) {
+    activeWorkspaceDir_ = workspaceDir;
+}
+
+void EditorUI::SetSharedAssetsDirectory(const std::string& sharedDir) {
+    sharedAssetsDir_ = sharedDir;
+}
+
+namespace {
+    bool IsKnownTextureExtension(const std::string& lowerExt) {
+        return lowerExt == ".png" || lowerExt == ".jpg" || lowerExt == ".jpeg" ||
+               lowerExt == ".bmp" || lowerExt == ".tga" || lowerExt == ".psd" ||
+               lowerExt == ".hdr" || lowerExt == ".gif";
+    }
+
+    bool IsKnownMeshExtension(const std::string& lowerExt) {
+        return lowerExt == ".obj";
+    }
+
+    std::string LowercaseExt(const std::filesystem::path& p) {
+        std::string ext = p.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return ext;
+    }
+
+    // Spawn the OS file manager pointed at the asset's directory. Best-effort
+    // and silently no-ops on platforms where we don't have a command.
+    void RevealInFileManager(const std::string& absolutePath) {
+        const std::filesystem::path parent = std::filesystem::path(absolutePath).parent_path();
+        if (parent.empty()) {
+            return;
+        }
+        const std::string quoted = "'" + parent.string() + "'";
+#if defined(_WIN32)
+        std::system(("explorer " + quoted).c_str());
+#elif defined(__APPLE__)
+        std::system(("open " + quoted).c_str());
+#else
+        std::system(("xdg-open " + quoted + " >/dev/null 2>&1 &").c_str());
+#endif
+    }
+}  // namespace
+
+std::string EditorUI::FormatBytes(std::uintmax_t bytes) {
+    constexpr std::uintmax_t kKiB = 1024u;
+    constexpr std::uintmax_t kMiB = kKiB * 1024u;
+    char buf[32]{};
+    if (bytes >= kMiB) {
+        std::snprintf(buf, sizeof(buf), "%.2f MB",
+                      static_cast<double>(bytes) / static_cast<double>(kMiB));
+    } else if (bytes >= kKiB) {
+        std::snprintf(buf, sizeof(buf), "%.1f KB",
+                      static_cast<double>(bytes) / static_cast<double>(kKiB));
+    } else {
+        std::snprintf(buf, sizeof(buf), "%llu B",
+                      static_cast<unsigned long long>(bytes));
+    }
+    return buf;
+}
+
+void EditorUI::HandleFileDrops(const std::vector<std::string>& paths) {
+    if (paths.empty()) {
+        return;
+    }
+    if (activeWorkspaceDir_.empty()) {
+        AddLogOutput("[Assets] Drop ignored -- no active workspace.");
+        return;
+    }
+    const std::filesystem::path assetsDir = std::filesystem::path(activeWorkspaceDir_) / "assets";
+    std::error_code ec;
+    std::filesystem::create_directories(assetsDir, ec);
+    if (ec) {
+        AddLogOutput("[Assets Error] Could not create '" + assetsDir.string() + "'.");
+        return;
+    }
+
+    int copied = 0;
+    int skipped = 0;
+    for (const auto& src : paths) {
+        const std::filesystem::path srcPath(src);
+        if (!std::filesystem::is_regular_file(srcPath, ec) || ec) {
+            ++skipped;
+            continue;
+        }
+        const std::filesystem::path dst = assetsDir / srcPath.filename();
+        std::filesystem::copy_file(srcPath, dst,
+                                   std::filesystem::copy_options::overwrite_existing, ec);
+        if (ec) {
+            ++skipped;
+            continue;
+        }
+        ++copied;
+        AddLogOutput("[Assets] Imported '" + srcPath.filename().string() +
+                     "' into " + assetsDir.string());
+    }
+
+    char status[256];
+    std::snprintf(status, sizeof(status), "Imported %d file%s%s",
+                  copied, (copied == 1 ? "" : "s"),
+                  (skipped > 0 ? " (some skipped)" : ""));
+    assetsStatusLine_ = status;
+    assetsStatusLineExpiry_ = ImGui::GetTime() + 4.0;
+}
+
+void EditorUI::DrawAssetEntriesUnder(const std::string& rootDir, bool isShared) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (!fs::is_directory(rootDir, ec) || ec) {
+        ImGui::TextDisabled("(directory missing)");
+        return;
+    }
+
+    // Collect files first so we can sort & count them.
+    struct Entry {
+        std::string absolute;
+        std::string relative;  // for the load-call string
+        std::string lowerExt;
+        std::uintmax_t size = 0;
+    };
+    std::vector<Entry> entries;
+    for (auto& it : fs::recursive_directory_iterator(
+             rootDir, fs::directory_options::skip_permission_denied, ec)) {
+        if (ec || !it.is_regular_file(ec)) {
+            continue;
+        }
+        const fs::path p = it.path();
+        if (p.filename().string().front() == '.') {
+            continue;  // skip .gitkeep / hidden
+        }
+        Entry e;
+        e.absolute = p.string();
+        e.lowerExt = LowercaseExt(p);
+        const fs::path rel = fs::relative(p, rootDir, ec);
+        e.relative = ec ? p.filename().string() : rel.generic_string();
+        e.size = fs::file_size(p, ec);
+        if (ec) e.size = 0;
+        entries.emplace_back(std::move(e));
+    }
+    std::sort(entries.begin(), entries.end(),
+              [](const Entry& a, const Entry& b) { return a.relative < b.relative; });
+
+    if (entries.empty()) {
+        ImGui::TextDisabled(isShared ? "(no shared assets)" : "(no workspace assets yet -- drop files here)");
+        return;
+    }
+
+    constexpr ImGuiTableFlags tableFlags =
+        ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp |
+        ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_ScrollY;
+    const float tableHeight = std::clamp(static_cast<float>(entries.size()) *
+                                             ImGui::GetTextLineHeightWithSpacing() + 40.0f,
+                                         80.0f, 320.0f);
+    const std::string tableId = isShared ? "##assets_shared" : "##assets_workspace";
+    if (!ImGui::BeginTable(tableId.c_str(), 3, tableFlags, ImVec2(0.0f, tableHeight))) {
+        return;
+    }
+    ImGui::TableSetupColumn("File", ImGuiTableColumnFlags_WidthStretch, 6.0f);
+    ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+    ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+    ImGui::TableHeadersRow();
+
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        const Entry& e = entries[i];
+        ImGui::TableNextRow();
+        ImGui::PushID(static_cast<int>(i));
+
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextUnformatted(e.relative.c_str());
+
+        ImGui::TableSetColumnIndex(1);
+        const char* type = IsKnownMeshExtension(e.lowerExt) ? "mesh"
+                          : IsKnownTextureExtension(e.lowerExt) ? "texture"
+                          : "file";
+        ImGui::TextDisabled("%s", type);
+
+        ImGui::TableSetColumnIndex(2);
+        ImGui::TextDisabled("%s", FormatBytes(e.size).c_str());
+
+        // Right-click context menu attached to the row itself.
+        if (ImGui::BeginPopupContextItem("AssetRowContext")) {
+            if (ImGui::MenuItem("Copy load call")) {
+                std::string call;
+                if (IsKnownMeshExtension(e.lowerExt)) {
+                    call = "jit_load_mesh(ctx, \"" + e.relative + "\")";
+                } else if (IsKnownTextureExtension(e.lowerExt)) {
+                    call = "jit_load_texture(ctx, \"" + e.relative + "\")";
+                } else {
+                    call = "// " + e.relative;
+                }
+                ImGui::SetClipboardText(call.c_str());
+                AddLogOutput("[Assets] Copied to clipboard: " + call);
+            }
+            if (ImGui::MenuItem("Copy path")) {
+                ImGui::SetClipboardText(e.relative.c_str());
+            }
+            if (ImGui::MenuItem("Reveal in file manager")) {
+                RevealInFileManager(e.absolute);
+            }
+            ImGui::Separator();
+            if (!isShared && ImGui::MenuItem("Delete")) {
+                std::error_code delErr;
+                std::filesystem::remove(e.absolute, delErr);
+                if (delErr) {
+                    AddLogOutput("[Assets Error] Failed to delete '" + e.relative + "'.");
+                } else {
+                    AddLogOutput("[Assets] Deleted '" + e.relative + "'.");
+                }
+            }
+            ImGui::EndPopup();
+        }
+
+        ImGui::PopID();
+    }
+    ImGui::EndTable();
+}
+
+void EditorUI::DrawAssetsTab() {
+    if (!ImGui::BeginTabItem("Assets")) {
+        return;
+    }
+
+    ImGui::TextDisabled("Drag files onto the JITGL window to import. The active workspace's "
+                        "assets/ folder is the first lookup root for jit_load_texture / "
+                        "jit_load_mesh; the shared root assets/ is the fallback.");
+    ImGui::Spacing();
+
+    if (assetsStatusLineExpiry_ > ImGui::GetTime() && !assetsStatusLine_.empty()) {
+        ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.45f, 1.0f), "%s", assetsStatusLine_.c_str());
+    }
+
+    ImGui::SeparatorText("Workspace assets");
+    if (activeWorkspaceDir_.empty()) {
+        ImGui::TextDisabled("(no active workspace)");
+    } else {
+        const std::string workspaceAssets =
+            (std::filesystem::path(activeWorkspaceDir_) / "assets").string();
+        ImGui::TextDisabled("%s", workspaceAssets.c_str());
+        DrawAssetEntriesUnder(workspaceAssets, /*isShared=*/false);
+    }
+
+    ImGui::Spacing();
+    ImGui::SeparatorText("Shared (root) assets");
+    if (sharedAssetsDir_.empty()) {
+        ImGui::TextDisabled("(shared assets dir not set)");
+    } else {
+        ImGui::TextDisabled("%s", sharedAssetsDir_.c_str());
+        DrawAssetEntriesUnder(sharedAssetsDir_, /*isShared=*/true);
+    }
+
+    ImGui::EndTabItem();
 }
 
 void EditorUI::DrawPlaybackTransportBar() {
@@ -3386,6 +3817,7 @@ void EditorUI::DrawConsolePane() {
     if (ImGui::BeginTabBar("UtilityTabs", ImGuiTabBarFlags_None)) {
         DrawRendererTab();
         DrawPipelineTab();
+        DrawAssetsTab();
         DrawConsoleTab(currentWorkspace);
         DrawLogsTab(currentWorkspace);
         ImGui::EndTabBar();

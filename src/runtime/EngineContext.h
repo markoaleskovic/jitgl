@@ -5,6 +5,44 @@
 #include <cstddef>
 #include <cstdint>
 
+// JIT-visible texture handle. Filled by jit_load_texture / the host
+// AssetRegistry. `id` is a real GL texture id usable with glBindTexture etc.;
+// `is_srgb` / `is_hdr` describe the upload format so shaders can branch.
+struct JitTexture {
+    unsigned int id = 0;
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+    std::uint8_t is_hdr = 0;
+    std::uint8_t is_srgb = 0;
+    std::uint8_t is_fallback = 0;
+    std::uint8_t _pad = 0;
+};
+
+// JIT-visible mesh handle. The host owns the underlying VAO/VBO/EBO and
+// guarantees the canonical interleaved layout described in engine.hpp:
+//   loc 0  vec3 position
+//   loc 1  vec3 normal
+//   loc 2  vec2 uv
+//   loc 3  vec4 tangent (w = bitangent sign)
+struct JitMesh {
+    unsigned int vao = 0;
+    unsigned int vbo = 0;
+    unsigned int ebo = 0;
+    int index_count = 0;
+    int vertex_count = 0;
+    float bbox_min[3] = {0.0f, 0.0f, 0.0f};
+    float bbox_max[3] = {0.0f, 0.0f, 0.0f};
+    std::uint8_t is_fallback = 0;
+    std::uint8_t _pad[3] = {0, 0, 0};
+};
+
+struct EngineContext;
+extern "C" {
+    using JitLoadTextureFn = JitTexture (*)(EngineContext* ctx, const char* path);
+    using JitLoadMeshFn    = JitMesh    (*)(EngineContext* ctx, const char* path);
+}
+
 // Per-frame snapshot of keyboard and mouse state, populated by the host before
 // each JIT callback. JIT code reads this through KEY_DOWN / MOUSE_DOWN helpers
 // in engine.hpp; it should never write to it. When input capture is disabled
@@ -68,6 +106,14 @@ struct EngineContext {
     // before every update()/render()/compute() invocation. Zeroed when the
     // user has disabled input capture (or when ImGui is consuming input).
     InputState input{};
+
+    // Opaque pointer to the host's per-workspace AssetRegistry. JIT scenes
+    // never dereference this directly; the load_*_fn shims do. Host sets
+    // `assets` whenever the active workspace changes; the function pointers
+    // are set once during engine init.
+    void* assets = nullptr;
+    JitLoadTextureFn load_texture_fn = nullptr;
+    JitLoadMeshFn    load_mesh_fn = nullptr;
 
     // Helper to get memory that lives only for the current run/reload.
     void* allocate(std::size_t size, std::size_t alignment = alignof(std::max_align_t)) {

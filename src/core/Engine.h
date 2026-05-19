@@ -21,6 +21,7 @@
 #include "uniform/UniformControls.h"
 #include "uniform/UniformRegistry.h"
 #include "system/network/LanWorkspaceShareService.h"
+#include "assets/AssetRegistry.h"
 
 struct GLFWwindow;
 class FileWatcher;
@@ -115,7 +116,9 @@ private:
         double timelineMaxSeconds = 30.0;
     };
 
+    std::string workspaceRoot_;
     std::unordered_map<std::string, WorkspaceState> workspaces_;
+    std::unordered_map<std::string, std::unique_ptr<AssetRegistry>> workspaceAssetRegistries_;
     std::vector<std::string> workspaceOrder_;
     std::unordered_map<std::string, std::string> fileToWorkspace_;
     std::unordered_map<std::string, bool> workspaceDirty_;
@@ -206,6 +209,8 @@ private:
     void SwitchToWorkspace(const std::string& workspaceName, bool focusCppDocument);
     bool ExportActiveWorkspace(const std::string& targetPath) const;
     bool ImportWorkspace(const std::string& sourcePath);
+    bool OpenWorkspaceFolder(const std::string& newRoot);
+    void UpdateWindowTitleForCurrentRoot();
     bool LoadShowcaseWorkspaceFromAssets(bool focusWorkspace);
     bool InitLanShare();
     void UpdateLanShareUiState();
@@ -318,14 +323,23 @@ private:
     bool prevKeyStateValid_ = false;
     bool prevMouseButtonStateValid_ = false;
     bool inputHotkeyHeld_ = false;
+    bool cursorRecenterEnabled_ = false;
+    bool cursorRecenterHotkeyHeld_ = false;
+    bool cursorCurrentlyHidden_ = false;
     double prevMouseRawX_ = 0.0;
     double prevMouseRawY_ = 0.0;
     bool prevMousePosValid_ = false;
     float pendingScrollX_ = 0.0f;
     float pendingScrollY_ = 0.0f;
     static void GlfwScrollTrampoline(GLFWwindow* window, double xoffset, double yoffset);
+    static void GlfwDropTrampoline(GLFWwindow* window, int count, const char** paths);
     void HandleScrollEvent(double xoffset, double yoffset);
+    void HandleDropEvent(int count, const char** paths);
     void UpdateInputState();
+    void ApplyCursorRecenterMode(bool active);
+
+    std::mutex droppedPathsMutex_;
+    std::vector<std::string> droppedPaths_;
 
     unsigned int CreateShaderProgram(const char* vsSource, const char* fsSource);
 

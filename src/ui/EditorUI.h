@@ -264,6 +264,17 @@ public:
     void SetWorkspaceLineAppendedCallback(std::function<void(const std::string&, const std::string&, bool)> cb);
     void SetExportWorkspaceCallback(std::function<bool(const std::string&)> cb);
     void SetImportWorkspaceCallback(std::function<bool(const std::string&)> cb);
+    void SetOpenFolderCallback(std::function<bool(const std::string&)> cb);
+    std::string GetWorkspaceRootPath() const;
+    void SetWorkspaceRootPath(const std::string& path);
+    void ClearWorkspaceState();
+    // Engine pushes these so the Assets tab knows where to enumerate from.
+    void SetActiveWorkspaceDirectory(const std::string& workspaceDir);
+    void SetSharedAssetsDirectory(const std::string& sharedDir);
+    // Called once per frame by the engine to forward OS-level file drops
+    // that landed on the GLFW window. The UI copies them into the active
+    // workspace's `assets/` directory.
+    void HandleFileDrops(const std::vector<std::string>& paths);
     void SetShareWorkspaceCallback(std::function<void(const std::vector<std::string>&, bool)> cb);
     void SetWorkspaceShareDecisionCallback(std::function<void(const std::string&, bool)> cb);
     void SetRequestFirewallAccessCallback(std::function<void()> cb);
@@ -311,6 +322,9 @@ public:
     bool IsInputCaptureEnabled() const { return inputCaptureEnabled_; }
     void SetInputCaptureActive(bool active) { inputCaptureActive_ = active; }
     void SetInputCaptureEnabledCallback(std::function<void(bool)> cb) { onInputCaptureEnabledChanged_ = std::move(cb); }
+    void SetCursorRecenterEnabled(bool enabled);
+    bool IsCursorRecenterEnabled() const { return cursorRecenterEnabled_; }
+    void SetCursorRecenterEnabledCallback(std::function<void(bool)> cb) { onCursorRecenterEnabledChanged_ = std::move(cb); }
     void SetUniformValues(std::vector<UniformValue> values);
     void SetUniformEditCallback(std::function<void(const UniformEditCommand&)> cb);
     void SetUniformJsonSnapshotCallback(std::function<std::string()> cb);
@@ -372,6 +386,14 @@ private:
     std::function<void(const std::string&, const std::string&, bool)> onWorkspaceLineAppended_;
     std::function<bool(const std::string&)> onExportWorkspace_;
     std::function<bool(const std::string&)> onImportWorkspace_;
+    std::function<bool(const std::string&)> onOpenFolder_;
+    std::string workspaceRootPath_;
+    std::string activeWorkspaceDir_;
+    std::string sharedAssetsDir_;
+    // Recent drop / copy notices surfaced as a small log line below the
+    // Assets tab toolbar. Cleared after a few seconds.
+    std::string assetsStatusLine_;
+    double assetsStatusLineExpiry_ = 0.0;
     std::function<void(const std::vector<std::string>&, bool)> onShareWorkspace_;
     std::function<void(const std::string&, bool)> onWorkspaceShareDecision_;
     std::function<void()> onRequestFirewallAccess_;
@@ -413,7 +435,9 @@ private:
     bool isStalled_ = false;
     bool inputCaptureEnabled_ = false;
     bool inputCaptureActive_ = false;
+    bool cursorRecenterEnabled_ = false;
     std::function<void(bool)> onInputCaptureEnabledChanged_;
+    std::function<void(bool)> onCursorRecenterEnabledChanged_;
     RendererViewportState rendererViewportState_{};
     RendererViewportState pendingRendererViewportState_{};
     std::vector<UniformValue> uniformValues_;
@@ -490,6 +514,9 @@ private:
     void UpdateRendererViewportStateFromImage(bool drawn, float minX, float minY, float maxX, float maxY);
     void DrawInputCaptureIndicator(bool drawn, float minX, float minY, float maxX, float maxY);
     void DrawPipelineTab();
+    void DrawAssetsTab();
+    void DrawAssetEntriesUnder(const std::string& rootDir, bool isShared);
+    static std::string FormatBytes(std::uintmax_t bytes);
     void DrawPlaybackTransportBar();
     void DrawUniformsTab();
     void DrawConsoleTab(const std::string& currentWorkspace);
@@ -499,9 +526,7 @@ private:
     void DrawPipelineInspectorPanel(const std::string& orderText);
     void DrawPipelineGlobalUniformWindow();
     std::string ResolveCurrentWorkspaceName();
-    void DrawWelcomePopup();
-    void DrawShowcaseGuidePopup();
-    void DrawRuntimeGuidePopup();
+    void DrawGuidesPopup();
     void DrawMarkdown(const std::string& markdown, bool lightTheme);
     void LoadMarkdownFiles();
     void LoadWelcomePreference();
@@ -540,14 +565,11 @@ private:
     bool ctrlFullscreenChordHeld_ = false;
     bool ctrlSettingsChordHeld_ = false;
     bool showWelcomeOnStartup_ = true;
-    bool welcomePopupOpenedThisSession_ = false;
-    bool openWelcomePopupRequested_ = false;
     bool doNotShowWelcomeAgain_ = false;
-    bool openRuntimeGuidePopupRequested_ = false;
-    bool runtimeGuidePopupOpenedThisSession_ = false;
+    bool openGuidesPopupRequested_ = false;
+    bool guidesPopupOpenedThisSession_ = false;
+    int currentGuidePageIndex_ = 0;
     bool loadShowcaseWorkspaceOnStartup_ = true;
-    bool openShowcaseGuidePopupRequested_ = false;
-    bool showcaseGuidePopupOpenedThisSession_ = false;
     bool disableShowcaseStartupFromGuide_ = false;
     bool focusCreateWorkspaceNameInput_ = false;
     UiTheme currentTheme_ = UiTheme::Dark;
@@ -558,9 +580,12 @@ private:
     bool rendererFullscreen_ = false;
     int focusEditorRequestFramesRemaining_ = 0;
 
-    std::string welcomeMarkdown_;
-    std::string showcaseGuideMarkdown_;
-    std::string guideMarkdown_;
+    struct GuidePage {
+        std::string title;
+        std::string filename;
+        std::string markdown;
+    };
+    std::vector<GuidePage> guidePages_;
     ImGui::MarkdownConfig markdownConfig_;
 
     ImFont* fontH1_ = nullptr;

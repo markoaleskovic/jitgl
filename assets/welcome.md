@@ -44,4 +44,4 @@ Live C++ + GLSL playground with per-workspace runtime state.
 * Keep uniforms and usage aligned with `scene.cpp` logic.
 
 > **Tip:** workspace labels are indexed (1:, 2:, ...), matching Ctrl+number switching.
-> **Note:** Need deeper runtime details? Open **Help -> Runtime State Guide**.
+> **Note:** Use **Next / Previous** below to jump to the **Showcase**, **Runtime State**, or **Inputs** pages, or reopen this window anytime from **Help -> Guides**.

@@ -120,10 +120,13 @@ add_executable(jit_ide
         src/system/ConsoleRedirectSession.cpp
         src/system/AppPreferences.cpp
         src/system/network/LanWorkspaceShareService.cpp
+        src/assets/AssetRegistry.cpp
+        src/assets/MeshLoader.cpp
 )
 
 target_include_directories(jit_ide PRIVATE
         src
+        src/third_party
         ${LLVM_INCLUDE_DIRS}
         ${CLANG_INCLUDE_DIRS}
         ${text_editor_SOURCE_DIR}

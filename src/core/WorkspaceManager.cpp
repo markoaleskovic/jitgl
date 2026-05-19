@@ -25,20 +25,65 @@ namespace {
     constexpr const char* kWorkspaceExportMagicV1 = "JIT_WORKSPACE_V1";
     constexpr const char* kWorkspaceExportMagicV2 = "JIT_WORKSPACE_V2";
     constexpr const char* kWorkspaceExportMagicV3 = "JIT_WORKSPACE_V3";
+    constexpr const char* kWorkspaceExportMagicV4 = "JIT_WORKSPACE_V4";
     constexpr const char* kWorkspaceNamePrefixV1 = "NAME: ";
     constexpr const char* kWorkspaceNamePrefixV2 = "NAME:";
     constexpr const char* kCppSizePrefix = "CPP_SIZE:";
     constexpr const char* kShaderSizePrefix = "SHADER_SIZE:";
     constexpr const char* kUniformsSizePrefix = "UNIFORMS_SIZE:";
+    constexpr const char* kAssetCountPrefix = "ASSET_COUNT:";
+    constexpr const char* kAssetPathPrefix = "ASSET_PATH:";
+    constexpr const char* kAssetSizePrefix = "ASSET_SIZE:";
     constexpr const char* kImportedWorkspaceFallbackName = "workspace";
     constexpr std::size_t kMaxImportedSourceBytes = 8u * 1024u * 1024u;
+    constexpr std::size_t kMaxImportedAssetBytes = 50u * 1024u * 1024u;
+    constexpr std::size_t kMaxImportedAssetCount = 256u;
+
+    struct ImportedAsset {
+        std::string relativePath;  // relative to workspace assets/
+        std::string bytes;
+    };
 
     struct ImportedWorkspacePayload {
         std::string workspaceName;
         std::string cppSource;
         std::string shaderSource;
         std::string uniformsSource;
+        std::vector<ImportedAsset> assets;
     };
+
+    // Reject path entries that try to escape the workspace `assets/` tree.
+    bool IsSafeAssetRelativePath(const std::string& path) {
+        if (path.empty() || path.size() > 1024) {
+            return false;
+        }
+        if (path.front() == '/' || path.front() == '\\') {
+            return false;
+        }
+        if (path.size() >= 2 && path[1] == ':') {
+            return false;
+        }
+        if (path.find('\0') != std::string::npos) {
+            return false;
+        }
+        std::string normalized = path;
+        std::replace(normalized.begin(), normalized.end(), '\\', '/');
+        std::size_t start = 0;
+        while (start < normalized.size()) {
+            const std::size_t end = normalized.find('/', start);
+            const std::string_view seg(normalized.data() + start,
+                                       (end == std::string::npos) ? normalized.size() - start
+                                                                  : end - start);
+            if (seg.empty() || seg == "..") {
+                return false;
+            }
+            if (end == std::string::npos) {
+                break;
+            }
+            start = end + 1;
+        }
+        return true;
+    }
 
     void TrimTrailingCarriageReturn(std::string* line) {
         if (line != nullptr && !line->empty() && line->back() == '\r') {
@@ -311,6 +356,99 @@ namespace {
         return payload;
     }
 
+    std::optional<ImportedWorkspacePayload> ParseWorkspacePayloadV4(std::istream* stream) {
+        if (stream == nullptr) {
+            return std::nullopt;
+        }
+
+        ImportedWorkspacePayload payload;
+        std::size_t cppSize = 0;
+        std::size_t shaderSize = 0;
+        std::size_t uniformsSize = 0;
+        std::size_t assetCount = 0;
+
+        std::string line;
+        if (!ReadTrimmedLine(stream, &line) || !line.starts_with(kWorkspaceNamePrefixV2)) {
+            return std::nullopt;
+        }
+        payload.workspaceName = line.substr(std::char_traits<char>::length(kWorkspaceNamePrefixV2));
+
+        if (!ReadTrimmedLine(stream, &line) || !ParseSizeField(line, kCppSizePrefix, &cppSize)) {
+            return std::nullopt;
+        }
+        if (!ReadTrimmedLine(stream, &line) || !ParseSizeField(line, kShaderSizePrefix, &shaderSize)) {
+            return std::nullopt;
+        }
+        if (!ReadTrimmedLine(stream, &line) || !ParseSizeField(line, kUniformsSizePrefix, &uniformsSize)) {
+            return std::nullopt;
+        }
+        if (!ReadTrimmedLine(stream, &line) || !ParseSizeField(line, kAssetCountPrefix, &assetCount)) {
+            return std::nullopt;
+        }
+        if (cppSize > kMaxImportedSourceBytes ||
+            shaderSize > kMaxImportedSourceBytes ||
+            uniformsSize > kMaxImportedSourceBytes ||
+            assetCount > kMaxImportedAssetCount) {
+            return std::nullopt;
+        }
+
+        if (!ReadTrimmedLine(stream, &line) || !line.empty()) {
+            return std::nullopt;
+        }
+
+        auto readBytes = [&](std::size_t count, std::string* out) -> bool {
+            out->resize(count);
+            if (count == 0) {
+                return true;
+            }
+            stream->read(out->data(), static_cast<std::streamsize>(count));
+            return static_cast<std::size_t>(stream->gcount()) == count;
+        };
+
+        if (!readBytes(cppSize, &payload.cppSource)) {
+            return std::nullopt;
+        }
+        if (!readBytes(shaderSize, &payload.shaderSource)) {
+            return std::nullopt;
+        }
+        if (!readBytes(uniformsSize, &payload.uniformsSource)) {
+            return std::nullopt;
+        }
+        if (payload.uniformsSource.empty()) {
+            payload.uniformsSource = "{}\n";
+        }
+
+        payload.assets.reserve(assetCount);
+        for (std::size_t i = 0; i < assetCount; ++i) {
+            if (!ReadTrimmedLine(stream, &line) || !line.starts_with(kAssetPathPrefix)) {
+                return std::nullopt;
+            }
+            const std::string relPath = line.substr(std::char_traits<char>::length(kAssetPathPrefix));
+            if (!IsSafeAssetRelativePath(relPath)) {
+                return std::nullopt;
+            }
+
+            if (!ReadTrimmedLine(stream, &line)) {
+                return std::nullopt;
+            }
+            std::size_t assetSize = 0;
+            if (!ParseSizeField(line, kAssetSizePrefix, &assetSize)) {
+                return std::nullopt;
+            }
+            if (assetSize > kMaxImportedAssetBytes) {
+                return std::nullopt;
+            }
+
+            ImportedAsset asset;
+            asset.relativePath = relPath;
+            if (!readBytes(assetSize, &asset.bytes)) {
+                return std::nullopt;
+            }
+            payload.assets.emplace_back(std::move(asset));
+        }
+        return payload;
+    }
+
     std::optional<ImportedWorkspacePayload> ParseWorkspacePackage(std::istream* stream) {
         if (stream == nullptr) {
             return std::nullopt;
@@ -321,6 +459,9 @@ namespace {
             return std::nullopt;
         }
 
+        if (line == kWorkspaceExportMagicV4) {
+            return ParseWorkspacePayloadV4(stream);
+        }
         if (line == kWorkspaceExportMagicV3) {
             return ParseWorkspacePayloadV3(stream);
         }
@@ -336,21 +477,37 @@ namespace {
     std::optional<std::string> BuildWorkspacePackageData(const std::string& workspaceName,
                                                          const std::string& cppSource,
                                                          const std::string& shaderSource,
-                                                         const std::string& uniformsSource) {
+                                                         const std::string& uniformsSource,
+                                                         const std::vector<ImportedAsset>& assets) {
         if (workspaceName.empty()) {
+            return std::nullopt;
+        }
+        if (assets.size() > kMaxImportedAssetCount) {
             return std::nullopt;
         }
 
         std::ostringstream out;
-        out << kWorkspaceExportMagicV3 << '\n';
+        out << kWorkspaceExportMagicV4 << '\n';
         out << kWorkspaceNamePrefixV2 << workspaceName << '\n';
         out << kCppSizePrefix << cppSource.size() << '\n';
         out << kShaderSizePrefix << shaderSource.size() << '\n';
         out << kUniformsSizePrefix << uniformsSource.size() << '\n';
+        out << kAssetCountPrefix << assets.size() << '\n';
         out << '\n';
         out.write(cppSource.data(), static_cast<std::streamsize>(cppSource.size()));
         out.write(shaderSource.data(), static_cast<std::streamsize>(shaderSource.size()));
         out.write(uniformsSource.data(), static_cast<std::streamsize>(uniformsSource.size()));
+        for (const auto& asset : assets) {
+            if (!IsSafeAssetRelativePath(asset.relativePath)) {
+                return std::nullopt;
+            }
+            if (asset.bytes.size() > kMaxImportedAssetBytes) {
+                return std::nullopt;
+            }
+            out << kAssetPathPrefix << asset.relativePath << '\n';
+            out << kAssetSizePrefix << asset.bytes.size() << '\n';
+            out.write(asset.bytes.data(), static_cast<std::streamsize>(asset.bytes.size()));
+        }
         if (!out.good()) {
             return std::nullopt;
         }
@@ -776,6 +933,20 @@ bool WorkspaceManager::EnsureWorkspaceScaffold(const WorkspaceDescriptor& descri
         uniformsFile << "{}\n";
     }
 
+    // Per-workspace assets/ directory: this is what jit_load_texture and
+    // jit_load_mesh resolve against first. Drop a .gitkeep so the folder
+    // survives a fresh clone of an empty workspace.
+    ec.clear();
+    const fs::path assetsDir = fs::path(descriptor.directory) / "assets";
+    if (!fs::exists(assetsDir, ec) || ec) {
+        fs::create_directories(assetsDir, ec);
+        if (!ec) {
+            const fs::path keep = assetsDir / ".gitkeep";
+            std::ofstream gitkeep(keep, std::ios::binary);
+            // Empty file is fine; we don't strictly care if it fails.
+        }
+    }
+
     return true;
 }
 
@@ -872,7 +1043,52 @@ std::optional<std::string> WorkspaceManager::ExportWorkspacePackage(const std::s
         uniformsSource = std::string("{}\n");
     }
 
-    return BuildWorkspacePackageData(workspaceName, *cppSource, *shaderSource, *uniformsSource);
+    // Enumerate workspace/assets/ recursively. Each entry's bytes ride in
+    // the package so receivers can rebuild the asset tree exactly. Skips
+    // dotfiles, anything outside the assets dir, and unreadable files.
+    std::vector<ImportedAsset> assets;
+    const fs::path assetsRoot = fs::path(descriptor->directory) / "assets";
+    std::error_code ec;
+    if (fs::is_directory(assetsRoot, ec) && !ec) {
+        std::size_t totalBytes = 0;
+        for (auto& entry : fs::recursive_directory_iterator(
+                 assetsRoot, fs::directory_options::skip_permission_denied, ec)) {
+            if (ec || !entry.is_regular_file(ec)) {
+                continue;
+            }
+            const fs::path rel = fs::relative(entry.path(), assetsRoot, ec);
+            if (ec) {
+                continue;
+            }
+            const std::string relStr = rel.generic_string();
+            if (relStr.empty() || relStr.front() == '.') {
+                continue;  // skip .gitkeep / hidden
+            }
+            if (!IsSafeAssetRelativePath(relStr)) {
+                continue;
+            }
+            std::ifstream in(entry.path(), std::ios::binary);
+            if (!in.is_open()) {
+                continue;
+            }
+            std::string bytes((std::istreambuf_iterator<char>(in)),
+                              std::istreambuf_iterator<char>());
+            if (bytes.size() > kMaxImportedAssetBytes) {
+                continue;
+            }
+            totalBytes += bytes.size();
+            ImportedAsset asset;
+            asset.relativePath = relStr;
+            asset.bytes = std::move(bytes);
+            assets.emplace_back(std::move(asset));
+            if (assets.size() >= kMaxImportedAssetCount) {
+                break;
+            }
+        }
+        (void)totalBytes;  // reserved for a UI-side cap hint later
+    }
+
+    return BuildWorkspacePackageData(workspaceName, *cppSource, *shaderSource, *uniformsSource, assets);
 }
 
 std::optional<std::string> WorkspaceManager::ImportWorkspacePackage(const std::string& packageData,
@@ -908,6 +1124,28 @@ std::optional<std::string> WorkspaceManager::ImportWorkspacePackage(const std::s
         !SaveFile(descriptor->uniformsPath, payload->uniformsSource.empty() ? std::string("{}\n")
                                                                              : payload->uniformsSource)) {
         return std::nullopt;
+    }
+
+    // Materialise any bundled assets under workspace/<name>/assets/<rel>.
+    if (!payload->assets.empty()) {
+        const fs::path assetsRoot = fs::path(descriptor->directory) / "assets";
+        std::error_code ec;
+        fs::create_directories(assetsRoot, ec);
+        for (const auto& asset : payload->assets) {
+            if (!IsSafeAssetRelativePath(asset.relativePath)) {
+                continue;
+            }
+            const fs::path target = assetsRoot / asset.relativePath;
+            ec.clear();
+            if (target.has_parent_path()) {
+                fs::create_directories(target.parent_path(), ec);
+            }
+            std::ofstream out(target, std::ios::binary | std::ios::trunc);
+            if (!out.is_open()) {
+                continue;
+            }
+            out.write(asset.bytes.data(), static_cast<std::streamsize>(asset.bytes.size()));
+        }
     }
 
     return descriptor->name;

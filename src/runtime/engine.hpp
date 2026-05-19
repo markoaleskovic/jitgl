@@ -162,6 +162,38 @@ inline void jit_request_hard_reset(EngineContext* context) {
     }
 }
 
+// ---- Asset loading ------------------------------------------------------
+// Loads (or returns the cached handle for) a texture under the active
+// workspace's `assets/` directory or the root-shared `assets/` directory.
+// Always returns a valid GL texture id: on failure the handle points at a
+// 2x2 magenta/black checkerboard so shaders sample it normally and the user
+// sees the breakage on screen instead of a silent black draw. Calling this
+// every frame is cheap (one hash lookup); the conventional spot is init().
+inline JitTexture jit_load_texture(EngineContext* context, const char* path) {
+    if (!context || !context->load_texture_fn || !path) {
+        return JitTexture{};
+    }
+    return context->load_texture_fn(context, path);
+}
+
+// Loads (or returns the cached handle for) a mesh under the active workspace's
+// `assets/` or the root-shared `assets/`. Supported formats: Wavefront `.obj`
+// (single-material flattened). The host returns a VAO whose attribute layout
+// is fixed:
+//   layout(location = 0) in vec3 aPos;
+//   layout(location = 1) in vec3 aNormal;
+//   layout(location = 2) in vec2 aUv;
+//   layout(location = 3) in vec4 aTangent;   // w stores bitangent sign
+// Always returns a valid handle; on failure it points at a permanent unit
+// cube with `is_fallback = 1` so your draw call still produces visible
+// geometry while you fix the path.
+inline JitMesh jit_load_mesh(EngineContext* context, const char* path) {
+    if (!context || !context->load_mesh_fn || !path) {
+        return JitMesh{};
+    }
+    return context->load_mesh_fn(context, path);
+}
+
 // Convenience macros for the common `EngineContext* ctx` callback signature.
 #define jit_alloc(size) jit_alloc_ctx((ctx), (size))
 #define jit_alloc_aligned(size, alignment) jit_alloc_aligned_ctx((ctx), (size), (alignment))

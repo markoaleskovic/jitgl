@@ -1,6 +1,22 @@
 // JITGL Showcase Workspace
 // This scene compiles the current shader.glsl sections and draws a fullscreen
 // quad so uniform controls and live shader edits are immediately visible.
+//
+// Want to import textures or meshes? Drop the files onto the JITGL window --
+// they land in this workspace's assets/ directory and show up in the Assets
+// tab. Right-click a row and "Copy load call" to paste a working
+// jit_load_texture / jit_load_mesh into init(). Full reference lives in
+// Help -> Guides under the Runtime State page.
+//
+// Tiny worked example -- uncomment to swap a texture into the procedural
+// scene, leaving the fragment shader to multiply it into the existing color:
+//
+//   JitTexture demo = jit_load_texture(ctx, "albedo.png");
+//   STATE_I(20) = demo.id;        // shader samples this in your edit
+//   STATE_I(21) = demo.is_fallback;
+//
+// If the file is missing you will see the magenta/black checker -- the
+// asset API never returns 0, so your draw call is always valid.
 
 extern "C" void init(EngineContext* ctx) {
     (void)jit_state_guard(ctx, JIT_WORKSPACE_STATE_ABI_HASH);

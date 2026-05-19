@@ -6,6 +6,7 @@
 #include "runtime/EngineContext.h"
 #include "jit/JitEngine.h"
 #include "uniform/UniformParser.h"
+#include "assets/AssetRegistry.h"
 
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
@@ -65,6 +66,7 @@ namespace {
     constexpr const char* SHOWCASE_SCENE_ASSET_PATH = JIT_PROJECT_BINARY_DIR "/assets/showcase_scene.cpp";
     constexpr const char* SHOWCASE_SHADER_ASSET_PATH = JIT_PROJECT_BINARY_DIR "/assets/showcase_shader.glsl";
     constexpr const char* SHOWCASE_UNIFORMS_ASSET_PATH = JIT_PROJECT_BINARY_DIR "/assets/showcase_uniforms.json";
+    constexpr const char* SHARED_ASSETS_DIR = JIT_PROJECT_BINARY_DIR "/assets";
     constexpr const char* SHOWCASE_SCENE_ASSET_FALLBACK_PATH = JIT_PROJECT_SOURCE_DIR "/assets/showcase_scene.cpp";
     constexpr const char* SHOWCASE_SHADER_ASSET_FALLBACK_PATH = JIT_PROJECT_SOURCE_DIR "/assets/showcase_shader.glsl";
     constexpr const char* SHOWCASE_UNIFORMS_ASSET_FALLBACK_PATH = JIT_PROJECT_SOURCE_DIR "/assets/showcase_uniforms.json";
@@ -78,7 +80,28 @@ namespace {
         -1.f, -1.f, 1.f, -1.f, 1.f, 1.f,
         -1.f, -1.f, 1.f, 1.f, -1.f, 1.f,
     };
-    constexpr bool VERBOSE_WORKSPACE_DEBUG = true;
+    // Flip to true to re-enable the "[JITGL DBG]" stream that gets written
+    // straight to /dev/tty (Linux/macOS) or OutputDebugString (Windows).
+    constexpr bool VERBOSE_WORKSPACE_DEBUG = false;
+
+    // Thunk for EngineContext::load_texture_fn. Pulls the per-workspace
+    // AssetRegistry out of ctx->assets and dispatches there. Always returns
+    // a valid handle (fallback texture on any failure).
+    JitTexture JitLoadTextureThunk(EngineContext* ctx, const char* path) {
+        if (ctx == nullptr || path == nullptr || ctx->assets == nullptr) {
+            return JitTexture{};
+        }
+        auto* registry = static_cast<AssetRegistry*>(ctx->assets);
+        return registry->LoadTexture(path);
+    }
+
+    JitMesh JitLoadMeshThunk(EngineContext* ctx, const char* path) {
+        if (ctx == nullptr || path == nullptr || ctx->assets == nullptr) {
+            return JitMesh{};
+        }
+        auto* registry = static_cast<AssetRegistry*>(ctx->assets);
+        return registry->LoadMesh(path);
+    }
 
     void DebugLog(const std::string& text) {
         if (!VERBOSE_WORKSPACE_DEBUG) {
@@ -584,6 +607,10 @@ Engine::~Engine() { Shutdown(); }
 bool Engine::Init() {
     if (!InitWindow()) return false;
     if (!InitGL()) return false;
+    // Asset bridge: install the loader thunks now that GL is ready.
+    // Per-workspace `assets` pointer is set later in LoadWorkspaceRuntimeState.
+    ctx_.load_texture_fn = &JitLoadTextureThunk;
+    ctx_.load_mesh_fn    = &JitLoadMeshThunk;
     if (!InitUI()) return false;
     if (!InitJIT()) return false;
     if (!InitWatcher()) return false;
@@ -943,6 +970,7 @@ bool Engine::InitUI() {
     // overwriting it. Without this our scroll-wheel input would be lost.
     glfwSetWindowUserPointer(window_, this);
     glfwSetScrollCallback(window_, &Engine::GlfwScrollTrampoline);
+    glfwSetDropCallback(window_, &Engine::GlfwDropTrampoline);
     ui_->Init(window_);
     if (sceneColorTex_ != 0 && sceneWidth_ > 0 && sceneHeight_ > 0) {
         ui_->SetRendererTexture(sceneColorTex_, sceneWidth_, sceneHeight_);
@@ -1037,8 +1065,25 @@ bool Engine::InitUI() {
         prevKeyStateValid_ = false;
         prevMouseButtonStateValid_ = false;
         prevMousePosValid_ = false;
+        if (!enabled) {
+            // Losing the master capture also kills the cursor lock, otherwise
+            // the user would be stuck with an invisible cursor pinned to the
+            // viewport center.
+            ApplyCursorRecenterMode(false);
+        }
     });
     ui_->SetInputCaptureEnabled(inputsEnabled_);
+
+    ui_->SetCursorRecenterEnabledCallback([this](const bool enabled) {
+        cursorRecenterEnabled_ = enabled;
+        if (!enabled) {
+            ApplyCursorRecenterMode(false);
+        }
+    });
+    ui_->SetCursorRecenterEnabled(cursorRecenterEnabled_);
+
+    // One-shot: the shared asset root never moves at runtime.
+    ui_->SetSharedAssetsDirectory(SHARED_ASSETS_DIR);
 
     return true;
 }
@@ -1207,6 +1252,12 @@ void Engine::LoadWorkspaceRuntimeState(const std::string& workspaceName) {
     ctx_.arena_size = workspace.arenaStorage.size();
     ctx_.arena_offset = std::min(workspace.arenaOffset, workspace.arenaStorage.size());
     ctx_.reset_state_requested = false;
+    if (auto registryIt = workspaceAssetRegistries_.find(workspaceName);
+        registryIt != workspaceAssetRegistries_.end()) {
+        ctx_.assets = registryIt->second.get();
+    } else {
+        ctx_.assets = nullptr;
+    }
     DebugLog("LoadWorkspaceRuntimeState(name=" + workspaceName +
              ", workspace.vao=" + std::to_string(workspace.vao) +
              ", workspace.vbo=" + std::to_string(workspace.vbo) +
@@ -1504,7 +1555,7 @@ bool Engine::BuildCompileSourceForWorkspace(const std::string& workspaceName,
 
     std::error_code fsError;
     for (const auto& entry : std::filesystem::recursive_directory_iterator(
-             WORKSPACE_DIR,
+             workspaceRoot_,
              std::filesystem::directory_options::skip_permission_denied,
              fsError)) {
         if (fsError || !entry.is_regular_file(fsError)) {
@@ -1519,7 +1570,7 @@ bool Engine::BuildCompileSourceForWorkspace(const std::string& workspaceName,
         }
 
         std::error_code relativeError;
-        std::filesystem::path relativePath = std::filesystem::relative(entry.path(), WORKSPACE_DIR, relativeError);
+        std::filesystem::path relativePath = std::filesystem::relative(entry.path(), workspaceRoot_, relativeError);
         if (relativeError) {
             relativePath = entry.path().filename();
         }
@@ -1542,7 +1593,7 @@ bool Engine::BuildCompileSourceForWorkspace(const std::string& workspaceName,
 
     std::error_code workspaceRelativeError;
     std::filesystem::path workspaceShaderRelative = std::filesystem::relative(workspace.shaderPath,
-                                                                              WORKSPACE_DIR,
+                                                                              workspaceRoot_,
                                                                               workspaceRelativeError);
     if (workspaceRelativeError) {
         workspaceShaderRelative = std::filesystem::path(workspaceName) / "shader.glsl";
@@ -1776,6 +1827,15 @@ bool Engine::RegisterWorkspace(const WorkspaceDescriptor& descriptor) {
     fileToWorkspace_[workspace.shaderPath] = workspace.name;
     workspaceDirty_[workspace.name] = false;
 
+    // Per-workspace asset cache. Fallback texture is allocated up front so
+    // the very first jit_load_texture call never crosses into uninitialized
+    // GL state. The host's `assets/` sibling (under the build dir) is the
+    // shared/root fallback root.
+    auto assetRegistry = std::make_unique<AssetRegistry>(workspace.directory,
+                                                         SHARED_ASSETS_DIR);
+    assetRegistry->Initialize();
+    workspaceAssetRegistries_[workspace.name] = std::move(assetRegistry);
+
     if (std::ranges::find(workspaceOrder_, workspace.name) == workspaceOrder_.end()) {
         workspaceOrder_.emplace_back(workspace.name);
         std::ranges::sort(workspaceOrder_);
@@ -1885,6 +1945,21 @@ bool Engine::DeleteWorkspaceFromUI(const std::string& workspaceName) {
     }
 
     workspaces_.erase(workspaceName);
+    // Registry destructor frees per-workspace GL textures; GL context is
+    // still live at this point.
+    workspaceAssetRegistries_.erase(workspaceName);
+    if (ctx_.assets != nullptr) {
+        bool stillTracked = false;
+        for (const auto& [_, registry] : workspaceAssetRegistries_) {
+            if (registry.get() == ctx_.assets) {
+                stillTracked = true;
+                break;
+            }
+        }
+        if (!stillTracked) {
+            ctx_.assets = nullptr;
+        }
+    }
     workspaceDirty_.erase(workspaceName);
     fileToWorkspace_.erase(workspaceCppPath);
     fileToWorkspace_.erase(workspaceShaderPath);
@@ -1998,6 +2073,7 @@ void Engine::SwitchToWorkspace(const std::string& workspaceName, bool focusCppDo
             return;
         }
         ui_->SetActiveWorkspace(workspaceName);
+        ui_->SetActiveWorkspaceDirectory(workspaceIt->second.directory);
         ui_->SetUniformValues(workspaceIt->second.uniforms.Values());
     }
     workspaceIt->second.activeClockStartSeconds = nowSeconds;
@@ -2031,7 +2107,23 @@ void Engine::SwitchToWorkspace(const std::string& workspaceName, bool focusCppDo
 }
 
 bool Engine::InitWatcher() {
-    workspaceManager_ = std::make_unique<WorkspaceManager>(WORKSPACE_DIR);
+    workspaceRoot_ = WORKSPACE_DIR;
+    if (ui_) {
+        // UI loads prefs in Init(), so the saved root is available before we
+        // build the workspace manager. Reject paths that no longer exist.
+        std::string savedRoot = ui_->GetWorkspaceRootPath();
+        if (!savedRoot.empty()) {
+            std::error_code ec;
+            if (std::filesystem::is_directory(savedRoot, ec) && !ec) {
+                workspaceRoot_ = std::move(savedRoot);
+            } else {
+                ui_->AddLogOutput("[Workspace] Saved folder '" + savedRoot +
+                                  "' is missing; falling back to default workspace folder.");
+            }
+        }
+    }
+
+    workspaceManager_ = std::make_unique<WorkspaceManager>(workspaceRoot_);
     workspaceManager_->Initialize();
 
     ui_->SetSaveCallback([this](const std::string& path, const std::string& content) {
@@ -2076,6 +2168,10 @@ bool Engine::InitWatcher() {
         }
     });
 
+    ui_->SetOpenFolderCallback([this](const std::string& newRoot) {
+        return OpenWorkspaceFolder(newRoot);
+    });
+
     auto workspaceDescriptors = workspaceManager_->ListWorkspaces();
     for (const auto& descriptor : workspaceDescriptors) {
         RegisterWorkspace(descriptor);
@@ -2100,17 +2196,191 @@ bool Engine::InitWatcher() {
     }
 
     watcher_ = std::make_unique<FileWatcher>(
-        WORKSPACE_DIR,
+        workspaceRoot_,
         [this](const std::string& path) { OnFileChanged(path); }
     );
     watcher_->Start();
 
+    if (ui_) {
+        ui_->SetWorkspaceRootPath(workspaceRoot_);
+    }
+    UpdateWindowTitleForCurrentRoot();
+
+    return true;
+}
+
+void Engine::UpdateWindowTitleForCurrentRoot() {
+    if (window_ == nullptr) {
+        return;
+    }
+    std::string title = WINDOW_TITLE;
+    if (!workspaceRoot_.empty()) {
+        std::error_code ec;
+        std::string folderName = std::filesystem::path(workspaceRoot_).filename().string();
+        if (folderName.empty()) {
+            // Trailing slash: walk one level up.
+            folderName = std::filesystem::path(workspaceRoot_).parent_path().filename().string();
+        }
+        if (!folderName.empty()) {
+            title += " - " + folderName;
+        }
+    }
+    glfwSetWindowTitle(window_, title.c_str());
+}
+
+bool Engine::OpenWorkspaceFolder(const std::string& newRoot) {
+    if (newRoot.empty()) {
+        return false;
+    }
+
+    std::error_code ec;
+    if (!std::filesystem::exists(newRoot, ec) || ec) {
+        std::filesystem::create_directories(newRoot, ec);
+        if (ec) {
+            if (ui_) {
+                ui_->AddLogOutput("[Workspace Error] Cannot create folder '" + newRoot + "'.");
+            }
+            return false;
+        }
+    } else if (!std::filesystem::is_directory(newRoot, ec) || ec) {
+        if (ui_) {
+            ui_->AddLogOutput("[Workspace Error] '" + newRoot + "' is not a directory.");
+        }
+        return false;
+    }
+
+    const std::string canonicalRoot = std::filesystem::weakly_canonical(newRoot, ec).string();
+    const std::string resolvedRoot = (ec || canonicalRoot.empty()) ? newRoot : canonicalRoot;
+
+    // No-op if the user picked the folder we're already using.
+    std::error_code currentCanonicalEc;
+    const std::string currentCanonical = workspaceRoot_.empty()
+        ? std::string{}
+        : std::filesystem::weakly_canonical(workspaceRoot_, currentCanonicalEc).string();
+    if (!currentCanonicalEc && !currentCanonical.empty() && currentCanonical == resolvedRoot) {
+        if (ui_) {
+            ui_->AddLogOutput("[Workspace] Folder '" + resolvedRoot + "' is already open.");
+        }
+        return true;
+    }
+
+    // Flush whatever the user just typed in the active workspace so we don't
+    // lose unsaved edits when we tear it down.
+    SaveActiveWorkspaceRuntimeState();
+
+    if (watcher_) {
+        watcher_->Stop();
+        watcher_.reset();
+    }
+
+    {
+        std::scoped_lock lock(pendingMutex_);
+        std::queue<std::string> empty;
+        pendingReloads_.swap(empty);
+    }
+
+    {
+        std::scoped_lock lock(compileMutex_);
+        compileJobs_.clear();
+        compileResults_ = std::queue<CompileResult>{};
+        inFlightSourceHashes_.clear();
+    }
+
+    for (const auto& [workspaceName, program] : compiledPrograms_) {
+        (void)workspaceName;
+        ShutdownProgramIfInitialized(program);
+    }
+    if (activeProgram_) {
+        ShutdownProgramIfInitialized(activeProgram_);
+    }
+    activeProgram_.reset();
+    compiledPrograms_.clear();
+
+    for (auto& [workspaceName, workspace] : workspaces_) {
+        PersistWorkspaceUniformState(workspaceName);
+        ReleaseWorkspaceGeometry(&workspace);
+        ReleaseWorkspacePassTargets(&workspace);
+    }
+
+    workspaces_.clear();
+    // GL context is still alive; drop registries here so textures are freed
+    // before we ever destroy the window.
+    workspaceAssetRegistries_.clear();
+    ctx_.assets = nullptr;
+    workspaceOrder_.clear();
+    fileToWorkspace_.clear();
+    workspaceDirty_.clear();
+    activeWorkspaceName_.clear();
+    activeFilePath_.clear();
+    pipelineConnections_.clear();
+    pipelineGlobalUniforms_.clear();
+    dependencyFlashUntil_.clear();
+    compileFailures_.clear();
+    compileRetryAfter_.clear();
+    recentErrors_.clear();
+    ignoreWatcherUntil_.clear();
+    latestSources_.clear();
+    latestSourceHashes_.clear();
+    latestUniformDescriptors_.clear();
+    latestSamplerUniformNames_.clear();
+    latestStorageBufferNames_.clear();
+    latestShaderDependencies_.clear();
+    latestStateAbiHashes_.clear();
+    pendingCompilesAt_.clear();
+    sharedTextures_.clear();
+    ctx_.vao = 0;
+    ctx_.vbo = 0;
+
+    if (ui_) {
+        ui_->ClearWorkspaceState();
+    }
+
+    workspaceRoot_ = resolvedRoot;
+    workspaceManager_ = std::make_unique<WorkspaceManager>(workspaceRoot_);
+    workspaceManager_->Initialize();
+
+    auto workspaceDescriptors = workspaceManager_->ListWorkspaces();
+    for (const auto& descriptor : workspaceDescriptors) {
+        RegisterWorkspace(descriptor);
+    }
+
+    if (workspaceOrder_.empty()) {
+        if (ui_) {
+            ui_->AddLogOutput("[Workspace Error] Folder '" + workspaceRoot_ +
+                              "' contains no readable workspaces.");
+        }
+        return false;
+    }
+
+    SyncWorkspaceUiState();
+    SwitchToWorkspace(workspaceOrder_.front(), true);
+
+    watcher_ = std::make_unique<FileWatcher>(
+        workspaceRoot_,
+        [this](const std::string& path) { OnFileChanged(path); }
+    );
+    watcher_->Start();
+
+    if (ui_) {
+        ui_->SetWorkspaceRootPath(workspaceRoot_);
+        ui_->AddLogOutput("[Workspace] Opened folder '" + workspaceRoot_ + "'.");
+    }
+    UpdateWindowTitleForCurrentRoot();
     return true;
 }
 
 void Engine::OnFileChanged(const std::string& filepath) {
-    if (const auto extension = std::filesystem::path(filepath).extension().string();
-        extension != ".cpp" && extension != ".glsl") {
+    const std::string extension = std::filesystem::path(filepath).extension().string();
+    std::string lowerExt = extension;
+    std::ranges::transform(lowerExt, lowerExt.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    static const std::array<std::string_view, 9> kAssetExts = {
+        ".png", ".jpg", ".jpeg", ".bmp", ".tga", ".psd", ".hdr", ".gif", ".obj"
+    };
+    const bool isCodeFile = (extension == ".cpp" || extension == ".glsl");
+    const bool isAssetFile = std::ranges::find(kAssetExts, lowerExt) != kAssetExts.end();
+    if (!isCodeFile && !isAssetFile) {
         return;
     }
 
@@ -2131,9 +2401,40 @@ void Engine::ProcessPendingReloads(double nowSeconds) {
     for (const auto& filepath : filesToProcess) {
         const std::filesystem::path filePath(filepath);
         const std::string normalizedPath = NormalizePathString(filePath);
-        const bool isGlslFile = (filePath.extension() == ".glsl");
+        const std::string fileExt = filePath.extension().string();
+        const bool isGlslFile = (fileExt == ".glsl");
+        const bool isCodeFile = (fileExt == ".cpp" || isGlslFile);
         auto ignoredIt = ignoreWatcherUntil_.find(filepath);
         if (ignoredIt != ignoreWatcherUntil_.end() && nowSeconds < ignoredIt->second) {
+            continue;
+        }
+
+        // Asset files route to the per-workspace AssetRegistry. We try
+        // every registry because the same shared asset may be cached by
+        // more than one workspace.
+        if (!isCodeFile) {
+            const std::string normalizedAbs = NormalizePathString(filePath);
+            std::string lowerFileExt = fileExt;
+            std::ranges::transform(lowerFileExt, lowerFileExt.begin(), [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            });
+            const bool isMeshFile = (lowerFileExt == ".obj");
+            bool reloadedSomewhere = false;
+            for (auto& [name, registry] : workspaceAssetRegistries_) {
+                (void)name;
+                if (!registry) {
+                    continue;
+                }
+                const bool reloaded = isMeshFile
+                    ? registry->ReloadMeshFromAbsolutePath(normalizedAbs)
+                    : registry->ReloadTextureFromAbsolutePath(normalizedAbs);
+                if (reloaded) {
+                    reloadedSomewhere = true;
+                }
+            }
+            if (!reloadedSomewhere && ui_) {
+                ui_->AddLogOutput("[Watcher] Asset changed but no cache hit: " + filepath);
+            }
             continue;
         }
 
@@ -3738,6 +4039,59 @@ void Engine::HandleScrollEvent(double xoffset, double yoffset) {
     pendingScrollY_ += static_cast<float>(yoffset);
 }
 
+void Engine::GlfwDropTrampoline(GLFWwindow* window, int count, const char** paths) {
+    if (window == nullptr) {
+        return;
+    }
+    if (auto* engine = static_cast<Engine*>(glfwGetWindowUserPointer(window)); engine != nullptr) {
+        engine->HandleDropEvent(count, paths);
+    }
+}
+
+void Engine::HandleDropEvent(int count, const char** paths) {
+    if (count <= 0 || paths == nullptr) {
+        return;
+    }
+    std::scoped_lock lock(droppedPathsMutex_);
+    droppedPaths_.reserve(droppedPaths_.size() + static_cast<std::size_t>(count));
+    for (int i = 0; i < count; ++i) {
+        if (paths[i] != nullptr) {
+            droppedPaths_.emplace_back(paths[i]);
+        }
+    }
+}
+
+void Engine::ApplyCursorRecenterMode(bool active) {
+    if (window_ == nullptr) {
+        cursorCurrentlyHidden_ = false;
+        return;
+    }
+    if (active == cursorCurrentlyHidden_) {
+        return;
+    }
+    if (active) {
+        // GLFW_CURSOR_DISABLED hides the OS cursor, grabs it to the window,
+        // and provides virtual unbounded cursor coords for clean per-frame
+        // deltas -- exactly what mouse-look cameras need. The ImGui GLFW
+        // backend explicitly bails out of its UpdateMouseCursor path when it
+        // sees CURSOR_DISABLED, so we don't fight it for cursor visibility.
+        glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        if (glfwRawMouseMotionSupported()) {
+            glfwSetInputMode(window_, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
+        }
+    } else {
+        if (glfwRawMouseMotionSupported()) {
+            glfwSetInputMode(window_, GLFW_RAW_MOUSE_MOTION, GLFW_FALSE);
+        }
+        glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+    }
+    cursorCurrentlyHidden_ = active;
+    // Cursor mode transitions introduce a discontinuous position jump --
+    // invalidate the delta tracker so the next frame does not report a giant
+    // bogus movement.
+    prevMousePosValid_ = false;
+}
+
 void Engine::UpdateInputState() {
     InputState& input = ctx_.input;
     input = InputState{};
@@ -3851,9 +4205,27 @@ void Engine::UpdateInputState() {
 
         input.mouseScrollX = scrollX;
         input.mouseScrollY = scrollY;
+
+        // Mouse-look mode: GLFW_CURSOR_DISABLED hides the OS cursor and turns
+        // glfwGetCursorPos into a source of virtual unbounded coords, so the
+        // mouseDX / mouseDY math above gives accurate frame-to-frame deltas
+        // without the cursor ever wandering off the renderer. Position fields
+        // (mouseX / mouseY / mouseNdcX / mouseNdcY) lose meaning in that mode,
+        // so we report a centered cursor for scenes that read them.
+        if (cursorRecenterEnabled_ && viewport.visible) {
+            ApplyCursorRecenterMode(true);
+            input.mouseX = static_cast<float>(viewport.textureWidth) * 0.5f;
+            input.mouseY = static_cast<float>(viewport.textureHeight) * 0.5f;
+            input.mouseNdcX = 0.0f;
+            input.mouseNdcY = 0.0f;
+            input.mouseInViewport = 1;
+        } else {
+            ApplyCursorRecenterMode(false);
+        }
     } else {
         prevMouseButtonStateValid_ = false;
         prevMousePosValid_ = false;
+        ApplyCursorRecenterMode(false);
     }
 }
 
@@ -4103,12 +4475,29 @@ void Engine::Run() {
             prevKeyStateValid_ = false;
             prevMouseButtonStateValid_ = false;
             prevMousePosValid_ = false;
+            if (!inputsEnabled_) {
+                ApplyCursorRecenterMode(false);
+            }
             if (ui_) {
                 ui_->SetInputCaptureEnabled(inputsEnabled_);
                 ui_->AddLogOutput(std::string("[Input] Capture ") + (inputsEnabled_ ? "ON" : "OFF") + " (F1)");
             }
         }
         inputHotkeyHeld_ = hotkeyDown;
+
+        const bool recenterHotkeyDown = (glfwGetKey(window_, GLFW_KEY_F2) == GLFW_PRESS);
+        if (recenterHotkeyDown && !cursorRecenterHotkeyHeld_) {
+            cursorRecenterEnabled_ = !cursorRecenterEnabled_;
+            if (!cursorRecenterEnabled_) {
+                ApplyCursorRecenterMode(false);
+            }
+            if (ui_) {
+                ui_->SetCursorRecenterEnabled(cursorRecenterEnabled_);
+                ui_->AddLogOutput(std::string("[Input] Cursor recenter ") +
+                                  (cursorRecenterEnabled_ ? "ON" : "OFF") + " (F2)");
+            }
+        }
+        cursorRecenterHotkeyHeld_ = recenterHotkeyDown;
 
         UpdateInputState();
 
@@ -4117,6 +4506,19 @@ void Engine::Run() {
         }
 
         const double now = frameStartSeconds;
+        // Drain OS file drops and hand them to the UI. UI copies them into
+        // the active workspace's assets/ directory; the file watcher then
+        // sees the new files and the AssetRegistry picks them up.
+        {
+            std::vector<std::string> drops;
+            {
+                std::scoped_lock lock(droppedPathsMutex_);
+                drops.swap(droppedPaths_);
+            }
+            if (!drops.empty() && ui_) {
+                ui_->HandleFileDrops(drops);
+            }
+        }
         ProcessPendingReloads(now);
         CompletePendingJITReset();
         SubmitDueCompiles(now);
@@ -4226,6 +4628,8 @@ void Engine::Shutdown() {
         ui_->AddLogOutput("[Engine] Shutting down...");
     }
 
+    ApplyCursorRecenterMode(false);
+
     if (watcher_) {
         watcher_->Stop();
         watcher_.reset();
@@ -4291,6 +4695,10 @@ void Engine::Shutdown() {
     pendingCompilesAt_.clear();
     inFlightSourceHashes_.clear();
     workspaces_.clear();
+    // GL context is still alive at this point; drop the registries here so
+    // their texture deletes succeed before the window goes away.
+    workspaceAssetRegistries_.clear();
+    ctx_.assets = nullptr;
     workspaceOrder_.clear();
     fileToWorkspace_.clear();
     workspaceDirty_.clear();
