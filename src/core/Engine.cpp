@@ -1035,9 +1035,6 @@ bool Engine::InitUI() {
     ui_->SetPipelineOpenFileCallback([this](const std::string& workspaceName, bool openCppFile) {
         HandlePipelineOpenFileRequest(workspaceName, openCppFile);
     });
-    ui_->SetPipelineConnectionCallback([this](const EditorUI::PipelineConnectionCommand& command) {
-        HandlePipelineConnectionCommand(command);
-    });
     ui_->SetPipelineGlobalUniformCallback([this](const EditorUI::PipelineGlobalUniformCommand& command) {
         HandlePipelineGlobalUniformCommand(command);
     });
@@ -3418,13 +3415,29 @@ bool Engine::ResolvePipelineSamplerBinding(const WorkspaceState& workspace,
     outResourceName->clear();
     *outIsExplicit = false;
 
-    if (auto workspaceIt = pipelineConnections_.find(workspace.name);
-        workspaceIt != pipelineConnections_.end()) {
-        if (auto inputIt = workspaceIt->second.find(samplerName);
-            inputIt != workspaceIt->second.end() && !inputIt->second.sourceSlot.empty()) {
-            *outResourceName = inputIt->second.sourceSlot;
-            *outIsExplicit = true;
-            return true;
+    if (auto currentIt = std::ranges::find(workspaceOrder_, workspace.name);
+        currentIt != workspaceOrder_.end()) {
+        for (auto it = currentIt; it != workspaceOrder_.begin();) {
+            --it;
+
+            const auto predecessorIt = workspaces_.find(*it);
+            if (predecessorIt == workspaces_.end() || !predecessorIt->second.pipelineEnabled) {
+                continue;
+            }
+
+            const std::string outputName = predecessorIt->second.outputTextureName.empty()
+                                               ? predecessorIt->second.name
+                                               : predecessorIt->second.outputTextureName;
+            if (sharedTextures_.contains(outputName)) {
+                *outResourceName = outputName;
+                *outIsExplicit = false;
+                return true;
+            }
+            if (sharedTextures_.contains(predecessorIt->second.name)) {
+                *outResourceName = predecessorIt->second.name;
+                *outIsExplicit = false;
+                return true;
+            }
         }
     }
 

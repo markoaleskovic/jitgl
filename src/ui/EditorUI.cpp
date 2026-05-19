@@ -1,6 +1,5 @@
 #include "ui/EditorUI.h"
 #include <imgui.h>
-#include <imgui_node_editor.h>
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_opengl3.h>
 #include <GLFW/glfw3.h>
@@ -14,12 +13,9 @@
 #include <ranges>
 #include <sstream>
 #include <type_traits>
-#include <unordered_set>
 #include <nfd.hpp>
 
 namespace {
-    namespace ed = ax::NodeEditor;
-
     constexpr double AUTOSAVE_DEBOUNCE_SECONDS = 0.05;
     constexpr const char* GLSL_VERSION = "#version 330 core";
     constexpr std::size_t MAX_CONSOLE_LINES = 2000;
@@ -139,22 +135,6 @@ namespace {
         }
     }
 
-    struct PipelinePinRecord {
-        enum class Role {
-            InputSampler,
-            OutputTexture,
-            ResourceOutput
-        };
-
-        Role role = Role::InputSampler;
-        std::string workspaceName;
-        std::string slotName;
-    };
-
-    struct PipelineLinkRecord {
-        EditorUI::PipelineConnectionView connection;
-    };
-
     bool IsKeyDown(GLFWwindow* window, int key) {
         return window != nullptr && glfwGetKey(window, key) == GLFW_PRESS;
     }
@@ -184,15 +164,6 @@ namespace {
         return value ? "Yes" : "No";
     }
 
-    const char* PipelinePassTypeTag(const EditorUI::PipelinePassType type) {
-        switch (type) {
-            case EditorUI::PipelinePassType::Raster: return "[R]";
-            case EditorUI::PipelinePassType::Compute: return "[C]";
-            case EditorUI::PipelinePassType::Hybrid: return "[R+C]";
-        }
-        return "[R]";
-    }
-
     const char* PipelineGlobalUniformTypeLabel(const EditorUI::PipelineGlobalUniformType type) {
         switch (type) {
             case EditorUI::PipelineGlobalUniformType::Float: return "float";
@@ -203,29 +174,6 @@ namespace {
         return "float";
     }
 
-    std::string PipelineSlotKey(const std::string& workspaceName, const std::string& slotName) {
-        return workspaceName + "::" + slotName;
-    }
-
-    ed::NodeId ToNodeId(const std::uint64_t value) {
-        return ed::NodeId(static_cast<std::uintptr_t>(value));
-    }
-
-    ed::PinId ToPinId(const std::uint64_t value) {
-        return ed::PinId(static_cast<std::uintptr_t>(value));
-    }
-
-    ed::LinkId ToLinkId(const std::uint64_t value) {
-        return ed::LinkId(static_cast<std::uintptr_t>(value));
-    }
-
-    std::uint64_t FromPinId(const ed::PinId id) {
-        return static_cast<std::uint64_t>(id.Get());
-    }
-
-    std::uint64_t FromLinkId(const ed::LinkId id) {
-        return static_cast<std::uint64_t>(id.Get());
-    }
 }
 
 // style start
@@ -567,15 +515,6 @@ void EditorUI::Init(GLFWwindow *win) {
     openShowcaseGuidePopupRequested_ = loadShowcaseWorkspaceOnStartup_;
     showcaseGuidePopupOpenedThisSession_ = false;
     disableShowcaseStartupFromGuide_ = !loadShowcaseWorkspaceOnStartup_;
-
-    pipelineNodeEditorConfig_ = new ed::Config();
-    // Keep node-editor internal persistence disabled for stability across format/library changes.
-    static_cast<ed::Config*>(pipelineNodeEditorConfig_)->SettingsFile = nullptr;
-    pipelineNodeEditorContext_ = ed::CreateEditor(static_cast<ed::Config*>(pipelineNodeEditorConfig_));
-    pipelinePositionedNodes_.clear();
-    pipelineStableEditorIds_.clear();
-    pipelineNextStableEditorId_ = 1;
-    pipelineNavigateToContent_ = true;
 
     initialized_ = true;
     shutdown_ = false;
@@ -987,19 +926,6 @@ void EditorUI::SetPipelineGlobalUniformCallback(std::function<void(const Pipelin
 
 void EditorUI::SetPipelineResourceExportCallback(std::function<bool(const std::string&, const std::string&)> cb) {
     onPipelineResourceExport_ = std::move(cb);
-}
-
-std::uint64_t EditorUI::AcquirePipelineEditorStableId(const std::string& key) {
-    if (const auto it = pipelineStableEditorIds_.find(key); it != pipelineStableEditorIds_.end()) {
-        return it->second;
-    }
-
-    if (pipelineNextStableEditorId_ == 0) {
-        pipelineNextStableEditorId_ = 1;
-    }
-    const std::uint64_t nextId = pipelineNextStableEditorId_++;
-    pipelineStableEditorIds_.emplace(key, nextId);
-    return nextId;
 }
 
 bool EditorUI::ShouldLoadShowcaseWorkspaceOnStartup() const {
@@ -2299,8 +2225,12 @@ void EditorUI::DrawPipelineTab() {
     }
 
     std::vector<std::string> disabledPasses;
-    std::vector<std::string> enabledPasses;
-    CollectPipelinePassGroups(&disabledPasses, &enabledPasses);
+    disabledPasses.reserve(pipelinePasses_.size());
+    for (const auto& pass : pipelinePasses_) {
+        if (!pass.enabled) {
+            disabledPasses.push_back(pass.workspaceName);
+        }
+    }
     if (selectedPipelineAddPassIndex_ >= static_cast<int>(disabledPasses.size())) {
         selectedPipelineAddPassIndex_ = 0;
     }
@@ -2309,13 +2239,10 @@ void EditorUI::DrawPipelineTab() {
     const ImGuiStyle& style = ImGui::GetStyle();
     const float toolbarButtonWidth = 108.0f;
     const float addButtonWidth = 56.0f;
-    const float autoLayoutButtonWidth = 94.0f;
-    const float fitButtonWidth = 76.0f;
     const float saveButtonWidth = 90.0f;
     const float resetButtonWidth = 74.0f;
     const float availableWidth = ImGui::GetContentRegionAvail().x;
     const float comboWidth = std::clamp(availableWidth * 0.45f, 120.0f, 280.0f);
-    bool forceAutoLayout = false;
 
     if (disabledPasses.empty()) {
         ImGui::BeginDisabled();
@@ -2353,28 +2280,9 @@ void EditorUI::DrawPipelineTab() {
         showGlobalUniformsWindow_ = !showGlobalUniformsWindow_;
     }
 
-    if (ImGui::GetContentRegionAvail().x > (autoLayoutButtonWidth + style.ItemSpacing.x)) {
+    if (ImGui::GetContentRegionAvail().x > (saveButtonWidth + style.ItemSpacing.x)) {
         ImGui::SameLine();
     }
-    if (ImGui::Button("Auto Layout", ImVec2(autoLayoutButtonWidth, 0.0f))) {
-        forceAutoLayout = true;
-        pipelineNavigateToContent_ = true;
-    }
-
-    if (ImGui::GetContentRegionAvail().x > (fitButtonWidth + style.ItemSpacing.x)) {
-        ImGui::SameLine();
-    }
-    if (ImGui::Button("Fit View", ImVec2(fitButtonWidth, 0.0f))) {
-        pipelineNavigateToContent_ = true;
-    }
-    ImGui::PopID();
-
-    const std::string orderText = BuildPipelineOrderText(enabledPasses);
-    ImGui::TextUnformatted("Execute Order:");
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(orderText.c_str());
-    ImGui::PopTextWrapPos();
-
     if (ImGui::Button("Save Chain", ImVec2(saveButtonWidth, 0.0f))) {
         nfdchar_t* outPath = nullptr;
         nfdfilteritem_t filterItem[1] = {{"JITGL Chain", "jchain"}};
@@ -2391,27 +2299,22 @@ void EditorUI::DrawPipelineTab() {
     if (ImGui::Button("Reset", ImVec2(resetButtonWidth, 0.0f)) && onPipelineReset_) {
         onPipelineReset_();
     }
+    ImGui::PopID();
+
+    std::vector<std::string> enabledPasses;
+    enabledPasses.reserve(pipelinePasses_.size());
+    for (const auto& pass : pipelinePasses_) {
+        if (pass.enabled) {
+            enabledPasses.push_back(pass.workspaceName);
+        }
+    }
+    const std::string orderText = BuildPipelineOrderText(enabledPasses);
 
     ImGui::Separator();
-    DrawPipelineMainLayout(orderText, forceAutoLayout);
+    DrawPipelineInspectorPanel(orderText);
     DrawPipelineGlobalUniformWindow();
 
     ImGui::EndTabItem();
-}
-
-void EditorUI::CollectPipelinePassGroups(std::vector<std::string>* disabledPasses,
-                                         std::vector<std::string>* enabledPasses) const {
-    disabledPasses->clear();
-    enabledPasses->clear();
-    disabledPasses->reserve(pipelinePasses_.size());
-    enabledPasses->reserve(pipelinePasses_.size());
-    for (const auto& pass : pipelinePasses_) {
-        if (pass.enabled) {
-            enabledPasses->push_back(pass.workspaceName);
-        } else {
-            disabledPasses->push_back(pass.workspaceName);
-        }
-    }
 }
 
 std::string EditorUI::BuildPipelineOrderText(const std::vector<std::string>& enabledPasses) const {
@@ -2431,413 +2334,8 @@ std::string EditorUI::BuildPipelineOrderText(const std::vector<std::string>& ena
     return orderText;
 }
 
-void EditorUI::DrawPipelineMainLayout(const std::string& orderText, bool forceAutoLayout) {
-    if (ImGui::BeginTable("PipelineMainLayout",
-                          2,
-                          ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV,
-                          ImVec2(0.0f, 0.0f))) {
-        ImGui::TableSetupColumn("PipelineCanvas", ImGuiTableColumnFlags_WidthStretch, 0.72f);
-        ImGui::TableSetupColumn("PipelineInspector", ImGuiTableColumnFlags_WidthStretch, 0.28f);
-        ImGui::TableNextRow();
-
-        ImGui::TableSetColumnIndex(0);
-        DrawPipelineNodeCanvas(forceAutoLayout);
-
-        ImGui::TableSetColumnIndex(1);
-        DrawPipelineInspectorPanel(orderText);
-
-        ImGui::EndTable();
-    }
-}
-
-void EditorUI::DrawPipelineNodeCanvas(bool forceAutoLayout) {
-    if (!ImGui::BeginChild("PipelineNodeCanvas", ImVec2(0.0f, 0.0f), true)) {
-        ImGui::EndChild();
-        return;
-    }
-
-    if (pipelineNodeEditorContext_ == nullptr) {
-        ImGui::TextDisabled("Pipeline node editor is unavailable.");
-        ImGui::EndChild();
-        return;
-    }
-
-    std::unordered_map<std::uint64_t, PipelinePinRecord> pinsById;
-    std::unordered_map<std::uint64_t, PipelineLinkRecord> linksById;
-    pinsById.reserve(512);
-    linksById.reserve(512);
-    std::unordered_set<std::uint64_t> usedEditorObjectIds;
-    usedEditorObjectIds.reserve(1024);
-
-    std::unordered_set<std::string> visibleNodeKeys;
-    visibleNodeKeys.reserve(pipelinePasses_.size() + 2);
-
-    float maxGpuMs = 0.001f;
-    for (const auto& pass : pipelinePasses_) {
-        maxGpuMs = std::max(maxGpuMs, pass.gpuTimeMs);
-    }
-
-    auto reserveEditorObjectId = [&usedEditorObjectIds](const std::uint64_t value) {
-        return usedEditorObjectIds.insert(value).second;
-    };
-    auto makeNodeId = [this](const std::string& nodeKey) {
-        return AcquirePipelineEditorStableId("node:" + nodeKey);
-    };
-    auto makeResourcePinId = [this](const std::string& resourceName) {
-        return AcquirePipelineEditorStableId("pin:resource:" + resourceName);
-    };
-    auto makeInputPinId = [this](const std::string& workspaceName, const std::string& slotName) {
-        return AcquirePipelineEditorStableId("pin:input:" + PipelineSlotKey(workspaceName, slotName));
-    };
-    auto makeOutputPinId = [this](const std::string& workspaceName, const std::string& slotName) {
-        return AcquirePipelineEditorStableId("pin:output:" + PipelineSlotKey(workspaceName, slotName));
-    };
-    auto makeLinkId = [this](const std::string& sourceWorkspace,
-                             const std::string& sourceSlot,
-                             const std::string& targetWorkspace,
-                             const std::string& targetSlot) {
-        return AcquirePipelineEditorStableId("link:" + sourceWorkspace + ":" + sourceSlot + "->" +
-                                             targetWorkspace + ":" + targetSlot);
-    };
-
-    ed::SetCurrentEditor(static_cast<ed::EditorContext*>(pipelineNodeEditorContext_));
-    ed::Begin("PipelineEditorCanvas");
-
-    if (!pipelineResources_.empty()) {
-        const std::string resourceNodeKey = "__resources__";
-        visibleNodeKeys.insert(resourceNodeKey);
-        const std::uint64_t resourceNodeIdValue = makeNodeId(resourceNodeKey);
-        if (reserveEditorObjectId(resourceNodeIdValue)) {
-            const ed::NodeId resourceNodeId = ToNodeId(resourceNodeIdValue);
-            if (forceAutoLayout || !pipelinePositionedNodes_.contains(resourceNodeKey)) {
-                ed::SetNodePosition(resourceNodeId, ImVec2(-420.0f, 20.0f));
-                pipelinePositionedNodes_.insert(resourceNodeKey);
-            }
-
-            ed::BeginNode(resourceNodeId);
-            ImGui::TextUnformatted("External Resources");
-            ImGui::Separator();
-            for (const auto& resource : pipelineResources_) {
-                const std::uint64_t pinIdValue = makeResourcePinId(resource.name);
-                if (!reserveEditorObjectId(pinIdValue)) {
-                    continue;
-                }
-                pinsById.emplace(pinIdValue,
-                                 PipelinePinRecord{
-                                     PipelinePinRecord::Role::ResourceOutput,
-                                     "<resource>",
-                                     resource.name
-                                 });
-                ed::BeginPin(ToPinId(pinIdValue), ed::PinKind::Output);
-                ImGui::Text("[R] %s", resource.name.c_str());
-                ed::EndPin();
-            }
-            ed::EndNode();
-        }
-    }
-
-    for (std::size_t i = 0; i < pipelinePasses_.size(); ++i) {
-        const PipelinePassView pass = pipelinePasses_[i];
-        visibleNodeKeys.insert(pass.workspaceName);
-
-        const std::uint64_t nodeIdValue = makeNodeId(pass.workspaceName);
-        if (!reserveEditorObjectId(nodeIdValue)) {
-            continue;
-        }
-        const ed::NodeId nodeId = ToNodeId(nodeIdValue);
-        if (forceAutoLayout || !pipelinePositionedNodes_.contains(pass.workspaceName)) {
-            const float x = 20.0f + static_cast<float>(i % 2u) * 440.0f;
-            const float y = 20.0f + static_cast<float>(i / 2u) * 260.0f;
-            ed::SetNodePosition(nodeId, ImVec2(x, y));
-            pipelinePositionedNodes_.insert(pass.workspaceName);
-        }
-
-        ed::BeginNode(nodeId);
-        ImGui::PushID(pass.workspaceName.c_str());
-
-        const ImVec4 statusColor = pass.compiled && !pass.hasCompileError
-                                       ? (IsLightTheme() ? ImVec4(0.18f, 0.65f, 0.22f, 1.0f)
-                                                         : ImVec4(0.45f, 1.0f, 0.45f, 1.0f))
-                                       : (IsLightTheme() ? ImVec4(0.78f, 0.22f, 0.22f, 1.0f)
-                                                         : ImVec4(1.0f, 0.38f, 0.38f, 1.0f));
-        ImGui::ColorButton("Status", statusColor, ImGuiColorEditFlags_NoTooltip, ImVec2(10.0f, 10.0f));
-        ImGui::SameLine();
-        ImGui::Text("%s %s", PipelinePassTypeTag(pass.passType), pass.workspaceName.c_str());
-        if (pass.active) {
-            ImGui::SameLine();
-            ImGui::TextDisabled("[active]");
-        }
-
-        bool enabled = pass.enabled;
-        if (ImGui::Checkbox("Enabled", &enabled)) {
-            if (onPipelineEdit_) {
-                PipelineEditCommand command;
-                command.action = PipelineEditAction::SetEnabled;
-                command.workspaceName = pass.workspaceName;
-                command.enabled = enabled;
-                command.outputName = pass.outputName;
-                onPipelineEdit_(command);
-            }
-        }
-
-        ImGui::SameLine();
-        if (ImGui::ArrowButton("Up", ImGuiDir_Up) && onPipelineMove_) {
-            onPipelineMove_(pass.workspaceName, -1);
-        }
-        ImGui::SameLine();
-        if (ImGui::ArrowButton("Down", ImGuiDir_Down) && onPipelineMove_) {
-            onPipelineMove_(pass.workspaceName, +1);
-        }
-
-        const float gpuNorm = std::clamp(pass.gpuTimeMs / maxGpuMs, 0.0f, 1.0f);
-        const std::string gpuLabel = std::to_string(pass.gpuTimeMs).substr(0, 5) + " ms";
-        ImGui::ProgressBar(gpuNorm, ImVec2(165.0f, 0.0f), gpuLabel.c_str());
-        ImGui::TextDisabled("%s", pass.compiled ? (pass.hasCompileError ? "Status: Error" : "Status: OK")
-                                                : "Status: No Program");
-
-        if (!pass.cppPath.empty() || !pass.shaderPath.empty()) {
-            if (!pass.cppPath.empty()) {
-                if (ImGui::SmallButton("scene.cpp") && onPipelineOpenFile_) {
-                    onPipelineOpenFile_(pass.workspaceName, true);
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("%s", pass.cppPath.c_str());
-                }
-            }
-            if (!pass.shaderPath.empty()) {
-                ImGui::SameLine();
-                if (ImGui::SmallButton("shader.glsl") && onPipelineOpenFile_) {
-                    onPipelineOpenFile_(pass.workspaceName, false);
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("%s", pass.shaderPath.c_str());
-                }
-            }
-        }
-
-        if (ImGui::BeginPopupContextItem("PipelinePassContext")) {
-            static std::string editingWorkspace;
-            static std::array<char, 128> outputNameBuffer{};
-
-            if (editingWorkspace != pass.workspaceName) {
-                editingWorkspace = pass.workspaceName;
-                std::snprintf(outputNameBuffer.data(),
-                              outputNameBuffer.size(),
-                              "%s",
-                              pass.outputName.c_str());
-            }
-
-            const bool submitFromEnter = ImGui::InputText("Output Name",
-                                                          outputNameBuffer.data(),
-                                                          outputNameBuffer.size(),
-                                                          ImGuiInputTextFlags_EnterReturnsTrue);
-            bool submitFromButton = false;
-            if (ImGui::Button("Apply")) {
-                submitFromButton = true;
-            }
-            if ((submitFromEnter || submitFromButton) && onPipelineEdit_) {
-                PipelineEditCommand command;
-                command.action = PipelineEditAction::SetOutputName;
-                command.workspaceName = pass.workspaceName;
-                command.outputName = outputNameBuffer.data();
-                command.enabled = pass.enabled;
-                onPipelineEdit_(command);
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
-        }
-
-        ImGui::BeginGroup();
-        ImGui::TextDisabled("Inputs");
-        for (const auto& inputName : pass.inputSamplers) {
-            const std::uint64_t pinIdValue = makeInputPinId(pass.workspaceName, inputName);
-            if (!reserveEditorObjectId(pinIdValue)) {
-                continue;
-            }
-            pinsById.emplace(pinIdValue,
-                             PipelinePinRecord{
-                                 PipelinePinRecord::Role::InputSampler,
-                                 pass.workspaceName,
-                                 inputName
-                             });
-            ed::BeginPin(ToPinId(pinIdValue), ed::PinKind::Input);
-            ImGui::Text("[U] %s", inputName.c_str());
-            ed::EndPin();
-            ImGui::SameLine();
-            if (ImGui::SmallButton(("Auto##" + inputName).c_str()) && onPipelineConnection_) {
-                PipelineConnectionCommand command;
-                command.targetWorkspace = pass.workspaceName;
-                command.targetSlot = inputName;
-                command.clear = true;
-                onPipelineConnection_(command);
-            }
-        }
-        for (const auto& bufferName : pass.inputBuffers) {
-            ImGui::TextDisabled("[S] %s", bufferName.c_str());
-        }
-        ImGui::EndGroup();
-
-        ImGui::SameLine();
-
-        ImGui::BeginGroup();
-        ImGui::TextDisabled("Outputs");
-        for (const auto& outputName : pass.outputTextures) {
-            const std::uint64_t pinIdValue = makeOutputPinId(pass.workspaceName, outputName);
-            if (!reserveEditorObjectId(pinIdValue)) {
-                continue;
-            }
-            pinsById.emplace(pinIdValue,
-                             PipelinePinRecord{
-                                 PipelinePinRecord::Role::OutputTexture,
-                                 pass.workspaceName,
-                                 outputName
-                             });
-            ed::BeginPin(ToPinId(pinIdValue), ed::PinKind::Output);
-            ImGui::Text("[T] %s", outputName.c_str());
-            ed::EndPin();
-        }
-        for (const auto& bufferName : pass.outputBuffers) {
-            ImGui::TextDisabled("[S] %s", bufferName.c_str());
-        }
-        ImGui::EndGroup();
-
-        ImGui::PopID();
-        ed::EndNode();
-    }
-
-    std::erase_if(pipelinePositionedNodes_,
-                  [&](const std::string& key) {
-                      return !visibleNodeKeys.contains(key);
-                  });
-
-    const ImVec4 explicitLinkColor = IsLightTheme() ? ImVec4(0.09f, 0.48f, 0.88f, 1.0f)
-                                                    : ImVec4(0.38f, 0.72f, 1.0f, 1.0f);
-    const ImVec4 implicitLinkColor = IsLightTheme() ? ImVec4(0.42f, 0.42f, 0.42f, 0.92f)
-                                                    : ImVec4(0.70f, 0.70f, 0.70f, 0.82f);
-    for (const auto& connection : pipelineConnections_) {
-        std::uint64_t sourcePinId = 0;
-        if (connection.sourceWorkspace == "<resource>") {
-            sourcePinId = makeResourcePinId(connection.sourceSlot);
-        } else {
-            sourcePinId = makeOutputPinId(connection.sourceWorkspace, connection.sourceSlot);
-        }
-        const std::uint64_t targetPinId = makeInputPinId(connection.targetWorkspace, connection.targetSlot);
-        if (!pinsById.contains(sourcePinId) || !pinsById.contains(targetPinId)) {
-            continue;
-        }
-
-        const std::uint64_t linkIdValue = makeLinkId(connection.sourceWorkspace,
-                                                     connection.sourceSlot,
-                                                     connection.targetWorkspace,
-                                                     connection.targetSlot);
-        if (!reserveEditorObjectId(linkIdValue)) {
-            continue;
-        }
-        linksById.emplace(linkIdValue, PipelineLinkRecord{connection});
-        ed::Link(ToLinkId(linkIdValue),
-                 ToPinId(sourcePinId),
-                 ToPinId(targetPinId),
-                 connection.explicitConnection ? explicitLinkColor : implicitLinkColor,
-                 connection.explicitConnection ? 2.3f : 1.45f);
-    }
-
-    if (ed::BeginCreate()) {
-        ed::PinId startPinId;
-        ed::PinId endPinId;
-        if (ed::QueryNewLink(&startPinId, &endPinId)) {
-            const auto startIt = pinsById.find(FromPinId(startPinId));
-            const auto endIt = pinsById.find(FromPinId(endPinId));
-            bool accepted = false;
-
-            if (startIt != pinsById.end() && endIt != pinsById.end() &&
-                startIt->second.role != endIt->second.role) {
-                const PipelinePinRecord* outputPin = nullptr;
-                const PipelinePinRecord* inputPin = nullptr;
-                if (startIt->second.role == PipelinePinRecord::Role::InputSampler) {
-                    inputPin = &startIt->second;
-                    outputPin = &endIt->second;
-                } else if (endIt->second.role == PipelinePinRecord::Role::InputSampler) {
-                    inputPin = &endIt->second;
-                    outputPin = &startIt->second;
-                }
-
-                if (inputPin != nullptr &&
-                    outputPin != nullptr &&
-                    (outputPin->role == PipelinePinRecord::Role::OutputTexture ||
-                     outputPin->role == PipelinePinRecord::Role::ResourceOutput)) {
-                    if (ed::AcceptNewItem()) {
-                        if (onPipelineConnection_) {
-                            PipelineConnectionCommand command;
-                            if (outputPin->role == PipelinePinRecord::Role::ResourceOutput) {
-                                command.sourceWorkspace.clear();
-                                command.sourceSlot = outputPin->slotName;
-                            } else {
-                                command.sourceWorkspace = outputPin->workspaceName;
-                                command.sourceSlot = outputPin->slotName;
-                            }
-                            command.targetWorkspace = inputPin->workspaceName;
-                            command.targetSlot = inputPin->slotName;
-                            command.clear = false;
-                            onPipelineConnection_(command);
-                        }
-                        accepted = true;
-                    }
-                }
-            }
-
-            if (!accepted) {
-                ed::RejectNewItem();
-            }
-        }
-    }
-    ed::EndCreate();
-
-    if (ed::BeginDelete()) {
-        ed::LinkId deletedLinkId;
-        while (ed::QueryDeletedLink(&deletedLinkId)) {
-            const auto linkIt = linksById.find(FromLinkId(deletedLinkId));
-            if (linkIt == linksById.end()) {
-                ed::RejectDeletedItem();
-                continue;
-            }
-            if (!linkIt->second.connection.explicitConnection) {
-                ed::RejectDeletedItem();
-                continue;
-            }
-            if (ed::AcceptDeletedItem()) {
-                if (onPipelineConnection_) {
-                    PipelineConnectionCommand command;
-                    command.targetWorkspace = linkIt->second.connection.targetWorkspace;
-                    command.targetSlot = linkIt->second.connection.targetSlot;
-                    command.clear = true;
-                    onPipelineConnection_(command);
-                }
-            }
-        }
-        ed::NodeId deletedNodeId;
-        while (ed::QueryDeletedNode(&deletedNodeId)) {
-            ed::RejectDeletedItem();
-        }
-    }
-    ed::EndDelete();
-
-    ed::Suspend();
-    ImGui::SetCursorPos(ImVec2(12.0f, 12.0f));
-    ImGui::TextDisabled("Drag output pins to input pins to bind. Delete explicit links with Del.");
-    ed::Resume();
-
-    if (pipelineNavigateToContent_) {
-        ed::NavigateToContent(0.0f);
-        pipelineNavigateToContent_ = false;
-    }
-
-    ed::End();
-    ed::SetCurrentEditor(nullptr);
-    ImGui::EndChild();
-}
-
 void EditorUI::DrawPipelineInspectorPanel(const std::string& orderText) {
-    if (!ImGui::BeginChild("PipelineInspector", ImVec2(0.0f, 0.0f), true)) {
+    if (!ImGui::BeginChild("PipelineStack", ImVec2(0.0f, 0.0f), false)) {
         ImGui::EndChild();
         return;
     }
@@ -2847,22 +2345,108 @@ void EditorUI::DrawPipelineInspectorPanel(const std::string& orderText) {
     ImGui::PushTextWrapPos(0.0f);
     ImGui::TextUnformatted(orderText.c_str());
     ImGui::PopTextWrapPos();
-
     ImGui::Spacing();
-    ImGui::TextUnformatted("Resource Inspector");
-    ImGui::Separator();
-    if (pipelineResources_.empty()) {
-        ImGui::TextDisabled("No shared textures or buffers are published yet.");
-    } else {
-        for (const auto& resource : pipelineResources_) {
-            ImGui::PushID(resource.name.c_str());
-            ImGui::Text("%s (%dx%d)", resource.name.c_str(), resource.width, resource.height);
-            if (resource.texture != 0 && resource.width > 0 && resource.height > 0) {
-                const float previewWidth = std::max(80.0f, std::min(220.0f, ImGui::GetContentRegionAvail().x));
-                const float aspect = static_cast<float>(resource.width) /
-                                     std::max(1.0f, static_cast<float>(resource.height));
-                const float previewHeight = std::max(48.0f, previewWidth / std::max(0.01f, aspect));
-                ImGui::Image(static_cast<ImTextureID>(resource.texture),
+
+    const std::vector<PipelinePassView> passesSnapshot = pipelinePasses_;
+    const std::vector<PipelineResourceView> resourcesSnapshot = pipelineResources_;
+
+    std::unordered_map<std::string, const PipelineResourceView*> resourcesByName;
+    resourcesByName.reserve(resourcesSnapshot.size());
+    for (const auto& resource : resourcesSnapshot) {
+        auto it = resourcesByName.find(resource.name);
+        if (it == resourcesByName.end()) {
+            resourcesByName.emplace(resource.name, &resource);
+            continue;
+        }
+        if ((it->second->texture == 0 || it->second->width <= 0 || it->second->height <= 0) &&
+            resource.texture != 0 && resource.width > 0 && resource.height > 0) {
+            it->second = &resource;
+        }
+    }
+
+    const auto resolvePassPreview = [&](const PipelinePassView& pass) -> const PipelineResourceView* {
+        const std::string preferredOutput = pass.outputName.empty() ? pass.workspaceName : pass.outputName;
+        if (const auto it = resourcesByName.find(preferredOutput); it != resourcesByName.end()) {
+            return it->second;
+        }
+        if (const auto it = resourcesByName.find(pass.workspaceName); it != resourcesByName.end()) {
+            return it->second;
+        }
+        return nullptr;
+    };
+
+    for (std::size_t i = 0; i < passesSnapshot.size(); ++i) {
+        const auto& pass = passesSnapshot[i];
+        ImGui::PushID(pass.workspaceName.c_str());
+
+        ImGui::BeginGroup();
+        const bool cardDisabled = !pass.enabled;
+        if (cardDisabled) {
+            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.58f);
+        }
+        const PipelineResourceView* preview = resolvePassPreview(pass);
+        const float previewWidth = std::clamp(ImGui::GetContentRegionAvail().x - 20.0f, 120.0f, 360.0f);
+        float previewHeight = 0.0f;
+        if (preview != nullptr && preview->texture != 0 && preview->width > 0 && preview->height > 0) {
+            const float aspect = static_cast<float>(preview->width) /
+                                 std::max(1.0f, static_cast<float>(preview->height));
+            previewHeight = std::clamp(previewWidth / std::max(0.01f, aspect), 72.0f, 200.0f);
+        }
+        const float cardHeight = std::max(126.0f, previewHeight + 96.0f);
+        const bool cardOpen = ImGui::BeginChild("PipelinePassCard", ImVec2(0.0f, cardHeight), true);
+
+        if (cardOpen) {
+
+            const bool canMoveUp = i > 0;
+            if (!canMoveUp) {
+                ImGui::BeginDisabled();
+            }
+            if (ImGui::SmallButton("Up") && onPipelineMove_) {
+                const std::string workspaceName = pass.workspaceName;
+                onPipelineMove_(workspaceName, -1);
+            }
+            if (!canMoveUp) {
+                ImGui::EndDisabled();
+            }
+            ImGui::SameLine();
+            const bool canMoveDown = (i + 1 < passesSnapshot.size());
+            if (!canMoveDown) {
+                ImGui::BeginDisabled();
+            }
+            if (ImGui::SmallButton("Down") && onPipelineMove_) {
+                const std::string workspaceName = pass.workspaceName;
+                onPipelineMove_(workspaceName, +1);
+            }
+            if (!canMoveDown) {
+                ImGui::EndDisabled();
+            }
+
+            ImGui::SameLine();
+            bool enabled = pass.enabled;
+            if (ImGui::Checkbox("##Enabled", &enabled) && onPipelineEdit_) {
+                PipelineEditCommand command;
+                command.action = PipelineEditAction::SetEnabled;
+                command.workspaceName = pass.workspaceName;
+                command.enabled = enabled;
+                command.outputName = pass.outputName;
+                onPipelineEdit_(command);
+            }
+
+            ImGui::SameLine();
+            ImGui::Text("%zu. %s", i + 1, pass.workspaceName.c_str());
+
+            const char* statusText = pass.compiled ? (pass.hasCompileError ? "Error" : "Ready") : "No Program";
+            const ImVec4 statusColor = pass.compiled && !pass.hasCompileError
+                                           ? (IsLightTheme() ? ImVec4(0.16f, 0.56f, 0.24f, 1.0f)
+                                                             : ImVec4(0.45f, 1.0f, 0.45f, 1.0f))
+                                           : (IsLightTheme() ? ImVec4(0.75f, 0.20f, 0.20f, 1.0f)
+                                                             : ImVec4(1.0f, 0.38f, 0.38f, 1.0f));
+            ImGui::TextColored(statusColor, "Status: %s", statusText);
+            ImGui::SameLine();
+            ImGui::TextDisabled("GPU: %.3f ms", pass.gpuTimeMs);
+
+            if (preview != nullptr && preview->texture != 0 && preview->width > 0 && preview->height > 0) {
+                ImGui::Image(static_cast<ImTextureID>(preview->texture),
                              ImVec2(previewWidth, previewHeight),
                              ImVec2(0.0f, 1.0f),
                              ImVec2(1.0f, 0.0f));
@@ -2870,60 +2454,34 @@ void EditorUI::DrawPipelineInspectorPanel(const std::string& orderText) {
                 ImGui::TextDisabled("Preview unavailable");
             }
 
-            if (ImGui::Button("Export..")) {
-                nfdchar_t* outPath = nullptr;
-                const std::string defaultName = resource.name + ".ppm";
-                nfdfilteritem_t filterItem[1] = {{"PPM Image", "ppm"}};
-                const nfdresult_t result = NFD_SaveDialog(&outPath,
-                                                           filterItem,
-                                                           1,
-                                                           nullptr,
-                                                           defaultName.c_str());
-                if (result == NFD_OKAY) {
-                    const bool exported = onPipelineResourceExport_
-                                              ? onPipelineResourceExport_(resource.name, outPath)
-                                              : false;
-                    AddLogOutput(exported ? "[Pipeline] Resource exported."
-                                          : "[Pipeline Error] Resource export failed.");
-                    NFD_FreePath(outPath);
+            if (!pass.cppPath.empty()) {
+                if (ImGui::SmallButton("scene.cpp") && onPipelineOpenFile_) {
+                    const std::string workspaceName = pass.workspaceName;
+                    onPipelineOpenFile_(workspaceName, true);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", pass.cppPath.c_str());
                 }
             }
-
-            ImGui::Separator();
-            ImGui::PopID();
-        }
-    }
-
-    ImGui::TextUnformatted("Dependency Tree (#include)");
-    ImGui::Separator();
-    if (pipelineDependencies_.empty()) {
-        ImGui::TextDisabled("No include dependencies detected.");
-    } else {
-        for (const auto& dependency : pipelineDependencies_) {
-            const std::size_t slash = dependency.path.find_last_of("/\\");
-            const std::string displayName = (slash == std::string::npos)
-                                                ? dependency.path
-                                                : dependency.path.substr(slash + 1);
-            const std::string treeLabel = displayName + "##" + dependency.path;
-            if (dependency.flashing) {
-                const float pulse = 0.55f + 0.45f * std::sin(static_cast<float>(ImGui::GetTime() * 8.0));
-                const ImVec4 flashColor = IsLightTheme() ? ImVec4(0.85f * pulse, 0.38f * pulse, 0.10f, 1.0f)
-                                                         : ImVec4(1.0f, 0.55f * pulse, 0.20f, 1.0f);
-                ImGui::PushStyleColor(ImGuiCol_Text, flashColor);
-            }
-            if (ImGui::TreeNode(treeLabel.c_str())) {
-                if (displayName != dependency.path) {
-                    ImGui::TextDisabled("%s", dependency.path.c_str());
+            if (!pass.shaderPath.empty()) {
+                ImGui::SameLine();
+                if (ImGui::SmallButton("shader.glsl") && onPipelineOpenFile_) {
+                    const std::string workspaceName = pass.workspaceName;
+                    onPipelineOpenFile_(workspaceName, false);
                 }
-                for (const auto& workspace : dependency.dependentWorkspaces) {
-                    ImGui::BulletText("%s", workspace.c_str());
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", pass.shaderPath.c_str());
                 }
-                ImGui::TreePop();
-            }
-            if (dependency.flashing) {
-                ImGui::PopStyleColor();
             }
         }
+
+        ImGui::EndChild();
+        if (cardDisabled) {
+            ImGui::PopStyleVar();
+        }
+        ImGui::EndGroup();
+        ImGui::Spacing();
+        ImGui::PopID();
     }
 
     ImGui::EndChild();
@@ -3642,19 +3200,6 @@ void EditorUI::Shutdown() {
     initialized_ = false;
 
     NFD_Quit();
-
-    if (pipelineNodeEditorContext_ != nullptr) {
-        ed::DestroyEditor(static_cast<ed::EditorContext*>(pipelineNodeEditorContext_));
-        pipelineNodeEditorContext_ = nullptr;
-    }
-    if (pipelineNodeEditorConfig_ != nullptr) {
-        delete static_cast<ed::Config*>(pipelineNodeEditorConfig_);
-        pipelineNodeEditorConfig_ = nullptr;
-    }
-    pipelinePositionedNodes_.clear();
-    pipelineStableEditorIds_.clear();
-    pipelineNextStableEditorId_ = 1;
-    pipelineNavigateToContent_ = true;
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();

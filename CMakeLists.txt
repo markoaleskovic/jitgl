@@ -67,24 +67,6 @@ FetchContent_Declare(imgui_markdown
 )
 FetchContent_MakeAvailable(imgui_markdown)
 
-# ── imgui-node-editor ───────────────────────────────────────────────────────
-FetchContent_Declare(imgui_node_editor
-    URL https://github.com/thedmd/imgui-node-editor/archive/refs/heads/master.tar.gz
-    EXCLUDE_FROM_ALL
-)
-FetchContent_MakeAvailable(imgui_node_editor)
-
-add_library(imgui_node_editor_lib STATIC
-    ${imgui_node_editor_SOURCE_DIR}/imgui_canvas.cpp
-    ${imgui_node_editor_SOURCE_DIR}/imgui_node_editor.cpp
-    ${imgui_node_editor_SOURCE_DIR}/imgui_node_editor_api.cpp
-    ${imgui_node_editor_SOURCE_DIR}/crude_json.cpp
-)
-target_include_directories(imgui_node_editor_lib PUBLIC
-    ${imgui_node_editor_SOURCE_DIR}
-)
-target_link_libraries(imgui_node_editor_lib PUBLIC imgui_lib)
-
 # ── nativefiledialog-extended ───────────────────────────────────────────────
 FetchContent_Declare(nfd
     GIT_REPOSITORY https://github.com/btzy/nativefiledialog-extended.git
@@ -172,7 +154,6 @@ endif()
 
 target_link_libraries(jit_ide PRIVATE
     imgui_lib
-    imgui_node_editor_lib
     glfw
     glad_gl_core_33
     OpenGL::GL
