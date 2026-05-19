@@ -122,6 +122,7 @@ private:
     std::unordered_map<std::string, LanWorkspaceOffer> pendingLanOffersById_;
 
     std::unordered_map<std::string, std::string> latestSources_;
+    std::unordered_map<std::string, std::size_t> latestSourceHashes_;
     std::unordered_map<std::string, std::vector<UniformDescriptor>> latestUniformDescriptors_;
     std::unordered_map<std::string, std::vector<std::string>> latestSamplerUniformNames_;
     std::unordered_map<std::string, std::vector<std::string>> latestStorageBufferNames_;

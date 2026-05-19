@@ -215,12 +215,20 @@ bool JitEngine::Init(const std::string& preamblePath) {
     // clang-repl incremental mode does not honour #pragma once across Parse()
     // calls; strip it so re-runs of the preamble don't cause redefinition errors.
     {
-        const std::string pragmaOnce = "#pragma once";
-        auto pos = preamble_.find(pragmaOnce);
-        while (pos != std::string::npos) {
-            preamble_.erase(pos, pragmaOnce.size());
-            pos = preamble_.find(pragmaOnce, pos);
+        constexpr std::string_view pragmaOnce = "#pragma once";
+        std::string rebuilt;
+        rebuilt.reserve(preamble_.size());
+        std::size_t cursor = 0;
+        while (cursor < preamble_.size()) {
+            const std::size_t pos = preamble_.find(pragmaOnce, cursor);
+            if (pos == std::string::npos) {
+                rebuilt.append(preamble_, cursor, std::string::npos);
+                break;
+            }
+            rebuilt.append(preamble_, cursor, pos - cursor);
+            cursor = pos + pragmaOnce.size();
         }
+        preamble_ = std::move(rebuilt);
     }
     argStorage_.emplace_back("-std=c++20");
     argStorage_.emplace_back("-xc++");
@@ -242,15 +250,17 @@ bool JitEngine::Init(const std::string& preamblePath) {
     argStorage_.emplace_back("-I/usr/include");
     argStorage_.emplace_back("-I/usr/local/include");
 
-    std::string gladIncludes = JIT_GLAD_INCLUDE_DIR;
+    std::string_view gladIncludes = JIT_GLAD_INCLUDE_DIR;
     while (!gladIncludes.empty()) {
-        size_t sep = gladIncludes.find('|');
-        std::string part = (sep == std::string::npos) ? gladIncludes : gladIncludes.substr(0, sep);
+        const std::size_t sep = gladIncludes.find('|');
+        const std::string_view part = (sep == std::string_view::npos)
+            ? gladIncludes
+            : gladIncludes.substr(0, sep);
         if (!part.empty()) {
-            argStorage_.emplace_back("-I" + part);
+            argStorage_.emplace_back("-I").append(part);
         }
-        if (sep == std::string::npos) break;
-        gladIncludes.erase(0, sep + 1);
+        if (sep == std::string_view::npos) break;
+        gladIncludes.remove_prefix(sep + 1);
     }
 
     if (!std::string(JIT_PROJECT_SOURCE_DIR).empty()) {

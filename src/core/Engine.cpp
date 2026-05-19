@@ -1836,7 +1836,12 @@ bool Engine::DeleteWorkspaceFromUI(const std::string& workspaceName) {
         return false;
     }
 
-    const WorkspaceState workspace = workspaceIt->second;
+    // Capture only the fields needed after the workspaces_.erase() below — a full
+    // WorkspaceState copy would deep-clone the per-workspace 1 MB arena storage.
+    const std::string workspaceCppPath = workspaceIt->second.cppPath;
+    const std::string workspaceShaderPath = workspaceIt->second.shaderPath;
+    const unsigned int workspaceVao = workspaceIt->second.vao;
+    const unsigned int workspaceVbo = workspaceIt->second.vbo;
     const bool deletingActiveWorkspace = (workspaceName == activeWorkspaceName_);
 
     std::string nextWorkspaceName;
@@ -1859,10 +1864,10 @@ bool Engine::DeleteWorkspaceFromUI(const std::string& workspaceName) {
 
     ReleaseWorkspaceGeometry(&workspaceIt->second);
     ReleaseWorkspacePassTargets(&workspaceIt->second);
-    if (ctx_.vao == workspace.vao) {
+    if (ctx_.vao == workspaceVao) {
         ctx_.vao = 0;
     }
-    if (ctx_.vbo == workspace.vbo) {
+    if (ctx_.vbo == workspaceVbo) {
         ctx_.vbo = 0;
     }
 
@@ -1883,9 +1888,10 @@ bool Engine::DeleteWorkspaceFromUI(const std::string& workspaceName) {
 
     workspaces_.erase(workspaceName);
     workspaceDirty_.erase(workspaceName);
-    fileToWorkspace_.erase(workspace.cppPath);
-    fileToWorkspace_.erase(workspace.shaderPath);
+    fileToWorkspace_.erase(workspaceCppPath);
+    fileToWorkspace_.erase(workspaceShaderPath);
     latestSources_.erase(workspaceName);
+    latestSourceHashes_.erase(workspaceName);
     latestUniformDescriptors_.erase(workspaceName);
     latestSamplerUniformNames_.erase(workspaceName);
     latestStorageBufferNames_.erase(workspaceName);
@@ -1896,8 +1902,8 @@ bool Engine::DeleteWorkspaceFromUI(const std::string& workspaceName) {
     compileRetryAfter_.erase(workspaceName);
     recentErrors_.erase(workspaceName);
 
-    ignoreWatcherUntil_.erase(workspace.cppPath);
-    ignoreWatcherUntil_.erase(workspace.shaderPath);
+    ignoreWatcherUntil_.erase(workspaceCppPath);
+    ignoreWatcherUntil_.erase(workspaceShaderPath);
 
     std::erase(workspaceOrder_, workspaceName);
     pipelineConnections_.erase(workspaceName);
@@ -1923,7 +1929,7 @@ bool Engine::DeleteWorkspaceFromUI(const std::string& workspaceName) {
         while (!pendingReloads_.empty()) {
             std::string path = std::move(pendingReloads_.front());
             pendingReloads_.pop();
-            if (path == workspace.cppPath || path == workspace.shaderPath) {
+            if (path == workspaceCppPath || path == workspaceShaderPath) {
                 continue;
             }
             filteredReloads.push(std::move(path));
@@ -2125,7 +2131,9 @@ void Engine::ProcessPendingReloads(double nowSeconds) {
     }
 
     for (const auto& filepath : filesToProcess) {
-        const std::string normalizedPath = NormalizePathString(std::filesystem::path(filepath));
+        const std::filesystem::path filePath(filepath);
+        const std::string normalizedPath = NormalizePathString(filePath);
+        const bool isGlslFile = (filePath.extension() == ".glsl");
         auto ignoredIt = ignoreWatcherUntil_.find(filepath);
         if (ignoredIt != ignoreWatcherUntil_.end() && nowSeconds < ignoredIt->second) {
             continue;
@@ -2133,7 +2141,7 @@ void Engine::ProcessPendingReloads(double nowSeconds) {
 
         const auto content = workspaceManager_->ReadFile(filepath);
         if (!content.has_value()) {
-            if (std::filesystem::path(filepath).extension() == ".glsl") {
+            if (isGlslFile) {
                 bool triggered = false;
                 for (auto& [name, workspace] : workspaces_) {
                     if (std::ranges::find(workspace.shaderDependencies, normalizedPath) ==
@@ -2154,7 +2162,7 @@ void Engine::ProcessPendingReloads(double nowSeconds) {
 
         const std::string workspaceName = WorkspaceForPath(filepath);
         if (workspaceName.empty()) {
-            if (std::filesystem::path(filepath).extension() == ".glsl") {
+            if (isGlslFile) {
                 bool triggered = false;
                 for (auto& [name, workspace] : workspaces_) {
                     if (std::ranges::find(workspace.shaderDependencies, normalizedPath) ==
@@ -2187,7 +2195,7 @@ void Engine::ProcessPendingReloads(double nowSeconds) {
         UpdateWorkspaceSourceFromDocument(workspaceName, filepath, *content);
         ui_->UpdateDocumentContent(filepath, *content);
         QueueCompileForWorkspace(workspaceName, nowSeconds, true);
-        if (std::filesystem::path(filepath).extension() == ".glsl") {
+        if (isGlslFile) {
             dependencyFlashUntil_[normalizedPath] = nowSeconds + 1.5;
         }
         ui_->AddLogOutput("[Watcher] External change detected: " + filepath);
@@ -2249,6 +2257,7 @@ void Engine::QueueCompile(const std::string& workspaceName,
     }
 
     latestSources_[workspaceName] = source;
+    latestSourceHashes_[workspaceName] = sourceHash;
     latestUniformDescriptors_[workspaceName] = std::move(uniformDescriptors);
     latestSamplerUniformNames_[workspaceName] = std::move(samplerUniformNames);
     latestStorageBufferNames_[workspaceName] = std::move(storageBufferNames);
@@ -3276,12 +3285,9 @@ void Engine::HandleCompileFailure(const CompileResult& result) {
              ", sourceHash=" + std::to_string(result.sourceHash) + ")");
     ui_->AddLogOutput("[JIT] Compile failed for workspace '" + result.workspaceName +
                       "'. Keeping previous program.");
-    if (auto sourceIt = latestSources_.find(result.workspaceName);
-        sourceIt != latestSources_.end()) {
-        const std::size_t currentHash = std::hash<std::string>{}(sourceIt->second);
-        if (currentHash == result.sourceHash) {
-            compileFailures_[result.workspaceName] = CompileFailureState{ result.sourceHash, false };
-        }
+    if (const auto hashIt = latestSourceHashes_.find(result.workspaceName);
+        hashIt != latestSourceHashes_.end() && hashIt->second == result.sourceHash) {
+        compileFailures_[result.workspaceName] = CompileFailureState{ result.sourceHash, false };
     }
 
     // Exponential-ish retry delay dampens repeated failing recompiles.
@@ -3315,9 +3321,9 @@ void Engine::HandleCompileSuccess(const CompileResult& result) {
         return;
     }
 
-    if (auto latestIt = latestSources_.find(result.workspaceName);
-        latestIt != latestSources_.end()) {
-        const std::size_t latestHash = std::hash<std::string>{}(latestIt->second);
+    if (const auto hashIt = latestSourceHashes_.find(result.workspaceName);
+        hashIt != latestSourceHashes_.end()) {
+        const std::size_t latestHash = hashIt->second;
         if (latestHash == result.sourceHash) {
             workspaceDirty_[result.workspaceName] = false;
         }
@@ -3455,8 +3461,12 @@ void Engine::BindSharedSamplerUniforms(WorkspaceState* workspace, const GLuint p
         return;
     }
 
-    GLint maxUnits = 0;
-    glGetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &maxUnits);
+    // GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS is a fixed device property — cache the first valid
+    // value to avoid a driver round-trip on every pass.
+    static GLint maxUnits = 0;
+    if (maxUnits == 0) {
+        glGetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &maxUnits);
+    }
     if (maxUnits <= 0) {
         return;
     }
@@ -3951,8 +3961,8 @@ void Engine::Run() {
         const double frameDeltaSeconds = std::max(0.0, now - lastTime_);
         ctx_.deltaTime = static_cast<float>(frameDeltaSeconds);
         ctx_.time = 0.0f;
-        if (auto activeWorkspaceIt = workspaces_.find(activeWorkspaceName_);
-            activeWorkspaceIt != workspaces_.end()) {
+        auto activeWorkspaceIt = workspaces_.find(activeWorkspaceName_);
+        if (activeWorkspaceIt != workspaces_.end()) {
             auto& activeWorkspace = activeWorkspaceIt->second;
             AdvanceWorkspacePlayback(&activeWorkspace, now);
             if (activeWorkspace.playbackPaused) {
@@ -3980,8 +3990,9 @@ void Engine::Run() {
         RenderSceneToTexture();
         UpdateLanShareUiState();
 
-        if (auto activeWorkspaceIt = workspaces_.find(activeWorkspaceName_);
-            activeWorkspaceIt != workspaces_.end()) {
+        // Iterator is still valid here: workspaces_ is only mutated by Register/Delete/Shutdown,
+        // none of which run in the render-side path between the find above and this use.
+        if (activeWorkspaceIt != workspaces_.end()) {
             ui_->SetUniformValues(activeWorkspaceIt->second.uniforms.Values());
             ui_->SetPlaybackState(BuildPlaybackStateForWorkspace(activeWorkspaceName_));
         } else {
@@ -4067,6 +4078,7 @@ void Engine::Shutdown() {
     recentErrors_.clear();
     ignoreWatcherUntil_.clear();
     latestSources_.clear();
+    latestSourceHashes_.clear();
     latestUniformDescriptors_.clear();
     latestSamplerUniformNames_.clear();
     latestStorageBufferNames_.clear();

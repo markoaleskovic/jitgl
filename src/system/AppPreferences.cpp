@@ -121,13 +121,18 @@ std::string AppPreferences::Trim(std::string value) {
     auto isSpace = [](const unsigned char ch) {
         return std::isspace(ch) != 0;
     };
-    while (!value.empty() && isSpace(static_cast<unsigned char>(value.front()))) {
-        value.erase(value.begin());
+    std::size_t begin = 0;
+    while (begin < value.size() && isSpace(static_cast<unsigned char>(value[begin]))) {
+        ++begin;
     }
-    while (!value.empty() && isSpace(static_cast<unsigned char>(value.back()))) {
-        value.pop_back();
+    std::size_t end = value.size();
+    while (end > begin && isSpace(static_cast<unsigned char>(value[end - 1]))) {
+        --end;
     }
-    return value;
+    if (begin == 0 && end == value.size()) {
+        return value;
+    }
+    return value.substr(begin, end - begin);
 }
 
 std::string AppPreferences::ToLower(std::string value) {

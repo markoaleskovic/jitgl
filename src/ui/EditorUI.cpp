@@ -1846,12 +1846,14 @@ void EditorUI::DrawMenuWorkspaceLabel(const std::vector<std::string>& workspaceN
         return;
     }
 
-    std::string workspaceLabel = "Workspace: " + currentWorkspace;
-    if (auto activeWorkspaceIt = std::ranges::find(workspaceNamesSnapshot, currentWorkspace);
+    std::string workspaceLabel;
+    if (const auto activeWorkspaceIt = std::ranges::find(workspaceNamesSnapshot, currentWorkspace);
         activeWorkspaceIt != workspaceNamesSnapshot.end()) {
-        auto activeWorkspaceIndex = static_cast<std::size_t>(
+        const auto activeWorkspaceIndex = static_cast<std::size_t>(
             std::distance(workspaceNamesSnapshot.begin(), activeWorkspaceIt));
         workspaceLabel = "Workspace " + std::to_string(activeWorkspaceIndex + 1) + ": " + currentWorkspace;
+    } else {
+        workspaceLabel = "Workspace: " + currentWorkspace;
     }
 
     const float centeredX = (ImGui::GetWindowWidth() - ImGui::CalcTextSize(workspaceLabel.c_str()).x) * 0.5f;
@@ -1999,8 +2001,12 @@ bool EditorUI::DrawEditorTab(Document& doc,
         return false;
     }
 
+    const bool isPendingSelection =
+        !pendingDocumentSelectionPath_.empty() && doc.filepath == pendingDocumentSelectionPath_;
+    const bool isActiveDocument = (doc.filepath == activeDocumentPath_);
+
     ImGuiTabItemFlags tabFlags = doc.isDirty ? ImGuiTabItemFlags_UnsavedDocument : ImGuiTabItemFlags_None;
-    if (!pendingDocumentSelectionPath_.empty() && doc.filepath == pendingDocumentSelectionPath_) {
+    if (isPendingSelection) {
         *pendingSelectionVisible = true;
         tabFlags |= ImGuiTabItemFlags_SetSelected;
     }
@@ -2009,15 +2015,15 @@ bool EditorUI::DrawEditorTab(Document& doc,
         return true;
     }
 
-    if (focusEditorRequestFramesRemaining_ > 0 && doc.filepath == activeDocumentPath_) {
+    if (focusEditorRequestFramesRemaining_ > 0 && isActiveDocument) {
         // We set the focus to the next item (the child window inside TextEditor::Render)
         ImGui::SetKeyboardFocusHere();
     }
 
-    if (!pendingDocumentSelectionPath_.empty() && doc.filepath == pendingDocumentSelectionPath_) {
+    if (isPendingSelection) {
         *pendingSelectionConsumed = true;
     }
-    if (activeDocumentPath_ != doc.filepath) {
+    if (!isActiveDocument) {
         activeDocumentPath_ = doc.filepath;
         if (onActiveDocumentChanged_) {
             onActiveDocumentChanged_(doc.filepath, doc.lastKnownText);
@@ -2025,6 +2031,8 @@ bool EditorUI::DrawEditorTab(Document& doc,
     }
 
     doc.editor.Render(doc.filename.c_str());
+    // isActiveDocument captured before the assignment above is still authoritative for the
+    // "previously active" check here — the focus-frame decrement is keyed off the same tab.
     if (focusEditorRequestFramesRemaining_ > 0 && doc.filepath == activeDocumentPath_) {
         --focusEditorRequestFramesRemaining_;
     }
