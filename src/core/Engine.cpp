@@ -595,6 +595,11 @@ bool Engine::Init() {
         ui_->AddLogOutput("[Network] LAN workspace sharing is disabled by preference.");
     }
 
+    // UI has loaded prefs at this point; sync vsync + frame cap with what the user saved.
+    if (ui_) {
+        ApplyGraphicsSettings(ui_->GetAppSettings());
+    }
+
     lastTime_ = glfwGetTime();
     ui_->AddLogOutput("[Engine] Initialized successfully.");
     return true;
@@ -650,6 +655,7 @@ bool Engine::InitWindow() {
     }
 
     glfwMakeContextCurrent(window_);
+    // V-sync defaults to on, but the real value comes from saved preferences once UI has loaded them.
     glfwSwapInterval(1);
     return true;
 }
@@ -1004,6 +1010,9 @@ bool Engine::InitUI() {
     });
     ui_->SetHardResetRuntimeCallback([this]() {
         HardResetActiveWorkspaceState("manual hard reset", true);
+    });
+    ui_->SetAppSettingsAppliedCallback([this](const EditorUI::AppSettings& settings) {
+        ApplyGraphicsSettings(settings);
     });
     ui_->SetUniformEditCallback([this](const UniformEditCommand& command) {
         HandleUniformEditCommand(command);
@@ -3946,13 +3955,14 @@ void Engine::RenderSceneToTexture() {
 
 void Engine::Run() {
     while (!glfwWindowShouldClose(window_)) {
+        const double frameStartSeconds = glfwGetTime();
         glfwPollEvents();
 
         if (ctx_.consume_reset_state_request()) {
             HardResetActiveWorkspaceState("requested by scene code", false);
         }
 
-        const double now = glfwGetTime();
+        const double now = frameStartSeconds;
         ProcessPendingReloads(now);
         CompletePendingJITReset();
         SubmitDueCompiles(now);
@@ -4009,6 +4019,46 @@ void Engine::Run() {
 
         ui_->Render();
         glfwSwapBuffers(window_);
+
+        FrameCapWait(frameStartSeconds);
+        if (ui_) {
+            const double frameEnd = glfwGetTime();
+            ui_->ReportFrameTime(static_cast<float>((frameEnd - frameStartSeconds) * 1000.0));
+        }
+    }
+}
+
+void Engine::ApplyGraphicsSettings(const EditorUI::AppSettings& settings) {
+    vsyncEnabled_ = settings.vsyncEnabled;
+    targetFramerate_ = std::clamp(settings.targetFramerate, 15, 480);
+
+    // glfwSwapInterval needs a current GL context. Init() ensures it before this call,
+    // and Settings UI runs on the main thread which always has the context.
+    glfwSwapInterval(vsyncEnabled_ ? 1 : 0);
+    if (ui_) {
+        ui_->AddLogOutput(std::string("[Engine] V-Sync ") + (vsyncEnabled_ ? "ON" : "OFF") +
+                          ", target FPS = " + std::to_string(targetFramerate_));
+    }
+}
+
+void Engine::FrameCapWait(double frameStartSeconds) {
+    if (vsyncEnabled_ || targetFramerate_ <= 0) {
+        return;
+    }
+    const double targetFrameSeconds = 1.0 / static_cast<double>(targetFramerate_);
+    // Coarse sleep up to ~1 ms before the deadline; busy-wait the last bit for accuracy.
+    while (true) {
+        const double remaining = targetFrameSeconds - (glfwGetTime() - frameStartSeconds);
+        if (remaining <= 0.0) {
+            return;
+        }
+        if (remaining > 0.002) {
+            std::this_thread::sleep_for(std::chrono::microseconds(
+                static_cast<long long>((remaining - 0.001) * 1'000'000.0)));
+        } else {
+            // Busy-spin the final fraction of a millisecond.
+            std::this_thread::yield();
+        }
     }
 }
 

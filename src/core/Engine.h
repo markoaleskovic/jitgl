@@ -300,6 +300,11 @@ private:
     bool InitUI();
     bool InitJIT();
     bool InitWatcher();
+    void ApplyGraphicsSettings(const EditorUI::AppSettings& settings);
+    void FrameCapWait(double frameStartSeconds);
+
+    bool vsyncEnabled_ = true;
+    int  targetFramerate_ = 60;
 
     unsigned int CreateShaderProgram(const char* vsSource, const char* fsSource);
 

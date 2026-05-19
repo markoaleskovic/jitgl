@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdio>
+#include <cstring>
 #include <cmath>
 #include <fstream>
 #include <ranges>
@@ -509,6 +510,7 @@ void EditorUI::Init(GLFWwindow *win) {
     LoadWelcomePreference();
     LoadShowcasePreference();
     LoadNetworkPreference();
+    LoadAllSettingsFromPrefs();
     openWelcomePopupRequested_ = showWelcomeOnStartup_;
     welcomePopupOpenedThisSession_ = false;
     doNotShowWelcomeAgain_ = false;
@@ -573,6 +575,8 @@ void EditorUI::Draw() {
     DrawWelcomePopup();
     DrawShowcaseGuidePopup();
     DrawRuntimeGuidePopup();
+    DrawSettingsWindow();
+    DrawFpsOverlay();
 }
 
 void EditorUI::SetupDockspace() {
@@ -1216,6 +1220,13 @@ void EditorUI::HandleGlobalShortcuts() {
                                                      ? RendererOutputMode::PipelineChain
                                                      : RendererOutputMode::ActiveWorkspace;
                        });
+    TriggerChordAction(canUseCtrlShortcuts && IsKeyDown(window, GLFW_KEY_COMMA),
+                       &ctrlSettingsChordHeld_,
+                       [this]() {
+                           pendingSettings_ = activeSettings_;
+                           showSettingsWindow_ = true;
+                           settingsWindowJustOpened_ = true;
+                       });
     TriggerChordAction(canUseCtrlShortcuts && IsKeyDown(window, GLFW_KEY_F),
                        &ctrlFullscreenChordHeld_,
                        [this]() {
@@ -1343,6 +1354,12 @@ void EditorUI::DrawFileMenu(const std::vector<std::string>& workspaceNamesSnapsh
     }
 
     (void)ImGui::MenuItem("Save", "Ctrl+S");
+    ImGui::Separator();
+    if (ImGui::MenuItem("Settings...", "Ctrl+,")) {
+        pendingSettings_ = activeSettings_;
+        showSettingsWindow_ = true;
+        settingsWindowJustOpened_ = true;
+    }
     ImGui::Separator();
     if (ImGui::MenuItem("Hard Reset Runtime State")) {
         if (onHardResetRuntime_) {
@@ -2052,8 +2069,10 @@ bool EditorUI::DrawEditorTab(Document& doc,
 }
 
 void EditorUI::AutosaveDirtyDocuments(double currentTime) {
+    const double autosaveDelaySeconds =
+        std::max(0.05, static_cast<double>(activeSettings_.autosaveDelayMs) / 1000.0);
     for (auto& doc : openDocuments) {
-        if (!doc.isDirty || (currentTime - doc.lastModifiedTime) < AUTOSAVE_DEBOUNCE_SECONDS) {
+        if (!doc.isDirty || (currentTime - doc.lastModifiedTime) < autosaveDelaySeconds) {
             continue;
         }
 
@@ -2119,6 +2138,63 @@ void EditorUI::DrawTextEditorPane() {
 
     ImGui::SameLine();
     DrawEditorTabsArea();
+
+    // Capture the editor pane's bounds while it's still the active window — used to
+    // anchor the U/P toggle overlay to this pane's top-right corner each frame.
+    const ImGuiViewport* parentViewport = ImGui::GetWindowViewport();
+    const ImVec2 codeEditorPos  = ImGui::GetWindowPos();
+    const ImVec2 codeEditorSize = ImGui::GetWindowSize();
+    ImGui::End();
+
+    DrawEditorPaneToggleOverlay(parentViewport, codeEditorPos, codeEditorSize);
+}
+
+void EditorUI::DrawEditorPaneToggleOverlay(const ImGuiViewport* parentViewport,
+                                           const ImVec2& paneTopLeft,
+                                           const ImVec2& paneSize) {
+    if (paneSize.x <= 0.0f || paneSize.y <= 0.0f) {
+        return;
+    }
+
+    const float margin = 6.0f * currentDpiScale_;
+    const ImVec2 anchorPos(paneTopLeft.x + paneSize.x - margin,
+                           paneTopLeft.y + margin);
+    if (parentViewport != nullptr) {
+        ImGui::SetNextWindowViewport(parentViewport->ID);
+    }
+    ImGui::SetNextWindowPos(anchorPos, ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.0f);
+    constexpr ImGuiWindowFlags kOverlayFlags = ImGuiWindowFlags_NoDecoration |
+                                               ImGuiWindowFlags_AlwaysAutoResize |
+                                               ImGuiWindowFlags_NoSavedSettings |
+                                               ImGuiWindowFlags_NoDocking |
+                                               ImGuiWindowFlags_NoFocusOnAppearing |
+                                               ImGuiWindowFlags_NoNav |
+                                               ImGuiWindowFlags_NoMove;
+    if (ImGui::Begin("##CodeEditorPaneToggles", nullptr, kOverlayFlags)) {
+        const ImVec4 highlight = IsLightTheme() ? ImVec4(0.62f, 0.74f, 0.92f, 1.0f)
+                                                 : ImVec4(0.30f, 0.50f, 0.78f, 1.0f);
+        const ImVec2 buttonSize(ImGui::GetFrameHeight(), ImGui::GetFrameHeight());
+
+        // Snapshot the flag BEFORE the button — the click may flip it, and the matching
+        // PopStyleColor must agree with the matching Push.
+        const bool uniformsActive = showUniformControlsPanel_;
+        if (uniformsActive) ImGui::PushStyleColor(ImGuiCol_Button, highlight);
+        if (ImGui::Button("U", buttonSize)) {
+            showUniformControlsPanel_ = !showUniformControlsPanel_;
+        }
+        if (uniformsActive) ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Toggle Uniform Controls");
+
+        ImGui::SameLine();
+        const bool playbackActive = showPlaybackControlsPanel_;
+        if (playbackActive) ImGui::PushStyleColor(ImGuiCol_Button, highlight);
+        if (ImGui::Button("P", buttonSize)) {
+            showPlaybackControlsPanel_ = !showPlaybackControlsPanel_;
+        }
+        if (playbackActive) ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Toggle Playback Controls");
+    }
     ImGui::End();
 }
 void EditorUI::AppendWorkspaceOutputLine(const std::string& text, bool isConsoleChannel) {
@@ -2700,32 +2776,43 @@ void EditorUI::DrawUniformsTab() {
 
         float toggleHeight = 0.0f;
         if (ImGui::Begin("UniformControlsToggle", nullptr, toggleFlags)) {
-            const char* uniformButtonLabel = showUniformControlsPanel_ ? "Hide Uniforms" : "Show Uniforms";
-            if (ImGui::Button(uniformButtonLabel)) {
+            const ImVec4 highlight = IsLightTheme() ? ImVec4(0.75f, 0.82f, 0.92f, 1.0f)
+                                                     : ImVec4(0.22f, 0.37f, 0.53f, 1.0f);
+            const ImVec2 toggleSize(ImGui::GetFrameHeight() * 1.4f, 0.0f);
+
+            const bool uniformsActive = showUniformControlsPanel_;
+            if (uniformsActive) ImGui::PushStyleColor(ImGuiCol_Button, highlight);
+            if (ImGui::Button("U", toggleSize)) {
                 showUniformControlsPanel_ = !showUniformControlsPanel_;
             }
+            if (uniformsActive) ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Toggle Uniform Controls");
             ImGui::SameLine();
-            const char* playbackButtonLabel = showPlaybackControlsPanel_ ? "Hide Playback" : "Show Playback";
-            if (ImGui::Button(playbackButtonLabel)) {
+            const bool playbackActive = showPlaybackControlsPanel_;
+            if (playbackActive) ImGui::PushStyleColor(ImGuiCol_Button, highlight);
+            if (ImGui::Button("P", toggleSize)) {
                 showPlaybackControlsPanel_ = !showPlaybackControlsPanel_;
             }
+            if (playbackActive) ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Toggle Playback Controls");
             toggleHeight = ImGui::GetWindowSize().y;
         }
         ImGui::End();
         panelsY = topOffset + toggleHeight + 8.0f;
     }
 
+    // Floating panels are movable and remember position across show/hide via ImGui's ini.
+    // Pinned to the main viewport so they don't tear off into a separate OS-level viewport
+    // (which was causing crashes on tear-off with multi-viewport enabled).
     const ImGuiWindowFlags panelFlags = ImGuiWindowFlags_NoDocking |
-                                        ImGuiWindowFlags_NoSavedSettings |
                                         ImGuiWindowFlags_AlwaysAutoResize;
     if (showUniformControlsPanel_) {
         bool panelOpen = showUniformControlsPanel_;
         ImGui::SetNextWindowViewport(viewport->ID);
         ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - margin,
                                        viewport->WorkPos.y + panelsY),
-                                ImGuiCond_Always,
+                                ImGuiCond_FirstUseEver,
                                 ImVec2(1.0f, 0.0f));
-        ImGui::SetNextWindowBgAlpha(0.86f);
 
         if (ImGui::Begin("Uniform Controls", &panelOpen, panelFlags)) {
 
@@ -3018,9 +3105,8 @@ void EditorUI::DrawUniformsTab() {
         ImGui::SetNextWindowViewport(viewport->ID);
         ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - margin,
                                        viewport->WorkPos.y + panelsY),
-                                ImGuiCond_Always,
+                                ImGuiCond_FirstUseEver,
                                 ImVec2(1.0f, 0.0f));
-        ImGui::SetNextWindowBgAlpha(0.86f);
         if (ImGui::Begin("Playback Controls", &panelOpen, panelFlags)) {
             DrawPlaybackTransportBar();
         }
@@ -3129,10 +3215,8 @@ void EditorUI::DrawConsolePane() {
                                      ImGui::GetFrameHeight();
         const float pipelineWidth = ImGui::CalcTextSize("Pipeline").x + style.FramePadding.x * 2.0f +
                                     ImGui::GetFrameHeight();
-        constexpr float toggleButtonWidth = 104.0f;
         const float controlsWidth = labelWidth + style.ItemInnerSpacing.x + workspaceWidth + style.ItemSpacing.x +
-                                    pipelineWidth + style.ItemSpacing.x + toggleButtonWidth + style.ItemSpacing.x +
-                                    toggleButtonWidth;
+                                    pipelineWidth;
         const float startX = std::max(0.0f, ImGui::GetWindowContentRegionMax().x - controlsWidth);
         ImGui::SetCursorPosX(startX);
         ImGui::AlignTextToFramePadding();
@@ -3146,32 +3230,7 @@ void EditorUI::DrawConsolePane() {
         if (ImGui::RadioButton("Pipeline", rendererOutputMode_ == RendererOutputMode::PipelineChain)) {
             rendererOutputMode_ = RendererOutputMode::PipelineChain;
         }
-
-        ImGui::SameLine();
-        const bool uniformPanelWasOpen = showUniformControlsPanel_;
-        if (uniformPanelWasOpen) {
-            ImGui::PushStyleColor(ImGuiCol_Button, IsLightTheme() ? ImVec4(0.75f, 0.82f, 0.92f, 1.0f)
-                                                                  : ImVec4(0.22f, 0.37f, 0.53f, 1.0f));
-        }
-        if (ImGui::Button("Uniforms", ImVec2(toggleButtonWidth, 0.0f))) {
-            showUniformControlsPanel_ = !showUniformControlsPanel_;
-        }
-        if (uniformPanelWasOpen) {
-            ImGui::PopStyleColor();
-        }
-
-        ImGui::SameLine();
-        const bool playbackPanelWasOpen = showPlaybackControlsPanel_;
-        if (playbackPanelWasOpen) {
-            ImGui::PushStyleColor(ImGuiCol_Button, IsLightTheme() ? ImVec4(0.75f, 0.82f, 0.92f, 1.0f)
-                                                                  : ImVec4(0.22f, 0.37f, 0.53f, 1.0f));
-        }
-        if (ImGui::Button("Playback", ImVec2(toggleButtonWidth, 0.0f))) {
-            showPlaybackControlsPanel_ = !showPlaybackControlsPanel_;
-        }
-        if (playbackPanelWasOpen) {
-            ImGui::PopStyleColor();
-        }
+        // Uniform / Playback toggles live in the code-editor tab bar (top-right).
     }
 
     const std::string currentWorkspace = ResolveCurrentWorkspaceName();
@@ -3214,4 +3273,404 @@ void EditorUI::Shutdown() {
     ImGui::DestroyContext();
 
     window = nullptr;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Settings persistence + apply
+// ─────────────────────────────────────────────────────────────────────────────
+
+void EditorUI::SetAppSettingsAppliedCallback(std::function<void(const AppSettings&)> cb) {
+    onAppSettingsApplied_ = std::move(cb);
+}
+
+void EditorUI::ReportFrameTime(float frameMilliseconds) {
+    constexpr int kCapacity = static_cast<int>(sizeof(frameTimeSamplesMs_) / sizeof(frameTimeSamplesMs_[0]));
+    frameTimeSamplesMs_[frameTimeSampleIndex_] = frameMilliseconds;
+    frameTimeSampleIndex_ = (frameTimeSampleIndex_ + 1) % kCapacity;
+    if (frameTimeSampleCount_ < kCapacity) {
+        ++frameTimeSampleCount_;
+    }
+}
+
+namespace {
+    constexpr int kAllowedUiScales[] = { 75, 100, 125, 150, 200 };
+
+    int NearestAllowedScale(int percent) {
+        int best = kAllowedUiScales[0];
+        int bestDist = std::abs(percent - best);
+        for (const int candidate : kAllowedUiScales) {
+            const int dist = std::abs(percent - candidate);
+            if (dist < bestDist) {
+                best = candidate;
+                bestDist = dist;
+            }
+        }
+        return best;
+    }
+}
+
+void EditorUI::LoadAllSettingsFromPrefs() {
+    AppSettings loaded;
+    loaded.vsyncEnabled       = appPreferences_.GetBool("graphics.vsync", true);
+    loaded.targetFramerate    = std::clamp(appPreferences_.GetInt("graphics.target_fps", 60), 15, 480);
+    loaded.showFpsOverlay     = appPreferences_.GetBool("graphics.show_fps_overlay", false);
+    loaded.fpsOverlayCorner   = std::clamp(appPreferences_.GetInt("graphics.fps_overlay_corner", 1), 0, 3);
+    const std::string themeStr = appPreferences_.GetString("appearance.theme", "dark");
+    loaded.darkTheme          = (themeStr != "light");
+    loaded.uiScalePercent     = NearestAllowedScale(appPreferences_.GetInt("appearance.ui_scale_percent",
+                                                                            static_cast<int>(currentDpiScale_ * 100.0f)));
+    loaded.autosaveDelayMs    = std::clamp(appPreferences_.GetInt("editor.autosave_delay_ms", 1000), 250, 10000);
+    loaded.showWelcomeOnStartup  = showWelcomeOnStartup_;
+    loaded.loadShowcaseOnStartup = loadShowcaseWorkspaceOnStartup_;
+    loaded.networkEnabled     = networkEnabled_;
+
+    ApplyAppSettings(loaded, /*dispatchCallback=*/false);
+}
+
+void EditorUI::SaveAllSettingsToPrefs() {
+    appPreferences_.SetBool ("graphics.vsync",                activeSettings_.vsyncEnabled);
+    appPreferences_.SetInt  ("graphics.target_fps",           activeSettings_.targetFramerate);
+    appPreferences_.SetBool ("graphics.show_fps_overlay",     activeSettings_.showFpsOverlay);
+    appPreferences_.SetInt  ("graphics.fps_overlay_corner",   activeSettings_.fpsOverlayCorner);
+    appPreferences_.SetString("appearance.theme",             activeSettings_.darkTheme ? "dark" : "light");
+    appPreferences_.SetInt  ("appearance.ui_scale_percent",   activeSettings_.uiScalePercent);
+    appPreferences_.SetInt  ("editor.autosave_delay_ms",      activeSettings_.autosaveDelayMs);
+    appPreferences_.SetBool ("welcome.show_on_startup",       activeSettings_.showWelcomeOnStartup);
+    appPreferences_.SetBool ("showcase.load_on_startup",      activeSettings_.loadShowcaseOnStartup);
+    appPreferences_.SetBool ("network.enabled",               activeSettings_.networkEnabled);
+    (void)appPreferences_.Save();
+}
+
+void EditorUI::ApplyAppSettings(const AppSettings& settings, bool dispatchCallback) {
+    const AppSettings previous = activeSettings_;
+    activeSettings_ = settings;
+
+    // Theme
+    const UiTheme desiredTheme = settings.darkTheme ? UiTheme::Dark : UiTheme::Light;
+    if (desiredTheme != currentTheme_) {
+        currentTheme_ = desiredTheme;
+        themeApplyPending_ = true;
+    }
+
+    // UI scale
+    const float desiredScale = static_cast<float>(settings.uiScalePercent) / 100.0f;
+    if (std::abs(desiredScale - currentDpiScale_) >= 0.001f) {
+        pendingDpiScale_ = desiredScale;
+    }
+
+    // Startup mirrors — keep the legacy bools and prefs in sync so welcome/showcase popups behave.
+    if (settings.showWelcomeOnStartup != showWelcomeOnStartup_) {
+        showWelcomeOnStartup_ = settings.showWelcomeOnStartup;
+        SaveWelcomePreference();
+    }
+    if (settings.loadShowcaseOnStartup != loadShowcaseWorkspaceOnStartup_) {
+        loadShowcaseWorkspaceOnStartup_ = settings.loadShowcaseOnStartup;
+        SaveShowcasePreference();
+    }
+
+    // Network — only fire the existing callback when it actually changed.
+    if (settings.networkEnabled != networkEnabled_) {
+        networkEnabled_ = settings.networkEnabled;
+        SaveNetworkPreference();
+        if (onNetworkEnabledChanged_) {
+            onNetworkEnabledChanged_(networkEnabled_);
+        }
+    }
+
+    if (dispatchCallback && onAppSettingsApplied_) {
+        onAppSettingsApplied_(activeSettings_);
+    }
+    (void)previous;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Settings window UI
+// ─────────────────────────────────────────────────────────────────────────────
+
+namespace {
+    struct SettingsCategoryDef {
+        const char* label;
+        const char* description;
+    };
+
+    constexpr SettingsCategoryDef kSettingsCategories[] = {
+        { "Graphics",   "V-sync, frame pacing, overlays." },
+        { "Appearance", "Theme, UI scale." },
+        { "Editor",     "Editing behavior." },
+        { "Startup",    "Workspace and welcome behavior." },
+        { "Network",    "LAN workspace sharing." },
+    };
+}
+
+void EditorUI::DrawSettingsWindow() {
+    if (!showSettingsWindow_) {
+        return;
+    }
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    if (settingsWindowJustOpened_) {
+        ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        const ImVec2 desired(820.0f * currentDpiScale_, 540.0f * currentDpiScale_);
+        ImGui::SetNextWindowSize(desired, ImGuiCond_Always);
+        settingsWindowJustOpened_ = false;
+    }
+    ImGui::SetNextWindowSizeConstraints(ImVec2(680.0f, 420.0f),
+                                        ImVec2(viewport->WorkSize.x * 0.95f,
+                                               viewport->WorkSize.y * 0.95f));
+
+    bool open = true;
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking;
+    if (!ImGui::Begin("Settings", &open, flags)) {
+        ImGui::End();
+        if (!open) {
+            showSettingsWindow_ = false;
+        }
+        return;
+    }
+
+    const float footerHeight = ImGui::GetFrameHeightWithSpacing() * 1.6f;
+    const float sidebarWidth = std::max(160.0f, 180.0f * currentDpiScale_);
+
+    if (ImGui::BeginChild("SettingsSidebar", ImVec2(sidebarWidth, -footerHeight), true)) {
+        for (int i = 0; i < static_cast<int>(sizeof(kSettingsCategories) / sizeof(kSettingsCategories[0])); ++i) {
+            const bool selected = (settingsActiveCategory_ == i);
+            if (ImGui::Selectable(kSettingsCategories[i].label, selected,
+                                  ImGuiSelectableFlags_None,
+                                  ImVec2(0.0f, ImGui::GetFrameHeight()))) {
+                settingsActiveCategory_ = i;
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", kSettingsCategories[i].description);
+            }
+        }
+    }
+    ImGui::EndChild();
+    ImGui::SameLine();
+
+    if (ImGui::BeginChild("SettingsContent", ImVec2(0.0f, -footerHeight), true)) {
+        const int category = std::clamp(settingsActiveCategory_, 0,
+                                        static_cast<int>(sizeof(kSettingsCategories) / sizeof(kSettingsCategories[0])) - 1);
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 10.0f));
+        ImGui::TextDisabled("%s", kSettingsCategories[category].description);
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        switch (category) {
+            case 0: DrawSettingsCategoryGraphics();   break;
+            case 1: DrawSettingsCategoryAppearance(); break;
+            case 2: DrawSettingsCategoryEditor();     break;
+            case 3: DrawSettingsCategoryStartup();    break;
+            case 4: DrawSettingsCategoryNetwork();    break;
+            default: break;
+        }
+        ImGui::PopStyleVar();
+    }
+    ImGui::EndChild();
+
+    ImGui::Separator();
+
+    // Footer: dirty indicator + buttons
+    const bool dirty = std::memcmp(&pendingSettings_, &activeSettings_, sizeof(AppSettings)) != 0;
+    if (dirty) {
+        ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.20f, 1.0f), "* Unsaved changes");
+    } else {
+        ImGui::TextDisabled("All changes saved");
+    }
+    ImGui::SameLine();
+
+    const float buttonW = 96.0f;
+    const float buttonSpacing = ImGui::GetStyle().ItemSpacing.x;
+    const float buttonsTotalWidth = buttonW * 3.0f + buttonSpacing * 2.0f;
+    const float availableX = ImGui::GetContentRegionAvail().x;
+    if (availableX > buttonsTotalWidth) {
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + availableX - buttonsTotalWidth);
+    }
+
+    if (ImGui::Button("Cancel", ImVec2(buttonW, 0.0f))) {
+        pendingSettings_ = activeSettings_;
+        showSettingsWindow_ = false;
+    }
+    ImGui::SameLine();
+    if (!dirty) {
+        ImGui::BeginDisabled();
+    }
+    if (ImGui::Button("Apply", ImVec2(buttonW, 0.0f))) {
+        ApplyAppSettings(pendingSettings_, /*dispatchCallback=*/true);
+        SaveAllSettingsToPrefs();
+        pendingSettings_ = activeSettings_;
+    }
+    if (!dirty) {
+        ImGui::EndDisabled();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("OK", ImVec2(buttonW, 0.0f))) {
+        if (dirty) {
+            ApplyAppSettings(pendingSettings_, /*dispatchCallback=*/true);
+            SaveAllSettingsToPrefs();
+            pendingSettings_ = activeSettings_;
+        }
+        showSettingsWindow_ = false;
+    }
+
+    ImGui::End();
+    if (!open) {
+        showSettingsWindow_ = false;
+    }
+}
+
+void EditorUI::DrawSettingsCategoryGraphics() {
+    ImGui::Checkbox("Enable V-Sync", &pendingSettings_.vsyncEnabled);
+    ImGui::TextDisabled("When on, the frame rate is locked to the monitor's refresh rate.");
+    ImGui::Spacing();
+
+    if (pendingSettings_.vsyncEnabled) {
+        ImGui::BeginDisabled();
+    }
+    ImGui::Text("Target Framerate");
+    ImGui::SetNextItemWidth(220.0f);
+    ImGui::SliderInt("##targetFps", &pendingSettings_.targetFramerate, 15, 480, "%d FPS");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("60")) pendingSettings_.targetFramerate = 60;
+    ImGui::SameLine();
+    if (ImGui::SmallButton("120")) pendingSettings_.targetFramerate = 120;
+    ImGui::SameLine();
+    if (ImGui::SmallButton("144")) pendingSettings_.targetFramerate = 144;
+    ImGui::SameLine();
+    if (ImGui::SmallButton("240")) pendingSettings_.targetFramerate = 240;
+    ImGui::TextDisabled("Only used when V-Sync is disabled. The main loop sleeps to enforce this cap.");
+    if (pendingSettings_.vsyncEnabled) {
+        ImGui::EndDisabled();
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImGui::Checkbox("Show FPS Overlay", &pendingSettings_.showFpsOverlay);
+    ImGui::TextDisabled("Displays a small overlay with current FPS and frame time.");
+
+    if (!pendingSettings_.showFpsOverlay) {
+        ImGui::BeginDisabled();
+    }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(160.0f);
+    static constexpr const char* kCornerLabels[] = { "Top Left", "Top Right", "Bottom Left", "Bottom Right" };
+    const int currentCorner = std::clamp(pendingSettings_.fpsOverlayCorner, 0, 3);
+    if (ImGui::BeginCombo("##fpsCorner", kCornerLabels[currentCorner])) {
+        for (int i = 0; i < 4; ++i) {
+            const bool selected = (i == currentCorner);
+            if (ImGui::Selectable(kCornerLabels[i], selected)) {
+                pendingSettings_.fpsOverlayCorner = i;
+            }
+            if (selected) {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    if (!pendingSettings_.showFpsOverlay) {
+        ImGui::EndDisabled();
+    }
+}
+
+void EditorUI::DrawSettingsCategoryAppearance() {
+    ImGui::Text("Theme");
+    int themeIndex = pendingSettings_.darkTheme ? 0 : 1;
+    if (ImGui::RadioButton("Dark", themeIndex == 0)) {
+        pendingSettings_.darkTheme = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Light", themeIndex == 1)) {
+        pendingSettings_.darkTheme = false;
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    ImGui::Text("UI Scale");
+    int currentScaleIdx = 1;  // 100% by default
+    for (int i = 0; i < static_cast<int>(sizeof(kAllowedUiScales) / sizeof(kAllowedUiScales[0])); ++i) {
+        if (kAllowedUiScales[i] == pendingSettings_.uiScalePercent) {
+            currentScaleIdx = i;
+            break;
+        }
+    }
+    char comboLabel[16];
+    std::snprintf(comboLabel, sizeof(comboLabel), "%d%%", pendingSettings_.uiScalePercent);
+    ImGui::SetNextItemWidth(160.0f);
+    if (ImGui::BeginCombo("##uiScale", comboLabel)) {
+        for (int i = 0; i < static_cast<int>(sizeof(kAllowedUiScales) / sizeof(kAllowedUiScales[0])); ++i) {
+            char label[16];
+            std::snprintf(label, sizeof(label), "%d%%", kAllowedUiScales[i]);
+            const bool selected = (i == currentScaleIdx);
+            if (ImGui::Selectable(label, selected)) {
+                pendingSettings_.uiScalePercent = kAllowedUiScales[i];
+            }
+            if (selected) {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::TextDisabled("Ctrl+= and Ctrl+- also adjust scale at runtime.");
+}
+
+void EditorUI::DrawSettingsCategoryEditor() {
+    ImGui::Text("Autosave Delay");
+    ImGui::SetNextItemWidth(220.0f);
+    ImGui::SliderInt("##autosaveDelay", &pendingSettings_.autosaveDelayMs, 250, 10000, "%d ms");
+    ImGui::TextDisabled("Documents are saved this long after the last edit.");
+}
+
+void EditorUI::DrawSettingsCategoryStartup() {
+    ImGui::Checkbox("Show welcome screen on startup", &pendingSettings_.showWelcomeOnStartup);
+    ImGui::Spacing();
+    ImGui::Checkbox("Load showcase workspace on first launch", &pendingSettings_.loadShowcaseOnStartup);
+    ImGui::TextDisabled("Applies only when the workspace folder is empty.");
+}
+
+void EditorUI::DrawSettingsCategoryNetwork() {
+    ImGui::Checkbox("Enable LAN workspace sharing", &pendingSettings_.networkEnabled);
+    ImGui::TextDisabled("Discover and share workspaces with other JITGL instances on the same network.");
+    ImGui::Spacing();
+    if (ImGui::Button("Open Network Diagnostics...")) {
+        showNetworkDiagnostics_ = true;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FPS overlay
+// ─────────────────────────────────────────────────────────────────────────────
+
+void EditorUI::DrawFpsOverlay() {
+    if (!activeSettings_.showFpsOverlay || frameTimeSampleCount_ == 0) {
+        return;
+    }
+
+    float sumMs = 0.0f;
+    for (int i = 0; i < frameTimeSampleCount_; ++i) {
+        sumMs += frameTimeSamplesMs_[i];
+    }
+    const float avgMs = sumMs / static_cast<float>(frameTimeSampleCount_);
+    const float fps = (avgMs > 0.0001f) ? (1000.0f / avgMs) : 0.0f;
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float margin = 8.0f * currentDpiScale_;
+    const int corner = std::clamp(activeSettings_.fpsOverlayCorner, 0, 3);
+    const bool right  = (corner == 1 || corner == 3);
+    const bool bottom = (corner == 2 || corner == 3);
+    const ImVec2 pos(viewport->WorkPos.x + (right  ? viewport->WorkSize.x - margin : margin),
+                     viewport->WorkPos.y + (bottom ? viewport->WorkSize.y - margin : margin));
+    const ImVec2 pivot(right ? 1.0f : 0.0f, bottom ? 1.0f : 0.0f);
+    ImGui::SetNextWindowPos(pos, ImGuiCond_Always, pivot);
+    ImGui::SetNextWindowBgAlpha(0.55f);
+    constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoDocking |
+                                        ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                                        ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
+                                        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs;
+    if (ImGui::Begin("##FpsOverlay", nullptr, kFlags)) {
+        ImGui::Text("%.1f FPS  (%.2f ms)", fps, avgMs);
+    }
+    ImGui::End();
 }

@@ -96,6 +96,28 @@ public:
         std::size_t cachedSharedPayloads = 0;
     };
 
+    struct AppSettings {
+        // Graphics
+        bool vsyncEnabled = true;
+        int targetFramerate = 60;      // capped between 15..480; ignored when vsync is on
+        bool showFpsOverlay = false;
+        int fpsOverlayCorner = 1;      // 0=TopLeft, 1=TopRight, 2=BottomLeft, 3=BottomRight
+
+        // Appearance
+        bool darkTheme = true;          // false => light theme
+        int uiScalePercent = 100;      // one of {75, 100, 125, 150, 200}
+
+        // Editor
+        int autosaveDelayMs = 1000;
+
+        // Startup
+        bool showWelcomeOnStartup = true;
+        bool loadShowcaseOnStartup = true;
+
+        // Network
+        bool networkEnabled = true;
+    };
+
     enum class PlaybackCommandType : std::uint8_t {
         TogglePause,
         Rewind,
@@ -247,6 +269,9 @@ public:
     void SetRequestFirewallAccessCallback(std::function<void()> cb);
     void SetHardResetRuntimeCallback(std::function<void()> cb);
     void SetNetworkEnabledChangedCallback(std::function<void(bool)> cb);
+    void SetAppSettingsAppliedCallback(std::function<void(const AppSettings&)> cb);
+    const AppSettings& GetAppSettings() const { return activeSettings_; }
+    void ReportFrameTime(float frameMilliseconds);
     bool IsNetworkEnabled() const;
     void SetWorkspaces(const std::vector<std::string>& workspaceNames, const std::string& activeWorkspace);
     void SetActiveWorkspace(const std::string& workspaceName);
@@ -325,7 +350,19 @@ private:
     std::function<void()> onRequestFirewallAccess_;
     std::function<void()> onHardResetRuntime_;
     std::function<void(bool)> onNetworkEnabledChanged_;
+    std::function<void(const AppSettings&)> onAppSettingsApplied_;
     bool networkEnabled_ = true;
+
+    AppSettings activeSettings_{};
+    AppSettings pendingSettings_{};
+    bool showSettingsWindow_ = false;
+    int settingsActiveCategory_ = 0;
+    bool settingsWindowJustOpened_ = false;
+
+    // Smoothed frame stats for the FPS overlay (driven by ReportFrameTime).
+    float frameTimeSamplesMs_[120] = {};
+    int frameTimeSampleIndex_ = 0;
+    int frameTimeSampleCount_ = 0;
 
     std::vector<NetworkPeer> networkPeers_;
     NetworkDiagnostics networkDiagnostics_;
@@ -374,6 +411,16 @@ private:
 
     void SetupDockspace();
     void DrawMenuBar();
+    void DrawSettingsWindow();
+    void DrawSettingsCategoryGraphics();
+    void DrawSettingsCategoryAppearance();
+    void DrawSettingsCategoryEditor();
+    void DrawSettingsCategoryStartup();
+    void DrawSettingsCategoryNetwork();
+    void DrawFpsOverlay();
+    void LoadAllSettingsFromPrefs();
+    void SaveAllSettingsToPrefs();
+    void ApplyAppSettings(const AppSettings& settings, bool dispatchCallback);
     void DrawConsolePane();
     void DrawTextEditorPane();
     void DrawFileMenu(const std::vector<std::string>& workspaceNamesSnapshot,
@@ -398,6 +445,9 @@ private:
                               std::string* pendingWorkspaceSwitch,
                               std::string* pendingWorkspaceDelete);
     void DrawEditorTabsArea();
+    void DrawEditorPaneToggleOverlay(const ImGuiViewport* parentViewport,
+                                     const ImVec2& paneTopLeft,
+                                     const ImVec2& paneSize);
     bool DrawEditorTab(Document& doc,
                        double currentTime,
                        bool* pendingSelectionVisible,
@@ -453,6 +503,7 @@ private:
     bool ctrlThemeToggleChordHeld_ = false;
     bool ctrlRenderModeChordHeld_ = false;
     bool ctrlFullscreenChordHeld_ = false;
+    bool ctrlSettingsChordHeld_ = false;
     bool showWelcomeOnStartup_ = true;
     bool welcomePopupOpenedThisSession_ = false;
     bool openWelcomePopupRequested_ = false;
