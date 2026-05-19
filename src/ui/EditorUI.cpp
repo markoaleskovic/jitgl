@@ -2443,6 +2443,7 @@ void EditorUI::DrawPipelineTab() {
     const float addButtonWidth = 56.0f;
     const float saveButtonWidth = 90.0f;
     const float resetButtonWidth = 74.0f;
+    const float disableAllButtonWidth = 90.0f;
     const float availableWidth = ImGui::GetContentRegionAvail().x;
     const float comboWidth = std::clamp(availableWidth * 0.45f, 120.0f, 280.0f);
 
@@ -2500,6 +2501,36 @@ void EditorUI::DrawPipelineTab() {
     }
     if (ImGui::Button("Reset", ImVec2(resetButtonWidth, 0.0f)) && onPipelineReset_) {
         onPipelineReset_();
+    }
+
+    bool anyEnabled = false;
+    for (const auto& pass : pipelinePasses_) {
+        if (pass.enabled) {
+            anyEnabled = true;
+            break;
+        }
+    }
+    if (ImGui::GetContentRegionAvail().x > (disableAllButtonWidth + style.ItemSpacing.x)) {
+        ImGui::SameLine();
+    }
+    if (!anyEnabled) {
+        ImGui::BeginDisabled();
+    }
+    if (ImGui::Button("Disable All", ImVec2(disableAllButtonWidth, 0.0f)) && onPipelineEdit_) {
+        for (const auto& pass : pipelinePasses_) {
+            if (!pass.enabled) {
+                continue;
+            }
+            PipelineEditCommand command;
+            command.action = PipelineEditAction::SetEnabled;
+            command.workspaceName = pass.workspaceName;
+            command.outputName = pass.outputName;
+            command.enabled = false;
+            onPipelineEdit_(command);
+        }
+    }
+    if (!anyEnabled) {
+        ImGui::EndDisabled();
     }
     ImGui::PopID();
 

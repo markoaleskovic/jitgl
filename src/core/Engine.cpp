@@ -615,45 +615,21 @@ bool Engine::InitWindow() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, GL_VERSION_MAJOR);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, GL_VERSION_MINOR);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    // Hint the window manager that this window should come up maximized so its
+    // edges clip cleanly against the display work area (taskbar, panels, etc.)
+    // instead of being sized manually and bleeding past the visible region.
+    glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE);
 
-    int initialWidth = WINDOW_WIDTH;
-    int initialHeight = WINDOW_HEIGHT;
-    int initialPosX = 0;
-    int initialPosY = 0;
-    bool hasInitialPosition = false;
-
-    if (GLFWmonitor* primaryMonitor = glfwGetPrimaryMonitor(); primaryMonitor != nullptr) {
-        int workX = 0;
-        int workY = 0;
-        int workWidth = 0;
-        int workHeight = 0;
-        glfwGetMonitorWorkarea(primaryMonitor, &workX, &workY, &workWidth, &workHeight);
-        if (workWidth > 0 && workHeight > 0) {
-            initialWidth = workWidth;
-            initialHeight = workHeight;
-            initialPosX = workX;
-            initialPosY = workY;
-            hasInitialPosition = true;
-        } else if (const GLFWvidmode* mode = glfwGetVideoMode(primaryMonitor); mode != nullptr &&
-                   mode->width > 0 && mode->height > 0) {
-            initialWidth = mode->width;
-            initialHeight = mode->height;
-            initialPosX = 0;
-            initialPosY = 0;
-            hasInitialPosition = true;
-        }
-    }
-
-    window_ = glfwCreateWindow(initialWidth, initialHeight, WINDOW_TITLE, nullptr, nullptr);
+    window_ = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_TITLE, nullptr, nullptr);
     if (!window_) {
         std::cerr << "Window creation failed\n";
         glfwTerminate();
         return false;
     }
 
-    if (hasInitialPosition) {
-        glfwSetWindowPos(window_, initialPosX, initialPosY);
-    }
+    // Belt-and-suspenders: some window managers ignore the hint, so call
+    // glfwMaximizeWindow explicitly once the window exists.
+    glfwMaximizeWindow(window_);
 
     glfwMakeContextCurrent(window_);
     // V-sync defaults to on, but the real value comes from saved preferences once UI has loaded them.
