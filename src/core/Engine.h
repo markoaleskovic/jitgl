@@ -21,6 +21,7 @@
 #include "uniform/UniformControls.h"
 #include "uniform/UniformRegistry.h"
 #include "system/network/LanWorkspaceShareService.h"
+#include "system/VideoRecorder.h"
 #include "assets/AssetRegistry.h"
 
 struct GLFWwindow;
@@ -67,6 +68,11 @@ private:
     std::unique_ptr<WorkspaceManager> workspaceManager_;
     std::unique_ptr<LanWorkspaceShareService> lanShare_;
     bool networkEnabled_ = true;
+
+    std::unique_ptr<VideoRecorder> videoRecorder_;
+    bool HandleStartRecording(const EditorUI::RecorderStartRequest& request, std::string* errorMessage);
+    void HandleStopRecording();
+    void UpdateRecorderUiStatus(double nowSeconds);
 
     // Main-thread runtime state
     EngineContext ctx_;

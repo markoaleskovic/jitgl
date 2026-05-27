@@ -119,6 +119,7 @@ add_executable(jit_ide
         src/core/WorkspaceManager.cpp
         src/system/ConsoleRedirectSession.cpp
         src/system/AppPreferences.cpp
+        src/system/VideoRecorder.cpp
         src/system/network/LanWorkspaceShareService.cpp
         src/assets/AssetRegistry.cpp
         src/assets/MeshLoader.cpp

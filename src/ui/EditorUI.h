@@ -96,6 +96,31 @@ public:
         std::size_t cachedSharedPayloads = 0;
     };
 
+    // Snapshot of recorder progress pushed from the engine each frame.
+    struct RecorderStatusView {
+        bool active = false;
+        int framesCaptured = 0;
+        int framesDropped = 0;
+        int width = 0;
+        int height = 0;
+        int fps = 60;
+        double durationSeconds = 0.0;
+        double elapsedSeconds = 0.0;
+        std::string outputPath;
+        // One-shot toast: set true on the frame recording finishes (success
+        // or error). Consumer clears after display.
+        bool justFinished = false;
+        std::string finishedError;
+    };
+
+    // Request from the UI to the engine to begin a recording session.
+    struct RecorderStartRequest {
+        std::string outputPath;
+        double durationSeconds = 10.0;   // 0 = manual stop
+        int fps = 60;
+        int crf = 18;
+    };
+
     struct AppSettings {
         // Graphics
         bool vsyncEnabled = true;
@@ -354,6 +379,12 @@ public:
     void SetPipelineConnectionCallback(std::function<void(const PipelineConnectionCommand&)> cb);
     void SetPipelineGlobalUniformCallback(std::function<void(const PipelineGlobalUniformCommand&)> cb);
     void SetPipelineResourceExportCallback(std::function<bool(const std::string&, const std::string&)> cb);
+    // Recorder hookup: callback returning true if recording started OK,
+    // false (and writing into errorMessage) otherwise.
+    void SetRecorderStartCallback(std::function<bool(const RecorderStartRequest&, std::string*)> cb);
+    void SetRecorderStopCallback(std::function<void()> cb);
+    void SetRecorderStatus(const RecorderStatusView& status);
+    void SetRecorderDefaultDirectory(const std::string& dir);
     bool ShouldLoadShowcaseWorkspaceOnStartup() const;
     void SetupDarkTheme() const;
     void SetupLightTheme() const;
@@ -469,6 +500,20 @@ private:
     std::function<void(const PipelineConnectionCommand&)> onPipelineConnection_;
     std::function<void(const PipelineGlobalUniformCommand&)> onPipelineGlobalUniform_;
     std::function<bool(const std::string&, const std::string&)> onPipelineResourceExport_;
+    std::function<bool(const RecorderStartRequest&, std::string*)> onRecorderStart_;
+    std::function<void()> onRecorderStop_;
+    RecorderStatusView recorderStatus_{};
+    std::string recorderDefaultDir_;
+    // Settings the user picked last time the dialog was open. Persists for
+    // the lifetime of the process so consecutive recordings reuse values.
+    RecorderStartRequest recorderPendingRequest_{};
+    bool recorderOutputPathTouched_ = false;
+    bool recorderDialogOpen_ = false;
+    bool recorderShowSavedToast_ = false;
+    double recorderToastUntilSeconds_ = 0.0;
+    std::string recorderToastText_;
+    bool recorderToastIsError_ = false;
+    bool recorderHotkeyHeld_ = false;
     bool showGlobalUniformsWindow_ = false;
     int selectedPipelineAddPassIndex_ = 0;
     bool openCreateWorkspacePopup_ = false;
@@ -549,6 +594,12 @@ private:
     void ApplyEditorPalette(Document& doc) const;
     bool IsLightTheme() const;
     void DrawRendererFullscreen();
+    void DrawRecorderControls();
+    void DrawRecorderDialog();
+    void DrawRecorderToast();
+    void HandleRecorderHotkey();
+    bool ChooseRecorderOutputPath();
+    void StartRecordingFromCurrentSettings();
 
     // Frame inspector: a fullscreen overlay that displays an intermediate
     // pipeline texture with channel isolation, pixel readout under the

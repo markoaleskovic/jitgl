@@ -12,6 +12,7 @@
 #include <cstring>
 #include <cmath>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <ranges>
@@ -604,6 +605,9 @@ void EditorUI::Draw() {
     DrawSettingsWindow();
     DrawFpsOverlay();
     DrawFrameInspector();
+    DrawRecorderDialog();
+    DrawRecorderToast();
+    HandleRecorderHotkey();
 }
 
 void EditorUI::SetupDockspace() {
@@ -1002,6 +1006,47 @@ void EditorUI::SetPipelineGlobalUniformCallback(std::function<void(const Pipelin
 
 void EditorUI::SetPipelineResourceExportCallback(std::function<bool(const std::string&, const std::string&)> cb) {
     onPipelineResourceExport_ = std::move(cb);
+}
+
+void EditorUI::SetRecorderStartCallback(std::function<bool(const RecorderStartRequest&, std::string*)> cb) {
+    onRecorderStart_ = std::move(cb);
+}
+
+void EditorUI::SetRecorderStopCallback(std::function<void()> cb) {
+    onRecorderStop_ = std::move(cb);
+}
+
+void EditorUI::SetRecorderStatus(const RecorderStatusView& status) {
+    // Latch the "just finished" pulse into a toast so the message stays
+    // visible for a couple seconds after recording stops, regardless of
+    // how briefly the engine sets the flag.
+    const bool wasActive = recorderStatus_.active;
+    recorderStatus_ = status;
+    if (status.justFinished) {
+        if (!status.finishedError.empty()) {
+            recorderToastText_ = "Recording failed: " + status.finishedError;
+            recorderToastIsError_ = true;
+        } else if (!status.outputPath.empty()) {
+            recorderToastText_ = "Saved recording: " + status.outputPath;
+            recorderToastIsError_ = false;
+        } else {
+            recorderToastText_ = "Recording finished.";
+            recorderToastIsError_ = false;
+        }
+        recorderShowSavedToast_ = true;
+        recorderToastUntilSeconds_ = ImGui::GetTime() + (recorderToastIsError_ ? 8.0 : 4.0);
+    } else if (wasActive && !status.active && recorderToastText_.empty()) {
+        // Defensive: if the active flag flipped but no justFinished was
+        // signaled (e.g. on first frame after init), still show a quiet toast.
+        recorderToastText_ = "Recording stopped.";
+        recorderToastIsError_ = false;
+        recorderShowSavedToast_ = true;
+        recorderToastUntilSeconds_ = ImGui::GetTime() + 2.5;
+    }
+}
+
+void EditorUI::SetRecorderDefaultDirectory(const std::string& dir) {
+    recorderDefaultDir_ = dir;
 }
 
 bool EditorUI::ShouldLoadShowcaseWorkspaceOnStartup() const {
@@ -2548,6 +2593,266 @@ void EditorUI::DrawInputCaptureToolbar() {
                                   : "Capture is enabled but the renderer panel is not focused, "
                                     "or ImGui is consuming input. Click the image to focus.");
         }
+    }
+    ImGui::SameLine();
+    DrawRecorderControls();
+}
+
+void EditorUI::DrawRecorderControls() {
+    const bool recording = recorderStatus_.active;
+    if (recording) {
+        // While recording: solid red Stop with countdown / elapsed badge.
+        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.78f, 0.18f, 0.18f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.92f, 0.28f, 0.28f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.65f, 0.12f, 0.12f, 1.0f));
+        if (ImGui::Button("Stop \xE2\x97\x8F")) {  // ● black circle
+            if (onRecorderStop_) {
+                onRecorderStop_();
+            }
+        }
+        ImGui::PopStyleColor(3);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Stop recording (F9)");
+        }
+        ImGui::SameLine();
+        char timeBuf[64];
+        if (recorderStatus_.durationSeconds > 0.0) {
+            const double remaining =
+                std::max(0.0, recorderStatus_.durationSeconds - recorderStatus_.elapsedSeconds);
+            std::snprintf(timeBuf, sizeof(timeBuf), "%.1fs / %.1fs",
+                          recorderStatus_.elapsedSeconds, recorderStatus_.durationSeconds);
+            ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s", timeBuf);
+            ImGui::SameLine();
+            ImGui::TextDisabled("(%.1fs left)", remaining);
+        } else {
+            std::snprintf(timeBuf, sizeof(timeBuf), "%.1fs", recorderStatus_.elapsedSeconds);
+            ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s", timeBuf);
+        }
+        if (recorderStatus_.framesDropped > 0) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f),
+                               "(%d dropped)", recorderStatus_.framesDropped);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip(
+                    "ffmpeg couldn't keep up with the producer. The video "
+                    "will play correctly but may be visibly choppy. Lower "
+                    "the recording fps or use a faster CRF preset.");
+            }
+        }
+    } else {
+        if (ImGui::Button("Record...")) {
+            recorderDialogOpen_ = true;
+            recorderOutputPathTouched_ = false;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Record the rendered viewport to a video file (F9)");
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(F9)");
+    }
+}
+
+bool EditorUI::ChooseRecorderOutputPath() {
+    nfdchar_t* outPath = nullptr;
+    nfdfilteritem_t filterItem[2] = {
+        { "MP4 Video", "mp4" },
+        { "MKV Video", "mkv" },
+    };
+    // Suggest a timestamped default name so consecutive recordings don't
+    // clobber each other.
+    std::time_t t = std::time(nullptr);
+    std::tm tm{};
+#if defined(_WIN32)
+    localtime_s(&tm, &t);
+#else
+    localtime_r(&t, &tm);
+#endif
+    char nameBuf[64];
+    std::strftime(nameBuf, sizeof(nameBuf), "jitgl-%Y%m%d-%H%M%S.mp4", &tm);
+
+    const char* defaultDir = recorderDefaultDir_.empty() ? nullptr : recorderDefaultDir_.c_str();
+    const nfdresult_t result = NFD_SaveDialog(&outPath, filterItem, 2, defaultDir, nameBuf);
+    if (result == NFD_OKAY && outPath != nullptr) {
+        recorderPendingRequest_.outputPath = outPath;
+        recorderOutputPathTouched_ = true;
+        NFD_FreePath(outPath);
+        return true;
+    }
+    return false;
+}
+
+void EditorUI::StartRecordingFromCurrentSettings() {
+    if (!onRecorderStart_) {
+        return;
+    }
+    if (recorderPendingRequest_.outputPath.empty()) {
+        if (!ChooseRecorderOutputPath()) {
+            return;  // user cancelled the file dialog
+        }
+    }
+    std::string error;
+    const bool ok = onRecorderStart_(recorderPendingRequest_, &error);
+    if (!ok) {
+        recorderToastText_ = "Recording failed to start: " + (error.empty() ? std::string("unknown error") : error);
+        recorderToastIsError_ = true;
+        recorderShowSavedToast_ = true;
+        recorderToastUntilSeconds_ = ImGui::GetTime() + 8.0;
+        AddLogOutput("[Recorder Error] " + recorderToastText_);
+    } else {
+        AddLogOutput("[Recorder] Started recording to " + recorderPendingRequest_.outputPath);
+    }
+}
+
+void EditorUI::DrawRecorderDialog() {
+    if (!recorderDialogOpen_) {
+        return;
+    }
+    if (recorderStatus_.active) {
+        // Don't allow the dialog to open while a recording is in progress —
+        // settings can't be changed mid-flight.
+        recorderDialogOpen_ = false;
+        return;
+    }
+
+    ImGui::OpenPopup("Record Video##Dialog");
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(520.0f, 0.0f), ImGuiCond_Appearing);
+    if (!ImGui::BeginPopupModal("Record Video##Dialog", &recorderDialogOpen_,
+                                ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
+        return;
+    }
+
+    ImGui::TextWrapped("Pipes the rendered viewport to ffmpeg and writes a video file. "
+                       "ffmpeg must be on PATH.");
+    ImGui::Spacing();
+
+    float duration = static_cast<float>(recorderPendingRequest_.durationSeconds);
+    ImGui::SetNextItemWidth(160.0f);
+    if (ImGui::InputFloat("Duration (s)", &duration, 1.0f, 5.0f, "%.1f")) {
+        if (duration < 0.0f) duration = 0.0f;
+        if (duration > 600.0f) duration = 600.0f;
+        recorderPendingRequest_.durationSeconds = duration;
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(0 = until Stop is pressed)");
+
+    static constexpr int kFpsChoices[] = { 24, 30, 60, 120 };
+    int fpsIdx = 2;
+    for (int i = 0; i < IM_ARRAYSIZE(kFpsChoices); ++i) {
+        if (kFpsChoices[i] == recorderPendingRequest_.fps) {
+            fpsIdx = i;
+            break;
+        }
+    }
+    ImGui::SetNextItemWidth(160.0f);
+    if (ImGui::Combo("FPS", &fpsIdx, "24\00030\00060\000120\000\000")) {
+        recorderPendingRequest_.fps = kFpsChoices[fpsIdx];
+    }
+
+    // libx264 CRF: 18 visually near-lossless, 23 default, 28 small files.
+    int crf = recorderPendingRequest_.crf;
+    ImGui::SetNextItemWidth(160.0f);
+    if (ImGui::SliderInt("Quality (CRF)", &crf, 14, 30)) {
+        recorderPendingRequest_.crf = crf;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("libx264 CRF. Lower = better quality, bigger file. "
+                          "18 is visually near-lossless, 23 is the libx264 default.");
+    }
+
+    ImGui::Separator();
+    ImGui::Text("Output:");
+    ImGui::SameLine();
+    if (recorderPendingRequest_.outputPath.empty()) {
+        ImGui::TextDisabled("(not chosen)");
+    } else {
+        ImGui::TextWrapped("%s", recorderPendingRequest_.outputPath.c_str());
+    }
+    if (ImGui::Button("Browse...")) {
+        ChooseRecorderOutputPath();
+    }
+    ImGui::Spacing();
+    ImGui::Separator();
+
+    const bool canStart = !recorderPendingRequest_.outputPath.empty();
+    if (!canStart) {
+        ImGui::BeginDisabled();
+    }
+    if (ImGui::Button("Start Recording", ImVec2(160.0f, 0.0f))) {
+        StartRecordingFromCurrentSettings();
+        recorderDialogOpen_ = false;
+        ImGui::CloseCurrentPopup();
+    }
+    if (!canStart) {
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Pick an output path first.");
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
+        recorderDialogOpen_ = false;
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
+}
+
+void EditorUI::DrawRecorderToast() {
+    if (!recorderShowSavedToast_) {
+        return;
+    }
+    if (ImGui::GetTime() > recorderToastUntilSeconds_) {
+        recorderShowSavedToast_ = false;
+        recorderToastText_.clear();
+        return;
+    }
+    if (recorderToastText_.empty()) {
+        return;
+    }
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float pad = 16.0f;
+    const ImVec2 pos(viewport->WorkPos.x + viewport->WorkSize.x - pad,
+                     viewport->WorkPos.y + viewport->WorkSize.y - pad);
+    ImGui::SetNextWindowPos(pos, ImGuiCond_Always, ImVec2(1.0f, 1.0f));
+    ImGui::SetNextWindowBgAlpha(0.92f);
+    constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                                        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                                        ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove;
+    if (ImGui::Begin("##RecorderToast", nullptr, kFlags)) {
+        const ImVec4 color = recorderToastIsError_ ? ImVec4(1.0f, 0.45f, 0.45f, 1.0f)
+                                                    : ImVec4(0.45f, 1.0f, 0.55f, 1.0f);
+        ImGui::PushStyleColor(ImGuiCol_Text, color);
+        ImGui::TextWrapped("%s", recorderToastText_.c_str());
+        ImGui::PopStyleColor();
+    }
+    ImGui::End();
+}
+
+void EditorUI::HandleRecorderHotkey() {
+    if (window == nullptr) {
+        return;
+    }
+    const bool down = glfwGetKey(window, GLFW_KEY_F9) == GLFW_PRESS;
+    if (down && !recorderHotkeyHeld_) {
+        recorderHotkeyHeld_ = true;
+        if (recorderStatus_.active) {
+            if (onRecorderStop_) {
+                onRecorderStop_();
+            }
+        } else if (!recorderDialogOpen_) {
+            // First press with no settings: open the dialog so the user can
+            // pick an output path. Once a path is set we reuse it on
+            // subsequent F9 presses for a one-tap re-record workflow.
+            if (recorderPendingRequest_.outputPath.empty()) {
+                recorderDialogOpen_ = true;
+            } else {
+                StartRecordingFromCurrentSettings();
+            }
+        }
+    } else if (!down) {
+        recorderHotkeyHeld_ = false;
     }
 }
 

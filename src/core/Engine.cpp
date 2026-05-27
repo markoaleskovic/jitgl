@@ -609,6 +609,7 @@ Engine::Engine() = default;
 Engine::~Engine() { Shutdown(); }
 
 bool Engine::Init() {
+    videoRecorder_ = std::make_unique<VideoRecorder>();
     if (!InitWindow()) return false;
     if (!InitGL()) return false;
     // Asset bridge: install the loader thunks now that GL is ready.
@@ -1093,6 +1094,17 @@ bool Engine::InitUI() {
     ui_->SetPipelineResourceExportCallback([this](const std::string& resourceName, const std::string& targetPath) {
         return ExportPipelineResource(resourceName, targetPath);
     });
+    ui_->SetRecorderStartCallback([this](const EditorUI::RecorderStartRequest& request, std::string* errorMessage) {
+        return HandleStartRecording(request, errorMessage);
+    });
+    ui_->SetRecorderStopCallback([this]() {
+        HandleStopRecording();
+    });
+    // Default to the workspace root so the file dialog opens somewhere
+    // sensible the first time.
+    if (!workspaceRoot_.empty()) {
+        ui_->SetRecorderDefaultDirectory(workspaceRoot_);
+    }
     ui_->SetInputCaptureEnabledCallback([this](const bool enabled) {
         inputsEnabled_ = enabled;
         prevKeyStateValid_ = false;
@@ -4356,6 +4368,10 @@ void Engine::RenderSceneToTexture() {
         ui_->SetRendererTexture(sceneColorTex_, sceneWidth_, sceneHeight_);
         UpdatePipelineUiState();
 
+        if (videoRecorder_ && videoRecorder_->IsActive() && sceneColorTex_ != 0) {
+            videoRecorder_->CaptureFrame(sceneColorTex_, sceneWidth_, sceneHeight_, glfwGetTime());
+        }
+
         if (!activeWorkspaceName_.empty()) {
             LoadWorkspaceRuntimeState(activeWorkspaceName_);
             ActivateWorkspaceGeometry(activeWorkspaceName_);
@@ -4507,6 +4523,10 @@ void Engine::RenderSceneToTexture() {
     ui_->SetRendererTexture(finalTexture, finalWidth, finalHeight);
     UpdatePipelineUiState();
 
+    if (videoRecorder_ && videoRecorder_->IsActive() && finalTexture != 0) {
+        videoRecorder_->CaptureFrame(finalTexture, finalWidth, finalHeight, glfwGetTime());
+    }
+
     if (!activeWorkspaceName_.empty()) {
         LoadWorkspaceRuntimeState(activeWorkspaceName_);
         ActivateWorkspaceGeometry(activeWorkspaceName_);
@@ -4608,6 +4628,7 @@ void Engine::Run() {
 
         RenderSceneToTexture();
         UpdateLanShareUiState();
+        UpdateRecorderUiStatus(now);
 
         // Iterator is still valid here: workspaces_ is only mutated by Register/Delete/Shutdown,
         // none of which run in the render-side path between the find above and this use.
@@ -4635,6 +4656,98 @@ void Engine::Run() {
             ui_->ReportFrameTime(static_cast<float>((frameEnd - frameStartSeconds) * 1000.0));
         }
     }
+}
+
+bool Engine::HandleStartRecording(const EditorUI::RecorderStartRequest& request, std::string* errorMessage) {
+    const auto fail = [&](const std::string& msg) {
+        if (errorMessage != nullptr) {
+            *errorMessage = msg;
+        }
+        return false;
+    };
+    if (!videoRecorder_) {
+        return fail("Recorder not initialized.");
+    }
+    if (videoRecorder_->IsActive()) {
+        return fail("Already recording.");
+    }
+    if (sceneWidth_ <= 0 || sceneHeight_ <= 0) {
+        return fail("Renderer hasn't produced a frame yet.");
+    }
+
+    VideoRecorder::Config config;
+    config.outputPath = request.outputPath;
+    // Snapshot the current renderer size; the recorder validates each
+    // incoming frame against this and drops on mismatch.
+    config.width = sceneWidth_;
+    config.height = sceneHeight_;
+    config.fps = std::clamp(request.fps, 1, 240);
+    config.crf = std::clamp(request.crf, 0, 51);
+    config.durationSeconds = std::max(0.0, request.durationSeconds);
+
+    std::string startError;
+    if (!videoRecorder_->Start(config, &startError)) {
+        return fail(startError);
+    }
+    if (ui_) {
+        ui_->AddLogOutput("[Recorder] Capturing " + std::to_string(config.width) + "x" +
+                          std::to_string(config.height) + " @ " + std::to_string(config.fps) +
+                          " fps -> " + config.outputPath);
+    }
+    return true;
+}
+
+void Engine::HandleStopRecording() {
+    if (videoRecorder_ && videoRecorder_->IsActive()) {
+        videoRecorder_->Stop();
+        if (ui_) {
+            ui_->AddLogOutput("[Recorder] Stopped.");
+        }
+    }
+}
+
+void Engine::UpdateRecorderUiStatus(double nowSeconds) {
+    if (!ui_ || !videoRecorder_) {
+        return;
+    }
+    const VideoRecorder::Status raw = videoRecorder_->SnapshotStatus();
+
+    // Auto-stop when the configured duration is reached. Done on the engine
+    // side so the recorder remains a pure pipe-and-encode utility.
+    if (raw.active && raw.durationSeconds > 0.0 &&
+        raw.elapsedSeconds >= raw.durationSeconds) {
+        videoRecorder_->Stop();
+        EditorUI::RecorderStatusView view{};
+        const VideoRecorder::Status afterStop = videoRecorder_->SnapshotStatus();
+        view.active = false;
+        view.framesCaptured = afterStop.framesCaptured;
+        view.framesDropped = afterStop.framesDropped;
+        view.width = afterStop.width;
+        view.height = afterStop.height;
+        view.fps = afterStop.fps;
+        view.durationSeconds = afterStop.durationSeconds;
+        view.elapsedSeconds = afterStop.elapsedSeconds;
+        view.outputPath = afterStop.outputPath;
+        view.justFinished = afterStop.finishedSinceLastQuery;
+        view.finishedError = afterStop.lastError;
+        ui_->SetRecorderStatus(view);
+        return;
+    }
+
+    EditorUI::RecorderStatusView view{};
+    view.active = raw.active;
+    view.framesCaptured = raw.framesCaptured;
+    view.framesDropped = raw.framesDropped;
+    view.width = raw.width;
+    view.height = raw.height;
+    view.fps = raw.fps;
+    view.durationSeconds = raw.durationSeconds;
+    view.elapsedSeconds = raw.elapsedSeconds;
+    view.outputPath = raw.outputPath;
+    view.justFinished = raw.finishedSinceLastQuery;
+    view.finishedError = raw.lastError;
+    ui_->SetRecorderStatus(view);
+    (void)nowSeconds;
 }
 
 void Engine::ApplyGraphicsSettings(const EditorUI::AppSettings& settings) {
@@ -4680,6 +4793,11 @@ void Engine::Shutdown() {
     if (ui_) {
         ui_->AddLogOutput("[Engine] Shutting down...");
     }
+
+    if (videoRecorder_ && videoRecorder_->IsActive()) {
+        videoRecorder_->Stop();
+    }
+    videoRecorder_.reset();
 
     ApplyCursorRecenterMode(false);
 
