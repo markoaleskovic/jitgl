@@ -107,6 +107,10 @@ private:
         int gpuQueryWriteIndex = 0;
         std::array<bool, 2> gpuQueryPending{};
         float lastGpuPassTimeMs = 0.0f;
+        // EMA-smoothed copy of lastGpuPassTimeMs. The raw query result
+        // flickers frame-to-frame which is unreadable as a UI value;
+        // smoothing gives a stable number that still tracks real changes.
+        float smoothedGpuPassTimeMs = 0.0f;
         GLuint samplerLocationProgram = 0;
         std::unordered_map<std::string, GLint> samplerLocationCache;
         GLuint globalUniformLocationProgram = 0;

@@ -2763,6 +2763,52 @@ void EditorUI::DrawPipelineInspectorPanel(const std::string& orderText) {
     const std::vector<PipelinePassView> passesSnapshot = pipelinePasses_;
     const std::vector<PipelineResourceView> resourcesSnapshot = pipelineResources_;
 
+    // 60Hz frame budget. Everything else (color thresholds, "% of budget"
+    // label) keys off this value, so changing it changes the calibration.
+    constexpr float kFrameBudgetMs = 1000.0f / 60.0f;
+    const bool lightTheme = IsLightTheme();
+    const ImVec4 kCostOkColor   = lightTheme ? ImVec4(0.16f, 0.56f, 0.24f, 1.0f)
+                                             : ImVec4(0.40f, 0.92f, 0.40f, 1.0f);
+    const ImVec4 kCostWarnColor = lightTheme ? ImVec4(0.78f, 0.55f, 0.10f, 1.0f)
+                                             : ImVec4(1.00f, 0.82f, 0.32f, 1.0f);
+    const ImVec4 kCostHotColor  = lightTheme ? ImVec4(0.78f, 0.20f, 0.20f, 1.0f)
+                                             : ImVec4(1.00f, 0.40f, 0.40f, 1.0f);
+    const auto colorForCost = [&](float ms) -> ImVec4 {
+        // Three bands keyed off the 60Hz budget: comfortable, warning,
+        // already over budget. The cutoffs are deliberate eyeballs, not
+        // sacred — they match the rule of thumb that a single pass
+        // shouldn't be eating most of a frame.
+        if (ms < kFrameBudgetMs * 0.25f) return kCostOkColor;
+        if (ms < kFrameBudgetMs * 0.75f) return kCostWarnColor;
+        return kCostHotColor;
+    };
+
+    float totalGpuMs = 0.0f;
+    for (const auto& pass : passesSnapshot) {
+        if (pass.enabled) {
+            totalGpuMs += pass.gpuTimeSmoothedMs;
+        }
+    }
+    {
+        const ImVec4 totalColor = colorForCost(totalGpuMs);
+        ImGui::TextUnformatted("Pipeline GPU");
+        ImGui::SameLine();
+        ImGui::TextColored(totalColor, "%.2f ms", totalGpuMs);
+        ImGui::SameLine();
+        const float pctOfBudget = (kFrameBudgetMs > 0.0f) ? (totalGpuMs * 100.0f / kFrameBudgetMs) : 0.0f;
+        ImGui::TextDisabled("(%.0f%% of 60Hz budget, %.2f ms)", pctOfBudget, kFrameBudgetMs);
+        // Total-cost bar against the frame budget so an over-budget pipeline
+        // shows a clipped red bar instead of just a number you have to
+        // mentally compare against 16.67.
+        const float totalFraction = (kFrameBudgetMs > 0.0f)
+                                        ? std::min(1.0f, totalGpuMs / kFrameBudgetMs)
+                                        : 0.0f;
+        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, totalColor);
+        ImGui::ProgressBar(totalFraction, ImVec2(-FLT_MIN, 6.0f), "");
+        ImGui::PopStyleColor();
+        ImGui::Spacing();
+    }
+
     std::unordered_map<std::string, const PipelineResourceView*> resourcesByName;
     resourcesByName.reserve(resourcesSnapshot.size());
     for (const auto& resource : resourcesSnapshot) {
@@ -2805,7 +2851,9 @@ void EditorUI::DrawPipelineInspectorPanel(const std::string& orderText) {
                                  std::max(1.0f, static_cast<float>(preview->height));
             previewHeight = std::clamp(previewWidth / std::max(0.01f, aspect), 72.0f, 200.0f);
         }
-        const float cardHeight = std::max(126.0f, previewHeight + 96.0f);
+        // +12 over the prior 96 to fit the per-pass cost bar without
+        // clipping the bottom row of buttons.
+        const float cardHeight = std::max(140.0f, previewHeight + 108.0f);
         const bool cardOpen = ImGui::BeginChild("PipelinePassCard", ImVec2(0.0f, cardHeight), true);
 
         if (cardOpen) {
@@ -2856,7 +2904,27 @@ void EditorUI::DrawPipelineInspectorPanel(const std::string& orderText) {
                                                              : ImVec4(1.0f, 0.38f, 0.38f, 1.0f));
             ImGui::TextColored(statusColor, "Status: %s", statusText);
             ImGui::SameLine();
-            ImGui::TextDisabled("GPU: %.3f ms", pass.gpuTimeMs);
+            const ImVec4 passCostColor = colorForCost(pass.gpuTimeSmoothedMs);
+            ImGui::TextDisabled("|");
+            ImGui::SameLine();
+            ImGui::TextColored(passCostColor, "%.2f ms", pass.gpuTimeSmoothedMs);
+            if (ImGui::IsItemHovered()) {
+                // Raw value sits behind a hover so the on-screen number
+                // doesn't dance, but it's still one cursor-move away when
+                // you actually want the per-frame measurement.
+                ImGui::SetTooltip("Smoothed: %.3f ms\nRaw (last frame): %.3f ms\n%.1f%% of pipeline cost",
+                                  pass.gpuTimeSmoothedMs,
+                                  pass.gpuTimeMs,
+                                  totalGpuMs > 0.0f ? (pass.gpuTimeSmoothedMs * 100.0f / totalGpuMs) : 0.0f);
+            }
+            // Per-pass cost bar against the pipeline total. Communicates
+            // "this pass is eating X% of the work" at a glance.
+            const float passFraction = (totalGpuMs > 0.0f && pass.enabled)
+                                           ? (pass.gpuTimeSmoothedMs / totalGpuMs)
+                                           : 0.0f;
+            ImGui::PushStyleColor(ImGuiCol_PlotHistogram, passCostColor);
+            ImGui::ProgressBar(passFraction, ImVec2(-FLT_MIN, 4.0f), "");
+            ImGui::PopStyleColor();
 
             if (preview != nullptr && preview->texture != 0 && preview->width > 0 && preview->height > 0) {
                 // Make the thumbnail itself a click target. Clicking the

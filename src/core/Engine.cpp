@@ -76,6 +76,10 @@ namespace {
     constexpr double DEBOUNCE_STEP_SECONDS = 0.2;
     constexpr double WATCHER_IGNORE_SECONDS = 1.0;
     constexpr double ERROR_HISTORY_SECONDS = 5.0;
+    // EMA weight applied to a fresh GPU pass time. 0.18 was picked empirically:
+    // stable enough that the display digit doesn't flicker, responsive enough
+    // that a real cost change shows up within a few frames.
+    constexpr float GPU_TIME_SMOOTHING_ALPHA = 0.18f;
     constexpr std::array<float, 12> FULLSCREEN_QUAD_VERTICES = {
         -1.f, -1.f, 1.f, -1.f, 1.f, 1.f,
         -1.f, -1.f, 1.f, 1.f, -1.f, 1.f,
@@ -893,6 +897,7 @@ bool Engine::EnsureWorkspacePassTargets(WorkspaceState* workspace, const int wid
     workspace->gpuQueryPending = { false, false };
     workspace->gpuQueryWriteIndex = 0;
     workspace->lastGpuPassTimeMs = 0.0f;
+    workspace->smoothedGpuPassTimeMs = 0.0f;
     workspace->passWriteIndex = 0;
     workspace->passWidth = width;
     workspace->passHeight = height;
@@ -928,6 +933,8 @@ void Engine::ReleaseWorkspacePassTargets(WorkspaceState* workspace) {
     }
     workspace->gpuQueryPending = { false, false };
     workspace->gpuQueryWriteIndex = 0;
+    workspace->lastGpuPassTimeMs = 0.0f;
+    workspace->smoothedGpuPassTimeMs = 0.0f;
     workspace->passWidth = 0;
     workspace->passHeight = 0;
     workspace->passWriteIndex = 0;
@@ -3949,6 +3956,7 @@ void Engine::UpdatePipelineUiState() {
         view.compiled = compiledPrograms_.contains(workspaceName);
         view.hasCompileError = compileFailures_.contains(workspaceName);
         view.gpuTimeMs = workspaceIt->second.lastGpuPassTimeMs;
+        view.gpuTimeSmoothedMs = workspaceIt->second.smoothedGpuPassTimeMs;
         ShaderSections shaderSections;
         const bool parsedShader = parseShaderSections(workspaceIt->second.shaderSource, &shaderSections);
         const bool hasCompute = parsedShader && !shaderSections.compute.empty();
@@ -4303,8 +4311,16 @@ void Engine::RenderSceneToTexture() {
                         glGetQueryObjectui64v(workspace.gpuQueries[static_cast<std::size_t>(readQueryIndex)],
                                               GL_QUERY_RESULT,
                                               &elapsedNanoseconds);
-                        workspace.lastGpuPassTimeMs =
+                        const float newTimeMs =
                             static_cast<float>(static_cast<double>(elapsedNanoseconds) / 1000000.0);
+                        workspace.lastGpuPassTimeMs = newTimeMs;
+                        // Seed the EMA on the first reading so the smoothed
+                        // value isn't pulled toward 0 for the first few frames.
+                        workspace.smoothedGpuPassTimeMs =
+                            (workspace.smoothedGpuPassTimeMs <= 0.0f)
+                                ? newTimeMs
+                                : (1.0f - GPU_TIME_SMOOTHING_ALPHA) * workspace.smoothedGpuPassTimeMs +
+                                  GPU_TIME_SMOOTHING_ALPHA * newTimeMs;
                         workspace.gpuQueryPending[static_cast<std::size_t>(readQueryIndex)] = false;
                     }
                 }
@@ -4409,7 +4425,14 @@ void Engine::RenderSceneToTexture() {
                 glGetQueryObjectui64v(workspace.gpuQueries[static_cast<std::size_t>(readQueryIndex)],
                                       GL_QUERY_RESULT,
                                       &elapsedNanoseconds);
-                workspace.lastGpuPassTimeMs = static_cast<float>(static_cast<double>(elapsedNanoseconds) / 1000000.0);
+                const float newTimeMs =
+                    static_cast<float>(static_cast<double>(elapsedNanoseconds) / 1000000.0);
+                workspace.lastGpuPassTimeMs = newTimeMs;
+                workspace.smoothedGpuPassTimeMs =
+                    (workspace.smoothedGpuPassTimeMs <= 0.0f)
+                        ? newTimeMs
+                        : (1.0f - GPU_TIME_SMOOTHING_ALPHA) * workspace.smoothedGpuPassTimeMs +
+                          GPU_TIME_SMOOTHING_ALPHA * newTimeMs;
                 workspace.gpuQueryPending[static_cast<std::size_t>(readQueryIndex)] = false;
             }
         }

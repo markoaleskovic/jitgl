@@ -182,7 +182,12 @@ public:
         bool compiled = false;
         bool hasCompileError = false;
         PipelinePassType passType = PipelinePassType::Raster;
+        // Raw GPU pass time from the most recent completed timer query.
+        // Flickers frame-to-frame; useful as a tooltip / debug value.
         float gpuTimeMs = 0.0f;
+        // EMA-smoothed pass time. This is what we display by default — the
+        // raw query result is too noisy to read at a glance.
+        float gpuTimeSmoothedMs = 0.0f;
     };
 
     struct PipelineResourceView {
