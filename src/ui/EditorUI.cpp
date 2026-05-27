@@ -708,7 +708,8 @@ void EditorUI::SetActiveDocumentChangedCallback(std::function<void(const std::st
     onActiveDocumentChanged_ = std::move(cb);
 }
 
-void EditorUI::SetCreateWorkspaceCallback(std::function<void(const std::string&)> cb) {
+void EditorUI::SetCreateWorkspaceCallback(
+    std::function<void(const std::string&, const std::string&)> cb) {
     onCreateWorkspace_ = std::move(cb);
 }
 
@@ -1047,6 +1048,70 @@ void EditorUI::SetRecorderStatus(const RecorderStatusView& status) {
 
 void EditorUI::SetRecorderDefaultDirectory(const std::string& dir) {
     recorderDefaultDir_ = dir;
+}
+
+void EditorUI::SetShaderErrorMarkers(const std::string& shaderPath,
+                                     const std::map<int, std::string>& markers) {
+    for (auto& doc : openDocuments) {
+        if (doc.filepath == shaderPath) {
+            doc.editor.SetErrorMarkers(markers);
+            return;
+        }
+    }
+}
+
+void EditorUI::ClearAllShaderErrorMarkers() {
+    static const std::map<int, std::string> empty;
+    for (auto& doc : openDocuments) {
+        doc.editor.SetErrorMarkers(empty);
+    }
+}
+
+void EditorUI::SetWorkspaceSnapshots(const std::string& workspaceName,
+                                     std::vector<WorkspaceSnapshotView> snapshots) {
+    snapshotsByWorkspace_[workspaceName] = std::move(snapshots);
+}
+
+void EditorUI::SetSnapshotRestoreCallback(
+    std::function<void(const std::string&, const std::string&)> cb) {
+    onSnapshotRestore_ = std::move(cb);
+}
+
+void EditorUI::DrawWorkspaceSnapshotPanel() {
+    if (!ImGui::CollapsingHeader("History", ImGuiTreeNodeFlags_DefaultOpen)) {
+        return;
+    }
+    const auto it = snapshotsByWorkspace_.find(activeWorkspaceName_);
+    if (it == snapshotsByWorkspace_.end() || it->second.empty()) {
+        ImGui::TextDisabled("No snapshots yet.");
+        ImGui::TextWrapped("Each successful compile stashes a copy of "
+                           "scene.cpp + shader.glsl that you can restore.");
+        return;
+    }
+    const auto& snapshots = it->second;
+
+    // Scrollable list. Sized to leave room below for the sidebar's other
+    // content; ImGui auto-clips so a huge list won't overflow.
+    if (ImGui::BeginChild("##SnapshotList",
+                          ImVec2(0.0f, std::min(220.0f, 24.0f + 22.0f * static_cast<float>(snapshots.size()))),
+                          true)) {
+        const double now = ImGui::GetTime();
+        for (std::size_t i = 0; i < snapshots.size(); ++i) {
+            const auto& snap = snapshots[i];
+            ImGui::PushID(snap.snapshotId.c_str());
+            ImGui::TextUnformatted(snap.displayLabel.c_str());
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Restore")) {
+                if (onSnapshotRestore_) {
+                    onSnapshotRestore_(activeWorkspaceName_, snap.snapshotId);
+                }
+            }
+            ImGui::PopID();
+            (void)i;
+            (void)now;
+        }
+    }
+    ImGui::EndChild();
 }
 
 bool EditorUI::ShouldLoadShowcaseWorkspaceOnStartup() const {
@@ -1764,6 +1829,45 @@ void EditorUI::DrawCreateWorkspacePopup() {
                                                   ImGuiInputTextFlags_EnterReturnsTrue);
     focusCreateWorkspaceNameInput_ = false;
 
+    // Template picker. Hardcoded list — the IDs match folder names under
+    // assets/templates/ (engine resolves them at create time). Empty ID is
+    // the default scaffold (WorkspaceManager's built-in starter).
+    struct TemplateChoice {
+        const char* id;
+        const char* label;
+        const char* description;
+    };
+    static constexpr TemplateChoice kTemplates[] = {
+        { "",                   "Default",            "Built-in starter (wave gradient + uniform controls)." },
+        { "empty",              "Empty",              "Minimal fragment shader skeleton; solid color." },
+        { "animated-gradient",  "Animated Gradient",  "Time-driven 3-stop gradient with uniform controls." },
+        { "camera-cube",        "Camera + Cube",      "Rotating cube using the opt-in 3D camera helper." },
+    };
+    int selectedTemplate = 0;
+    for (int i = 0; i < IM_ARRAYSIZE(kTemplates); ++i) {
+        if (pendingCreateWorkspaceTemplate_ == kTemplates[i].id) {
+            selectedTemplate = i;
+            break;
+        }
+    }
+    if (ImGui::BeginCombo("Template", kTemplates[selectedTemplate].label)) {
+        for (int i = 0; i < IM_ARRAYSIZE(kTemplates); ++i) {
+            const bool isSelected = (selectedTemplate == i);
+            if (ImGui::Selectable(kTemplates[i].label, isSelected)) {
+                pendingCreateWorkspaceTemplate_ = kTemplates[i].id;
+                selectedTemplate = i;
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", kTemplates[i].description);
+            }
+            if (isSelected) {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::TextDisabled("%s", kTemplates[selectedTemplate].description);
+
     const bool canCreate = newWorkspaceNameBuffer_[0] != '\0';
     bool createRequested = canCreate && submitFromEnter;
 
@@ -1778,7 +1882,7 @@ void EditorUI::DrawCreateWorkspacePopup() {
     }
     if (createRequested) {
         if (onCreateWorkspace_) {
-            onCreateWorkspace_(newWorkspaceNameBuffer_.data());
+            onCreateWorkspace_(newWorkspaceNameBuffer_.data(), pendingCreateWorkspaceTemplate_);
         }
         closePopup();
     }
@@ -2182,7 +2286,10 @@ void EditorUI::DrawWorkspaceSidebar(const std::vector<std::string>& workspaceNam
                                     bool canDeleteAnyWorkspace,
                                     std::string* pendingWorkspaceSwitch,
                                     std::string* pendingWorkspaceDelete) {
-    constexpr float workspaceSidebarWidth = 165.0f;
+    // 215 keeps reasonably long workspace names from clipping and leaves
+    // room for the "Restore" buttons in the snapshot panel without them
+    // wrapping to a second line.
+    constexpr float workspaceSidebarWidth = 215.0f;
     ImGui::BeginChild("WorkspaceSidebar", ImVec2(workspaceSidebarWidth, 0.0f), true);
     ImGui::TextUnformatted("Workspaces");
     ImGui::Separator();
@@ -2225,6 +2332,9 @@ void EditorUI::DrawWorkspaceSidebar(const std::vector<std::string>& workspaceNam
 
         ImGui::PopID();
     }
+
+    ImGui::Separator();
+    DrawWorkspaceSnapshotPanel();
 
     ImGui::EndChild();
 }

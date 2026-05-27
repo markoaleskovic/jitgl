@@ -17,6 +17,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -196,6 +197,30 @@ namespace {
         std::string compute;
     };
 
+    // For each line of the assembled GLSL we hand to glShaderSource we keep
+    // the (fileId, lineInFile) pair it came from. fileId is an index into a
+    // per-assembly fileNames table; fileId 0 is always the workspace's
+    // root shader.glsl. Using an int per line (cheap to look up) keeps the
+    // mapping path simple: driver reports line N -> we look up entry N-1.
+    struct ShaderLineOrigin {
+        int fileId = 0;
+        int lineInFile = 0;  // 1-based within the originating file
+    };
+
+    struct ShaderSectionWithMap {
+        std::string text;
+        std::vector<ShaderLineOrigin> linesOrigin;
+    };
+
+    struct ShaderAssembly {
+        // fileNames[0] is the workspace's root shader.glsl key.
+        // Subsequent entries are include files in the order first reached.
+        std::vector<std::string> fileNames;
+        ShaderSectionWithMap vertex;
+        ShaderSectionWithMap fragment;
+        ShaderSectionWithMap compute;
+    };
+
     bool parseShaderSections(const std::string& shaderSource, ShaderSections* outSections) {
         if (outSections == nullptr) {
             return false;
@@ -281,6 +306,256 @@ namespace {
 
         *outIncludeName = trimmed.substr(firstQuote + 1, secondQuote - firstQuote - 1);
         return !outIncludeName->empty();
+    }
+
+    // Walk the workspace's root shader, expand includes inline, and split
+    // into vertex/fragment/compute sections. For each emitted GLSL line we
+    // also record where it came from so a driver error at section line N
+    // can be mapped back to (sourceFile, sourceLine) for the editor.
+    //
+    // Returns false on resolution errors (missing/cyclic include); on
+    // success any of the three sections may be empty if the user only
+    // defined a subset.
+    bool AssembleShaderWithLineMap(
+        const std::string& rootKey,
+        const std::unordered_map<std::string, std::string>& contentsByKey,
+        const std::unordered_map<std::string, std::string>& basenameToKey,
+        ShaderAssembly* out,
+        std::string* outError) {
+        if (out == nullptr || outError == nullptr) {
+            return false;
+        }
+        out->fileNames.clear();
+        out->vertex = {};
+        out->fragment = {};
+        out->compute = {};
+
+        std::unordered_map<std::string, int> fileIdByKey;
+        const auto fileIdFor = [&](const std::string& key) {
+            const auto it = fileIdByKey.find(key);
+            if (it != fileIdByKey.end()) {
+                return it->second;
+            }
+            const int id = static_cast<int>(out->fileNames.size());
+            fileIdByKey[key] = id;
+            out->fileNames.push_back(key);
+            return id;
+        };
+        // Force the root to be file id 0.
+        fileIdFor(rootKey);
+
+        enum class Section { None, Vertex, Fragment, Compute };
+        Section currentSection = Section::None;
+
+        std::unordered_set<std::string> includeStack;
+
+        std::function<bool(const std::string&)> walk;
+        walk = [&](const std::string& key) -> bool {
+            const auto sourceIt = contentsByKey.find(key);
+            if (sourceIt == contentsByKey.end()) {
+                *outError = "Missing include file: " + key;
+                return false;
+            }
+            if (includeStack.contains(key)) {
+                *outError = "Cyclic shader include detected at '" + key + "'";
+                return false;
+            }
+            includeStack.insert(key);
+            const int fileId = fileIdFor(key);
+
+            const std::string& src = sourceIt->second;
+            int lineInFile = 0;  // pre-incremented before each emit
+            std::size_t cursor = 0;
+            while (cursor <= src.size()) {
+                const std::size_t lineEnd = src.find('\n', cursor);
+                const std::size_t lineLength = (lineEnd == std::string::npos)
+                                                   ? (src.size() - cursor)
+                                                   : (lineEnd - cursor);
+                const std::string line = src.substr(cursor, lineLength);
+                ++lineInFile;
+
+                const std::string trimmed = trim(line);
+                if (trimmed.rfind("#type", 0) == 0) {
+                    // #type directive: switch section, don't emit the line.
+                    if (trimmed.find("vertex") != std::string::npos) {
+                        currentSection = Section::Vertex;
+                    } else if (trimmed.find("fragment") != std::string::npos) {
+                        currentSection = Section::Fragment;
+                    } else if (trimmed.find("compute") != std::string::npos) {
+                        currentSection = Section::Compute;
+                    } else {
+                        currentSection = Section::None;
+                    }
+                } else {
+                    std::string includeName;
+                    if (ParseIncludeDirective(line, &includeName)) {
+                        // Resolve include relative to this file, then by
+                        // basename, then by exact key — matches the legacy
+                        // expandShaderKey resolution.
+                        std::string resolvedKey;
+                        const std::filesystem::path parentDir =
+                            std::filesystem::path(key).parent_path();
+                        const std::filesystem::path relativeCandidate = parentDir / includeName;
+                        const std::string relKey = NormalizePathString(relativeCandidate);
+                        if (contentsByKey.contains(relKey)) {
+                            resolvedKey = relKey;
+                        } else if (contentsByKey.contains(includeName)) {
+                            resolvedKey = includeName;
+                        } else if (const auto it = basenameToKey.find(includeName);
+                                   it != basenameToKey.end()) {
+                            resolvedKey = it->second;
+                        }
+                        if (resolvedKey.empty()) {
+                            *outError = "Failed to resolve shader include '" + includeName +
+                                        "' from '" + key + "'";
+                            includeStack.erase(key);
+                            return false;
+                        }
+                        if (!walk(resolvedKey)) {
+                            includeStack.erase(key);
+                            return false;
+                        }
+                    } else {
+                        // Emit this line into whichever section we're in.
+                        ShaderSectionWithMap* target = nullptr;
+                        switch (currentSection) {
+                            case Section::Vertex:   target = &out->vertex; break;
+                            case Section::Fragment: target = &out->fragment; break;
+                            case Section::Compute:  target = &out->compute; break;
+                            case Section::None:     target = nullptr; break;
+                        }
+                        if (target != nullptr) {
+                            target->text.append(line);
+                            target->text.push_back('\n');
+                            ShaderLineOrigin origin{};
+                            origin.fileId = fileId;
+                            origin.lineInFile = lineInFile;
+                            target->linesOrigin.push_back(origin);
+                        }
+                    }
+                }
+
+                if (lineEnd == std::string::npos) {
+                    break;
+                }
+                cursor = lineEnd + 1;
+            }
+            includeStack.erase(key);
+            return true;
+        };
+
+        return walk(rootKey);
+    }
+
+    // Parse clang's diagnostic output (from preflight clang++ -fsyntax-only
+    // or from the in-process Interpreter::Parse error stream). We don't
+    // try to fully parse the colon-separated location format because clang
+    // versions differ; we just pull out the first integer after a colon on
+    // each line that also mentions "error". Returns (line, message) pairs
+    // referring to the assembled buffer fed to clang (preamble + host
+    // prefix + workspace.cppSource).
+    std::vector<std::pair<int, std::string>> ParseClangDiagnosticLog(const std::string& log) {
+        std::vector<std::pair<int, std::string>> result;
+        std::size_t cursor = 0;
+        while (cursor < log.size()) {
+            const std::size_t lineEnd = log.find('\n', cursor);
+            const std::size_t lineLength = (lineEnd == std::string::npos)
+                                               ? (log.size() - cursor)
+                                               : (lineEnd - cursor);
+            const std::string line = log.substr(cursor, lineLength);
+            cursor = (lineEnd == std::string::npos) ? log.size() : lineEnd + 1;
+
+            // Only consider lines that look like a real diagnostic header
+            // (error / warning / note + colon location prefix); skip the
+            // continuation lines (caret indicators, fix-it hints, etc).
+            if (line.find("error:") == std::string::npos &&
+                line.find("warning:") == std::string::npos &&
+                line.find("note:") == std::string::npos) {
+                continue;
+            }
+
+            // Find the first integer that's preceded by ':' and followed by
+            // ':' or end-of-segment. Tolerates a leading path with ':' in
+            // it (rare on POSIX, just being defensive).
+            int lineNumber = -1;
+            std::size_t scan = 0;
+            while (scan < line.size()) {
+                const std::size_t colon = line.find(':', scan);
+                if (colon == std::string::npos || colon + 1 >= line.size()) {
+                    break;
+                }
+                std::size_t digitStart = colon + 1;
+                std::size_t digitEnd = digitStart;
+                while (digitEnd < line.size() &&
+                       std::isdigit(static_cast<unsigned char>(line[digitEnd]))) {
+                    ++digitEnd;
+                }
+                if (digitEnd > digitStart) {
+                    try {
+                        lineNumber = std::stoi(line.substr(digitStart, digitEnd - digitStart));
+                    } catch (...) {
+                        lineNumber = -1;
+                    }
+                    break;
+                }
+                scan = colon + 1;
+            }
+            if (lineNumber > 0) {
+                result.emplace_back(lineNumber, line);
+            }
+        }
+        return result;
+    }
+
+    // Parse a GLSL driver compile log. Returns line number (1-based, in the
+    // compiled section) and message for each line of the log we recognized
+    // as an error. Handles the three common driver dialects:
+    //   NVIDIA: "0(LINE) : error C9999: ..."
+    //   Mesa:   "0:LINE(COL): error: ..."
+    //   AMD/ANGLE: "ERROR: 0:LINE: ..." or "0:LINE: ..."
+    std::vector<std::pair<int, std::string>> ParseGlslDriverLog(const std::string& log) {
+        std::vector<std::pair<int, std::string>> result;
+        std::size_t cursor = 0;
+        while (cursor < log.size()) {
+            const std::size_t lineEnd = log.find('\n', cursor);
+            const std::size_t lineLength = (lineEnd == std::string::npos)
+                                               ? (log.size() - cursor)
+                                               : (lineEnd - cursor);
+            const std::string line = log.substr(cursor, lineLength);
+            cursor = (lineEnd == std::string::npos) ? log.size() : lineEnd + 1;
+
+            const std::string trimmed = trim(line);
+            if (trimmed.empty()) {
+                continue;
+            }
+
+            // Try to find the first integer after "0(" or "0:" — that's the
+            // line number on every common driver.
+            int lineNumber = -1;
+            std::size_t scan = 0;
+            while (scan + 1 < trimmed.size()) {
+                if (trimmed[scan] == '0' && (trimmed[scan + 1] == '(' || trimmed[scan + 1] == ':')) {
+                    std::size_t digitStart = scan + 2;
+                    std::size_t digitEnd = digitStart;
+                    while (digitEnd < trimmed.size() && std::isdigit(static_cast<unsigned char>(trimmed[digitEnd]))) {
+                        ++digitEnd;
+                    }
+                    if (digitEnd > digitStart) {
+                        try {
+                            lineNumber = std::stoi(trimmed.substr(digitStart, digitEnd - digitStart));
+                        } catch (...) {
+                            lineNumber = -1;
+                        }
+                        break;
+                    }
+                }
+                ++scan;
+            }
+            if (lineNumber > 0) {
+                result.emplace_back(lineNumber, trimmed);
+            }
+        }
+        return result;
     }
 
     std::string QuoteForPosixShell(const std::string& value) {
@@ -1025,8 +1300,8 @@ bool Engine::InitUI() {
     ui_->SetActiveDocumentChangedCallback([this](const std::string& path, const std::string& content) {
         HandleActiveDocumentChanged(path, content);
     });
-    ui_->SetCreateWorkspaceCallback([this](const std::string& name) {
-        CreateWorkspaceFromUI(name);
+    ui_->SetCreateWorkspaceCallback([this](const std::string& name, const std::string& templateId) {
+        CreateWorkspaceFromUI(name, templateId);
     });
     ui_->SetDeleteWorkspaceCallback([this](const std::string& name) {
         DeleteWorkspaceFromUI(name);
@@ -1099,6 +1374,10 @@ bool Engine::InitUI() {
     });
     ui_->SetRecorderStopCallback([this]() {
         HandleStopRecording();
+    });
+    ui_->SetSnapshotRestoreCallback([this](const std::string& workspaceName,
+                                           const std::string& snapshotId) {
+        RestoreWorkspaceSnapshot(workspaceName, snapshotId);
     });
     // Default to the workspace root so the file dialog opens somewhere
     // sensible the first time.
@@ -1570,7 +1849,11 @@ bool Engine::BuildCompileSourceForWorkspace(const std::string& workspaceName,
                                             std::vector<std::string>* outSamplerUniformNames,
                                             std::vector<std::string>* outStorageBufferNames,
                                             std::vector<std::string>* outShaderDependencies,
-                                            std::string* outError) const {
+                                            std::string* outError,
+                                            int* outUserPrefixLines) const {
+    if (outUserPrefixLines != nullptr) {
+        *outUserPrefixLines = 0;
+    }
     if (outSource == nullptr ||
         outUniformDescriptors == nullptr ||
         outSamplerUniformNames == nullptr ||
@@ -1756,6 +2039,124 @@ bool Engine::BuildCompileSourceForWorkspace(const std::string& workspaceName,
         return true;
     }
 
+    // Host-side GLSL pre-validation: test-compile each non-empty section
+    // and map any driver error back to its (file, line) in user source.
+    // Pushes red-squiggle markers into the editor. Runs on the main thread
+    // (callers of BuildCompileSourceForWorkspace are all main-thread).
+    ShaderAssembly assembly;
+    std::string assemblyError;
+    if (AssembleShaderWithLineMap(rootShaderKey, shaderContentsByKey, basenameToKey,
+                                  &assembly, &assemblyError)) {
+        // Map fileId -> on-disk path so we can route markers to the right
+        // editor document.
+        std::unordered_map<int, std::string> fileIdToFullPath;
+        fileIdToFullPath.reserve(assembly.fileNames.size());
+        for (std::size_t i = 0; i < assembly.fileNames.size(); ++i) {
+            const auto pathIt = shaderPathByKey.find(assembly.fileNames[i]);
+            if (pathIt != shaderPathByKey.end()) {
+                fileIdToFullPath[static_cast<int>(i)] = pathIt->second;
+            }
+        }
+
+        // Reset markers across all documents — stale red squiggles from a
+        // previous failure should disappear the instant we're checking again.
+        if (ui_) {
+            ui_->ClearAllShaderErrorMarkers();
+        }
+
+        // Per-file accumulated error markers.
+        std::unordered_map<std::string, std::map<int, std::string>> markersByPath;
+
+        struct SectionRef {
+            const ShaderSectionWithMap* section;
+            GLenum type;
+            const char* label;
+        };
+        const SectionRef sectionRefs[3] = {
+            { &assembly.vertex,   GL_VERTEX_SHADER,   "vertex" },
+            { &assembly.fragment, GL_FRAGMENT_SHADER, "fragment" },
+            { &assembly.compute,  GL_COMPUTE_SHADER,  "compute" },
+        };
+        bool anyShaderFailed = false;
+        for (const auto& ref : sectionRefs) {
+            if (ref.section->text.empty()) {
+                continue;
+            }
+            const GLuint shader = glCreateShader(ref.type);
+            const char* src = ref.section->text.c_str();
+            glShaderSource(shader, 1, &src, nullptr);
+            glCompileShader(shader);
+            GLint compileStatus = GL_FALSE;
+            glGetShaderiv(shader, GL_COMPILE_STATUS, &compileStatus);
+            if (compileStatus != GL_TRUE) {
+                GLint logLength = 0;
+                glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &logLength);
+                std::string log;
+                if (logLength > 0) {
+                    log.resize(static_cast<std::size_t>(logLength));
+                    glGetShaderInfoLog(shader, logLength, nullptr, log.data());
+                    if (!log.empty() && log.back() == '\0') {
+                        log.pop_back();
+                    }
+                }
+                anyShaderFailed = true;
+
+                // Surface every line the driver complained about, mapped
+                // back to the user's source.
+                const auto parsed = ParseGlslDriverLog(log);
+                for (const auto& [sectionLine, message] : parsed) {
+                    if (sectionLine <= 0 ||
+                        sectionLine > static_cast<int>(ref.section->linesOrigin.size())) {
+                        continue;
+                    }
+                    const ShaderLineOrigin& origin =
+                        ref.section->linesOrigin[static_cast<std::size_t>(sectionLine - 1)];
+                    const auto pathIt = fileIdToFullPath.find(origin.fileId);
+                    if (pathIt == fileIdToFullPath.end()) {
+                        continue;
+                    }
+                    auto& m = markersByPath[pathIt->second];
+                    if (auto existing = m.find(origin.lineInFile); existing != m.end()) {
+                        existing->second += "\n" + message;
+                    } else {
+                        m.emplace(origin.lineInFile, std::string("[GLSL ") +
+                                  ref.label + "] " + message);
+                    }
+                }
+                // If we couldn't parse a line number, surface at line 1 so
+                // the marker still exists somewhere visible.
+                if (parsed.empty() && !log.empty()) {
+                    const auto pathIt = fileIdToFullPath.find(0);
+                    if (pathIt != fileIdToFullPath.end()) {
+                        markersByPath[pathIt->second][1] =
+                            std::string("[GLSL ") + ref.label + "] " + log;
+                    }
+                }
+
+                if (ui_) {
+                    ui_->AddLogOutput(std::string("[GLSL ") + ref.label +
+                                      " compile failed]\n" + log);
+                }
+            }
+            glDeleteShader(shader);
+        }
+
+        for (const auto& [path, markers] : markersByPath) {
+            if (ui_) {
+                ui_->SetShaderErrorMarkers(path, markers);
+            }
+        }
+
+        if (anyShaderFailed) {
+            *outError = "GLSL compile failed; see editor markers and log for details.";
+            std::ostringstream generatedSource;
+            generatedSource << "#error \"" << escapeForCStringLiteral(*outError) << "\"\n";
+            generatedSource << workspace.cppSource;
+            *outSource = generatedSource.str();
+            return true;
+        }
+    }
+
     *outUniformDescriptors = ParseUniformDescriptors(expandedShaderSource);
     *outSamplerUniformNames = ParseSamplerUniformNames(expandedShaderSource);
     *outStorageBufferNames = ParseStorageBufferNames(expandedShaderSource);
@@ -1784,6 +2185,19 @@ bool Engine::BuildCompileSourceForWorkspace(const std::string& workspaceName,
     generatedSource << "#define JIT_WORKSPACE_STATE_ABI_HASH jitgl_workspace_state_abi_hash\n";
     generatedSource << "#define JIT_WORKSPACE_HAS_GRAPHICS jitgl_workspace_has_graphics\n";
     generatedSource << "#define JIT_WORKSPACE_HAS_COMPUTE jitgl_workspace_has_compute\n";
+
+    // Snapshot the prefix line count so the host can map JIT compile errors
+    // back to user line numbers. We compute it from the string itself rather
+    // than hardcoding so adding/removing #defines above doesn't drift the
+    // offset.
+    {
+        const std::string prefixSoFar = generatedSource.str();
+        const int prefixLines = static_cast<int>(
+            std::count(prefixSoFar.begin(), prefixSoFar.end(), '\n'));
+        if (outUserPrefixLines != nullptr) {
+            *outUserPrefixLines = prefixLines;
+        }
+    }
     generatedSource << workspace.cppSource;
 
     *outSource = generatedSource.str();
@@ -1802,13 +2216,15 @@ void Engine::QueueCompileForWorkspace(const std::string& workspaceName, double n
     std::vector<std::string> storageBufferNames;
     std::vector<std::string> shaderDependencies;
     std::string buildError;
+    int userPrefixLines = 0;
     if (!BuildCompileSourceForWorkspace(workspaceName,
                                         &generatedSource,
                                         &uniformDescriptors,
                                         &samplerUniformNames,
                                         &storageBufferNames,
                                         &shaderDependencies,
-                                        &buildError)) {
+                                        &buildError,
+                                        &userPrefixLines)) {
         return;
     }
 
@@ -1819,6 +2235,9 @@ void Engine::QueueCompileForWorkspace(const std::string& workspaceName, double n
     DebugLog("QueueCompileForWorkspace(name=" + workspaceName +
              ", immediate=" + std::to_string(immediate) +
              ", uniforms=" + std::to_string(uniformDescriptors.size()) + ")");
+    // Record userPrefixLines alongside the other latest_*_ caches so
+    // EnqueueDueCompiles can attach it to the CompileJob when it builds it.
+    latestUserPrefixLines_[workspaceName] = userPrefixLines;
     QueueCompile(workspaceName,
                  generatedSource,
                  stateAbiHash,
@@ -1891,6 +2310,7 @@ bool Engine::RegisterWorkspace(const WorkspaceDescriptor& descriptor) {
     ui_->SetWorkspaceOutputHistory(workspace.name,
                                    workspaceManager_->LoadWorkspaceConsoleLog(workspace.name),
                                    workspaceManager_->LoadWorkspaceEngineLog(workspace.name));
+    LoadWorkspaceSnapshotsFromDisk(workspace.name);
     return true;
 }
 
@@ -1901,7 +2321,8 @@ void Engine::SyncWorkspaceUiState() {
     ui_->SetWorkspaces(workspaceOrder_, activeWorkspaceName_);
 }
 
-bool Engine::CreateWorkspaceFromUI(const std::string& workspaceName) {
+bool Engine::CreateWorkspaceFromUI(const std::string& workspaceName,
+                                   const std::string& templateId) {
     if (!workspaceManager_) {
         return false;
     }
@@ -1913,6 +2334,13 @@ bool Engine::CreateWorkspaceFromUI(const std::string& workspaceName) {
         return false;
     }
 
+    // Apply the chosen template (no-op if templateId is empty). We do this
+    // before RegisterWorkspace so the in-memory source matches the on-disk
+    // files from the first compile.
+    if (!templateId.empty()) {
+        ApplyWorkspaceTemplate(descriptor->name, templateId);
+    }
+
     if (!RegisterWorkspace(*descriptor)) {
         ui_->AddLogOutput("[Workspace Error] Workspace created but failed to load '" + workspaceName + "'.");
         return false;
@@ -1920,7 +2348,68 @@ bool Engine::CreateWorkspaceFromUI(const std::string& workspaceName) {
 
     SyncWorkspaceUiState();
     SwitchToWorkspace(descriptor->name, true);
-    ui_->AddLogOutput("[Workspace] Created workspace '" + descriptor->name + "'.");
+    if (templateId.empty()) {
+        ui_->AddLogOutput("[Workspace] Created workspace '" + descriptor->name + "'.");
+    } else {
+        ui_->AddLogOutput("[Workspace] Created workspace '" + descriptor->name +
+                          "' from template '" + templateId + "'.");
+    }
+    return true;
+}
+
+bool Engine::ApplyWorkspaceTemplate(const std::string& workspaceName,
+                                    const std::string& templateId) {
+    if (templateId.empty()) {
+        return true;
+    }
+
+    // Templates ship in the binary tree under assets/templates/<id>/ via the
+    // CMake POST_BUILD copy. Fall back to the source tree so an out-of-tree
+    // build that hasn't run POST_BUILD yet still works.
+    const std::filesystem::path templateDir =
+        std::filesystem::path(JIT_PROJECT_BINARY_DIR) / "assets" / "templates" / templateId;
+    const std::filesystem::path fallbackDir =
+        std::filesystem::path(JIT_PROJECT_SOURCE_DIR) / "assets" / "templates" / templateId;
+    std::error_code ec;
+    std::filesystem::path useDir;
+    if (std::filesystem::exists(templateDir / "scene.cpp", ec)) {
+        useDir = templateDir;
+    } else if (std::filesystem::exists(fallbackDir / "scene.cpp", ec)) {
+        useDir = fallbackDir;
+    } else {
+        ui_->AddLogOutput("[Workspace Error] Template '" + templateId + "' not found.");
+        return false;
+    }
+
+    const auto descriptor = workspaceManager_->BuildDescriptor(workspaceName);
+    if (!descriptor.has_value()) {
+        return false;
+    }
+
+    // Template files live outside the workspace root, so we can't reuse
+    // WorkspaceManager::ReadFile (it sandboxes paths). Read directly.
+    const auto slurp = [](const std::filesystem::path& p) -> std::optional<std::string> {
+        std::ifstream file(p, std::ios::binary);
+        if (!file.is_open()) return std::nullopt;
+        std::ostringstream ss;
+        ss << file.rdbuf();
+        return ss.str();
+    };
+
+    auto sceneContent  = slurp(useDir / "scene.cpp");
+    auto shaderContent = slurp(useDir / "shader.glsl");
+    if (!sceneContent.has_value() || !shaderContent.has_value()) {
+        ui_->AddLogOutput("[Workspace Error] Template '" + templateId +
+                          "' is missing scene.cpp or shader.glsl (looked under " +
+                          useDir.string() + ").");
+        return false;
+    }
+    if (!workspaceManager_->SaveFile(descriptor->cppPath, *sceneContent) ||
+        !workspaceManager_->SaveFile(descriptor->shaderPath, *shaderContent)) {
+        ui_->AddLogOutput("[Workspace Error] Failed to write template '" + templateId +
+                          "' files into workspace '" + workspaceName + "'.");
+        return false;
+    }
     return true;
 }
 
@@ -2188,8 +2677,9 @@ bool Engine::InitWatcher() {
         HandleActiveDocumentChanged(filepath, content);
     });
 
-    ui_->SetCreateWorkspaceCallback([this](const std::string& workspaceName) {
-        CreateWorkspaceFromUI(workspaceName);
+    ui_->SetCreateWorkspaceCallback([this](const std::string& workspaceName,
+                                            const std::string& templateId) {
+        CreateWorkspaceFromUI(workspaceName, templateId);
     });
 
     ui_->SetDeleteWorkspaceCallback([this](const std::string& workspaceName) {
@@ -2711,6 +3201,11 @@ void Engine::EnqueueDueCompiles(const std::vector<std::string>& duePaths) {
                       [&](const CompileJob& job) {
                           return job.workspaceName == workspaceName;
                       });
+        int userPrefixLines = 0;
+        if (const auto it = latestUserPrefixLines_.find(workspaceName);
+            it != latestUserPrefixLines_.end()) {
+            userPrefixLines = it->second;
+        }
         compileJobs_.emplace_back(CompileJob{
             workspaceName,
             workspaceIt->second.cppPath,
@@ -2720,7 +3215,8 @@ void Engine::EnqueueDueCompiles(const std::vector<std::string>& duePaths) {
             uniformDescriptorsIt->second,
             samplerUniformsIt->second,
             storageBuffersIt->second,
-            shaderDependenciesIt->second
+            shaderDependenciesIt->second,
+            userPrefixLines
         });
         pendingCompilesAt_.erase(workspaceName);
     }
@@ -2779,21 +3275,26 @@ void Engine::CompileThreadMain(std::shared_ptr<std::atomic<bool>> running) {
         }
 
         // Heavy JIT/Clang work happens off the UI thread.
-        auto program = currentJit->CompileSource(job.sourceName, job.source);
+        std::string diagnostics;
+        auto program = currentJit->CompileSource(job.sourceName, job.source, &diagnostics);
         {
             std::scoped_lock lock(compileMutex_);
             inFlightSourceHashes_.erase(job.workspaceName);
             inFlightStartTime_ = 0.0;
-            compileResults_.push(CompileResult{
-                job.workspaceName,
-                std::move(program),
-                job.sourceHash,
-                job.stateAbiHash,
-                std::move(job.uniformDescriptors),
-                std::move(job.samplerUniformNames),
-                std::move(job.storageBufferNames),
-                std::move(job.shaderDependencies)
-            });
+            CompileResult result;
+            result.workspaceName = std::move(job.workspaceName);
+            result.program = std::move(program);
+            result.sourceHash = job.sourceHash;
+            result.stateAbiHash = job.stateAbiHash;
+            result.uniformDescriptors = std::move(job.uniformDescriptors);
+            result.samplerUniformNames = std::move(job.samplerUniformNames);
+            result.storageBufferNames = std::move(job.storageBufferNames);
+            result.shaderDependencies = std::move(job.shaderDependencies);
+            result.diagnostics = std::move(diagnostics);
+            result.userPrefixLines = job.userPrefixLines;
+            // scenePath is looked up later on the main thread (we don't
+            // want to read workspaces_ off-thread).
+            compileResults_.push(std::move(result));
         }
     }
 }
@@ -3629,6 +4130,38 @@ void Engine::HandleCompileFailure(const CompileResult& result) {
              ", sourceHash=" + std::to_string(result.sourceHash) + ")");
     ui_->AddLogOutput("[JIT] Compile failed for workspace '" + result.workspaceName +
                       "'. Keeping previous program.");
+
+    // Surface clang diagnostics as inline editor markers on scene.cpp,
+    // mirroring what we do for GLSL errors. The reported line is into the
+    // assembled (preamble + host prefix + user source) buffer fed to clang;
+    // subtract those offsets to land on the user's actual line.
+    if (!result.diagnostics.empty() && ui_) {
+        const auto workspaceIt = workspaces_.find(result.workspaceName);
+        if (workspaceIt != workspaces_.end()) {
+            const int preambleLines = (jit_ ? jit_->GetPreambleLineCount() : 0);
+            // +1 accounts for the explicit "\n" CompileSource splices between
+            // the preamble and the rest of the source.
+            const int totalOffset = preambleLines + 1 + result.userPrefixLines;
+
+            const auto entries = ParseClangDiagnosticLog(result.diagnostics);
+            std::map<int, std::string> markers;
+            for (const auto& [bufferLine, message] : entries) {
+                const int userLine = bufferLine - totalOffset;
+                if (userLine <= 0) {
+                    // Hit in the preamble/host prefix — not the user's fault
+                    // and not editable; log only.
+                    continue;
+                }
+                if (auto existing = markers.find(userLine); existing != markers.end()) {
+                    existing->second += "\n" + message;
+                } else {
+                    markers.emplace(userLine, message);
+                }
+            }
+            ui_->SetShaderErrorMarkers(workspaceIt->second.cppPath, markers);
+        }
+    }
+
     // Disable input capture so the user is not still driving a now-stale or
     // half-broken program. They re-enable explicitly once the compile succeeds.
     if (inputsEnabled_) {
@@ -3738,10 +4271,250 @@ void Engine::HandleCompileSuccess(const CompileResult& result) {
     ctx_.reloadCount++;
     InitializeProgramIfNeeded(activeProgram_);
     SaveActiveWorkspaceRuntimeState();
+    TakeWorkspaceSnapshot(result.workspaceName);
     DebugLog("HandleCompileSuccess activated(workspace=" + result.workspaceName +
              ", ctx.state_i0=" + std::to_string(ctx_.state_i[0]) +
              ", glIsProgram=" + std::to_string(ctx_.state_i[0] != 0 &&
                                                glIsProgram(static_cast<GLuint>(ctx_.state_i[0])) == GL_TRUE) + ")");
+}
+
+namespace {
+    std::string FormatSnapshotId(std::uint64_t unixMs) {
+        const std::time_t seconds = static_cast<std::time_t>(unixMs / 1000ull);
+        const unsigned int millis = static_cast<unsigned int>(unixMs % 1000ull);
+        std::tm tm{};
+#if defined(_WIN32)
+        localtime_s(&tm, &seconds);
+#else
+        localtime_r(&seconds, &tm);
+#endif
+        char buf[64];
+        std::strftime(buf, sizeof(buf), "%Y%m%d-%H%M%S", &tm);
+        char id[80];
+        std::snprintf(id, sizeof(id), "%s-%03u", buf, millis);
+        return id;
+    }
+
+    std::string FormatSnapshotLabel(std::uint64_t unixMs) {
+        const std::time_t seconds = static_cast<std::time_t>(unixMs / 1000ull);
+        std::tm tm{};
+#if defined(_WIN32)
+        localtime_s(&tm, &seconds);
+#else
+        localtime_r(&seconds, &tm);
+#endif
+        char buf[32];
+        std::strftime(buf, sizeof(buf), "%H:%M:%S", &tm);
+        return buf;
+    }
+
+    std::uint64_t NowUnixMs() {
+        using namespace std::chrono;
+        return static_cast<std::uint64_t>(
+            duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count());
+    }
+}
+
+void Engine::TakeWorkspaceSnapshot(const std::string& workspaceName) {
+    if (!workspaceManager_) {
+        return;
+    }
+    const auto workspaceIt = workspaces_.find(workspaceName);
+    if (workspaceIt == workspaces_.end()) {
+        return;
+    }
+    const auto& workspace = workspaceIt->second;
+
+    // Skip if the most recent snapshot already matches the current sources.
+    // This drops the duplicate that gets created when the same source is
+    // re-submitted (e.g. an unrelated dependency triggered a recompile).
+    auto& history = workspaceSnapshots_[workspaceName];
+    if (!history.empty()) {
+        const auto& last = history.front();
+        if (last.sceneCpp == workspace.cppSource &&
+            last.shaderGlsl == workspace.shaderSource) {
+            return;
+        }
+    }
+
+    const std::uint64_t nowMs = NowUnixMs();
+    WorkspaceSnapshot snap;
+    snap.snapshotId = FormatSnapshotId(nowMs);
+    snap.timestampMs = nowMs;
+    snap.sceneCpp = workspace.cppSource;
+    snap.shaderGlsl = workspace.shaderSource;
+    if (auto uniforms = workspaceManager_->ReadFile(workspace.uniformsPath); uniforms.has_value()) {
+        snap.uniformsJson = std::move(*uniforms);
+    }
+
+    // Persist to disk first; if that fails we still keep an in-memory copy
+    // for this session.
+    const std::filesystem::path snapshotDir =
+        std::filesystem::path(workspace.directory) / ".snapshots" / snap.snapshotId;
+    std::error_code ec;
+    std::filesystem::create_directories(snapshotDir, ec);
+    if (!ec) {
+        (void)workspaceManager_->SaveFile((snapshotDir / "scene.cpp").string(), snap.sceneCpp);
+        (void)workspaceManager_->SaveFile((snapshotDir / "shader.glsl").string(), snap.shaderGlsl);
+        if (!snap.uniformsJson.empty()) {
+            (void)workspaceManager_->SaveFile((snapshotDir / "uniforms.json").string(), snap.uniformsJson);
+        }
+    }
+
+    history.insert(history.begin(), std::move(snap));
+    if (history.size() > kMaxSnapshotsPerWorkspace) {
+        // Prune oldest from disk too, so the .snapshots dir doesn't grow
+        // unbounded across many sessions.
+        for (std::size_t i = kMaxSnapshotsPerWorkspace; i < history.size(); ++i) {
+            const std::filesystem::path stale =
+                std::filesystem::path(workspace.directory) / ".snapshots" / history[i].snapshotId;
+            std::error_code pruneEc;
+            std::filesystem::remove_all(stale, pruneEc);
+        }
+        history.resize(kMaxSnapshotsPerWorkspace);
+    }
+
+    PushWorkspaceSnapshotsToUi(workspaceName);
+}
+
+void Engine::LoadWorkspaceSnapshotsFromDisk(const std::string& workspaceName) {
+    if (!workspaceManager_) {
+        return;
+    }
+    const auto workspaceIt = workspaces_.find(workspaceName);
+    if (workspaceIt == workspaces_.end()) {
+        return;
+    }
+    const auto& workspace = workspaceIt->second;
+    const std::filesystem::path snapshotsDir =
+        std::filesystem::path(workspace.directory) / ".snapshots";
+    std::error_code ec;
+    if (!std::filesystem::exists(snapshotsDir, ec)) {
+        return;
+    }
+
+    auto& history = workspaceSnapshots_[workspaceName];
+    history.clear();
+
+    // Each subdirectory's name is the snapshot id (a timestamp); sorted
+    // ascending lexicographically = ascending chronologically, so we read
+    // and then reverse for newest-first display order.
+    std::vector<std::filesystem::path> entries;
+    for (const auto& entry : std::filesystem::directory_iterator(snapshotsDir, ec)) {
+        if (ec) {
+            break;
+        }
+        if (entry.is_directory()) {
+            entries.push_back(entry.path());
+        }
+    }
+    std::ranges::sort(entries, [](const std::filesystem::path& a, const std::filesystem::path& b) {
+        return a.filename().string() < b.filename().string();
+    });
+
+    for (const auto& entryPath : entries) {
+        WorkspaceSnapshot snap;
+        snap.snapshotId = entryPath.filename().string();
+        // Best-effort parse of the timestamp prefix for displayLabel.
+        std::tm tm{};
+        unsigned int millis = 0;
+        if (std::sscanf(snap.snapshotId.c_str(), "%4d%2d%2d-%2d%2d%2d-%3u",
+                        &tm.tm_year, &tm.tm_mon, &tm.tm_mday,
+                        &tm.tm_hour, &tm.tm_min, &tm.tm_sec,
+                        &millis) == 7) {
+            tm.tm_year -= 1900;
+            tm.tm_mon -= 1;
+            const std::time_t t = std::mktime(&tm);
+            if (t != -1) {
+                snap.timestampMs = static_cast<std::uint64_t>(t) * 1000ull + millis;
+            }
+        }
+        if (auto scene = workspaceManager_->ReadFile((entryPath / "scene.cpp").string()); scene.has_value()) {
+            snap.sceneCpp = std::move(*scene);
+        }
+        if (auto shader = workspaceManager_->ReadFile((entryPath / "shader.glsl").string()); shader.has_value()) {
+            snap.shaderGlsl = std::move(*shader);
+        }
+        if (auto uniforms = workspaceManager_->ReadFile((entryPath / "uniforms.json").string()); uniforms.has_value()) {
+            snap.uniformsJson = std::move(*uniforms);
+        }
+        history.push_back(std::move(snap));
+    }
+    std::ranges::reverse(history);
+    if (history.size() > kMaxSnapshotsPerWorkspace) {
+        history.resize(kMaxSnapshotsPerWorkspace);
+    }
+    PushWorkspaceSnapshotsToUi(workspaceName);
+}
+
+bool Engine::RestoreWorkspaceSnapshot(const std::string& workspaceName,
+                                      const std::string& snapshotId) {
+    if (!workspaceManager_) {
+        return false;
+    }
+    auto historyIt = workspaceSnapshots_.find(workspaceName);
+    if (historyIt == workspaceSnapshots_.end()) {
+        return false;
+    }
+    auto& history = historyIt->second;
+    auto snapIt = std::ranges::find_if(history, [&](const WorkspaceSnapshot& s) {
+        return s.snapshotId == snapshotId;
+    });
+    if (snapIt == history.end()) {
+        return false;
+    }
+    auto workspaceIt = workspaces_.find(workspaceName);
+    if (workspaceIt == workspaces_.end()) {
+        return false;
+    }
+    const auto& workspace = workspaceIt->second;
+
+    // Write the snapshot's contents back to the live workspace files. The
+    // watcher will pick these up and queue a recompile, but we also push
+    // the new content into the editor immediately so the user sees the
+    // restored text without a beat of staleness.
+    const std::string cppPath = workspace.cppPath;
+    const std::string shaderPath = workspace.shaderPath;
+    const std::string uniformsPath = workspace.uniformsPath;
+    workspaceManager_->SaveFile(cppPath, snapIt->sceneCpp);
+    workspaceManager_->SaveFile(shaderPath, snapIt->shaderGlsl);
+    if (!snapIt->uniformsJson.empty()) {
+        workspaceManager_->SaveFile(uniformsPath, snapIt->uniformsJson);
+    }
+
+    UpdateWorkspaceSourceFromDocument(workspaceName, cppPath, snapIt->sceneCpp);
+    UpdateWorkspaceSourceFromDocument(workspaceName, shaderPath, snapIt->shaderGlsl);
+
+    if (ui_) {
+        ui_->UpdateDocumentContent(cppPath, snapIt->sceneCpp);
+        ui_->UpdateDocumentContent(shaderPath, snapIt->shaderGlsl);
+        ui_->AddLogOutput("[History] Restored snapshot " + snapshotId +
+                          " for workspace '" + workspaceName + "'.");
+    }
+
+    QueueCompileForWorkspace(workspaceName, glfwGetTime(), true);
+    return true;
+}
+
+void Engine::PushWorkspaceSnapshotsToUi(const std::string& workspaceName) {
+    if (!ui_) {
+        return;
+    }
+    const auto it = workspaceSnapshots_.find(workspaceName);
+    if (it == workspaceSnapshots_.end()) {
+        ui_->SetWorkspaceSnapshots(workspaceName, {});
+        return;
+    }
+    std::vector<EditorUI::WorkspaceSnapshotView> views;
+    views.reserve(it->second.size());
+    for (const auto& snap : it->second) {
+        EditorUI::WorkspaceSnapshotView view;
+        view.snapshotId = snap.snapshotId;
+        view.timestampMs = snap.timestampMs;
+        view.displayLabel = FormatSnapshotLabel(snap.timestampMs);
+        views.push_back(std::move(view));
+    }
+    ui_->SetWorkspaceSnapshots(workspaceName, std::move(views));
 }
 
 void Engine::ProcessCompileResults() {
@@ -4276,6 +5049,140 @@ void Engine::UpdateInputState() {
     }
 }
 
+void Engine::UpdateCameraState() {
+    JitCamera& cam = ctx_.camera;
+    if (cam.enabled == 0) {
+        return;
+    }
+
+    const InputState& in = ctx_.input;
+    const float dt = ctx_.deltaTime;
+
+    constexpr float kPitchLimit = 1.55334f;  // ~89 degrees
+    const float worldUp[3] = { 0.0f, 1.0f, 0.0f };
+
+    const auto length3 = [](const float v[3]) {
+        return std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    };
+    const auto normalize3 = [&](float v[3]) {
+        const float l = length3(v);
+        if (l > 1e-6f) {
+            v[0] /= l; v[1] /= l; v[2] /= l;
+        }
+    };
+    const auto cross3 = [](const float a[3], const float b[3], float out[3]) {
+        out[0] = a[1] * b[2] - a[2] * b[1];
+        out[1] = a[2] * b[0] - a[0] * b[2];
+        out[2] = a[0] * b[1] - a[1] * b[0];
+    };
+
+    // Look gate: free-fly auto-looks when input capture is on (matches the
+    // editor's existing mouse-look conventions); orbit looks only while
+    // left mouse is held.
+    const bool freeflyLook = (cam.mode == 1) && (in.inputsEnabled != 0);
+    const bool orbitLook   = (cam.mode == 0) && (in.mouseDown[0] != 0);
+    if (freeflyLook || orbitLook) {
+        cam.yaw   -= in.mouseDX * cam.look_sensitivity;
+        cam.pitch -= in.mouseDY * cam.look_sensitivity;
+    }
+    cam.pitch = std::clamp(cam.pitch, -kPitchLimit, kPitchLimit);
+
+    // Convention: yaw=0,pitch=0 looks down -Z. Positive yaw rotates toward +X.
+    const float cp = std::cos(cam.pitch);
+    const float sp = std::sin(cam.pitch);
+    const float cy = std::cos(cam.yaw);
+    const float sy = std::sin(cam.yaw);
+    cam.forward[0] =  cp * sy;
+    cam.forward[1] =  sp;
+    cam.forward[2] = -cp * cy;
+    cross3(cam.forward, worldUp, cam.right);
+    normalize3(cam.right);
+    cross3(cam.right, cam.forward, cam.up);
+    normalize3(cam.up);
+
+    if (cam.mode == 0) {
+        // Orbit: scroll zoom, right-drag pan in screen plane.
+        const float zoomFactor = 1.0f - in.mouseScrollY * cam.zoom_sensitivity;
+        cam.distance = std::max(0.05f, cam.distance * std::max(0.1f, zoomFactor));
+        if (in.mouseDown[1] != 0) {
+            const float panScale = cam.distance * 0.002f;
+            const float dx = -in.mouseDX * panScale;
+            const float dy =  in.mouseDY * panScale;
+            cam.target[0] += cam.right[0] * dx + cam.up[0] * dy;
+            cam.target[1] += cam.right[1] * dx + cam.up[1] * dy;
+            cam.target[2] += cam.right[2] * dx + cam.up[2] * dy;
+        }
+        cam.position[0] = cam.target[0] - cam.forward[0] * cam.distance;
+        cam.position[1] = cam.target[1] - cam.forward[1] * cam.distance;
+        cam.position[2] = cam.target[2] - cam.forward[2] * cam.distance;
+    } else {
+        // Free-fly: WASD ground-plane motion, QE up/down.
+        if (in.inputsEnabled != 0) {
+            float move[3] = { 0.0f, 0.0f, 0.0f };
+            if (in.keyDown[GLFW_KEY_W] != 0) { move[0] += cam.forward[0]; move[1] += cam.forward[1]; move[2] += cam.forward[2]; }
+            if (in.keyDown[GLFW_KEY_S] != 0) { move[0] -= cam.forward[0]; move[1] -= cam.forward[1]; move[2] -= cam.forward[2]; }
+            if (in.keyDown[GLFW_KEY_D] != 0) { move[0] += cam.right[0];   move[1] += cam.right[1];   move[2] += cam.right[2];   }
+            if (in.keyDown[GLFW_KEY_A] != 0) { move[0] -= cam.right[0];   move[1] -= cam.right[1];   move[2] -= cam.right[2];   }
+            if (in.keyDown[GLFW_KEY_E] != 0) { move[1] += 1.0f; }
+            if (in.keyDown[GLFW_KEY_Q] != 0) { move[1] -= 1.0f; }
+            normalize3(move);
+            const float step = cam.move_speed * dt;
+            cam.position[0] += move[0] * step;
+            cam.position[1] += move[1] * step;
+            cam.position[2] += move[2] * step;
+        }
+        cam.target[0] = cam.position[0] + cam.forward[0];
+        cam.target[1] = cam.position[1] + cam.forward[1];
+        cam.target[2] = cam.position[2] + cam.forward[2];
+    }
+
+    // View matrix (column-major, OpenGL convention; lookAt).
+    float f[3] = { cam.forward[0], cam.forward[1], cam.forward[2] };
+    normalize3(f);
+    float r[3];
+    cross3(f, worldUp, r);
+    normalize3(r);
+    float u[3];
+    cross3(r, f, u);
+
+    const float eye[3] = { cam.position[0], cam.position[1], cam.position[2] };
+    float view[16] = { 0 };
+    view[0]  =  r[0]; view[4]  =  r[1]; view[8]   =  r[2];
+    view[1]  =  u[0]; view[5]  =  u[1]; view[9]   =  u[2];
+    view[2]  = -f[0]; view[6]  = -f[1]; view[10]  = -f[2];
+    view[12] = -(r[0] * eye[0] + r[1] * eye[1] + r[2] * eye[2]);
+    view[13] = -(u[0] * eye[0] + u[1] * eye[1] + u[2] * eye[2]);
+    view[14] =  (f[0] * eye[0] + f[1] * eye[1] + f[2] * eye[2]);
+    view[15] = 1.0f;
+    std::memcpy(cam.view, view, sizeof(view));
+
+    // Perspective projection (right-handed, z = -depth).
+    const float aspect = (ctx_.height > 0)
+        ? static_cast<float>(ctx_.width) / static_cast<float>(ctx_.height)
+        : 1.0f;
+    const float tanHalf = std::tan(cam.fov_y_radians * 0.5f);
+    float proj[16] = { 0 };
+    proj[0]  = 1.0f / (aspect * std::max(1e-4f, tanHalf));
+    proj[5]  = 1.0f / std::max(1e-4f, tanHalf);
+    proj[10] = -(cam.far_plane + cam.near_plane) / (cam.far_plane - cam.near_plane);
+    proj[11] = -1.0f;
+    proj[14] = -(2.0f * cam.far_plane * cam.near_plane) / (cam.far_plane - cam.near_plane);
+    std::memcpy(cam.projection, proj, sizeof(proj));
+
+    // viewProjection = projection * view (column-major multiply).
+    float vp[16] = { 0 };
+    for (int col = 0; col < 4; ++col) {
+        for (int row = 0; row < 4; ++row) {
+            float sum = 0.0f;
+            for (int k = 0; k < 4; ++k) {
+                sum += proj[k * 4 + row] * view[col * 4 + k];
+            }
+            vp[col * 4 + row] = sum;
+        }
+    }
+    std::memcpy(cam.view_projection, vp, sizeof(vp));
+}
+
 void Engine::RenderSceneToTexture() {
     if (sceneWidth_ <= 0 || sceneHeight_ <= 0) {
         sharedTextures_.clear();
@@ -4626,6 +5533,7 @@ void Engine::Run() {
             ctx_.height = windowH;
         }
 
+        UpdateCameraState();
         RenderSceneToTexture();
         UpdateLanShareUiState();
         UpdateRecorderUiStatus(now);

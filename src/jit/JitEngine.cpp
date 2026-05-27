@@ -8,6 +8,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/ManagedStatic.h"
 
+#include <algorithm>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -230,6 +231,10 @@ bool JitEngine::Init(const std::string& preamblePath) {
         }
         preamble_ = std::move(rebuilt);
     }
+    // Pre-count preamble newlines once so the host can translate driver
+    // line numbers back into the user's source without re-scanning.
+    preambleLineCount_ = static_cast<int>(std::count(preamble_.begin(), preamble_.end(), '\n'));
+
     argStorage_.emplace_back("-std=c++20");
     argStorage_.emplace_back("-xc++");
     argStorage_.emplace_back("-O0");
@@ -402,13 +407,18 @@ std::shared_ptr<JitProgram> JitEngine::CompileFile(const std::string& filepath) 
     return CompileSource(filepath, userCode);
 }
 
-std::shared_ptr<JitProgram> JitEngine::CompileSource(const std::string& sourceName, const std::string& sourceCode) {
+std::shared_ptr<JitProgram> JitEngine::CompileSource(const std::string& sourceName,
+                                                     const std::string& sourceCode,
+                                                     std::string* outDiagnostics) {
     log(std::format("[JIT] Starting compilation for {}...", sourceName));
     const std::string fullSource = preamble_ + "\n" + sourceCode;
 
     std::string preflightDiagnostics;
     if (!RunPreflightSyntaxCheck(sourceName, fullSource, &preflightDiagnostics)) {
         log(preflightDiagnostics);
+        if (outDiagnostics) {
+            *outDiagnostics = preflightDiagnostics;
+        }
         return nullptr;
     }
 
@@ -423,10 +433,13 @@ std::shared_ptr<JitProgram> JitEngine::CompileSource(const std::string& sourceNa
         std::string msg;
         llvm::raw_string_ostream os(msg);
         llvm::logAllUnhandledErrors(ptuOrErr.takeError(), os);
-        
+
         msg = truncateDiagnostics(msg);
-        
+
         log(std::format("[JIT Parse Error][{}]\n{}", sourceName, msg));
+        if (outDiagnostics) {
+            *outDiagnostics = msg;
+        }
         return nullptr;
     }
 
@@ -436,6 +449,9 @@ std::shared_ptr<JitProgram> JitEngine::CompileSource(const std::string& sourceNa
         llvm::raw_string_ostream os(msg);
         llvm::logAllUnhandledErrors(std::move(execErr), os);
         log(std::format("[JIT Execute Error][{}]\n{}", sourceName, os.str()));
+        if (outDiagnostics) {
+            *outDiagnostics = os.str();
+        }
         return nullptr;
     }
 

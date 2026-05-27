@@ -292,7 +292,12 @@ public:
     void SetSaveCallback(std::function<bool(const std::string&, const std::string&)> cb);
     void SetDocumentChangedCallback(std::function<void(const std::string&, const std::string&)> cb);
     void SetActiveDocumentChangedCallback(std::function<void(const std::string&, const std::string&)> cb);
-    void SetCreateWorkspaceCallback(std::function<void(const std::string&)> cb);
+    // Callback for creating a workspace. `templateId` is empty for the
+    // default scaffold, or matches a template folder name under
+    // assets/templates/ (e.g. "empty", "camera-cube") to start from a
+    // pre-authored scene + shader pair.
+    void SetCreateWorkspaceCallback(std::function<void(const std::string& name,
+                                                       const std::string& templateId)> cb);
     void SetDeleteWorkspaceCallback(std::function<void(const std::string&)> cb);
     void SetWorkspaceSwitchedCallback(std::function<void(const std::string&)> cb);
     void SetWorkspaceLineAppendedCallback(std::function<void(const std::string&, const std::string&, bool)> cb);
@@ -385,6 +390,29 @@ public:
     void SetRecorderStopCallback(std::function<void()> cb);
     void SetRecorderStatus(const RecorderStatusView& status);
     void SetRecorderDefaultDirectory(const std::string& dir);
+    // Set GLSL compile-error markers on the editor for the given shader path.
+    // `markers` is line-number (1-based) -> message. An empty map clears
+    // existing markers for that file.
+    void SetShaderErrorMarkers(const std::string& shaderPath,
+                               const std::map<int, std::string>& markers);
+    // Clear all shader error markers across all open documents — used on a
+    // fresh successful compile so stale red squiggles don't linger.
+    void ClearAllShaderErrorMarkers();
+
+    // Snapshot history surface. Engine pushes the active workspace's
+    // ordered (newest-first) snapshots; UI shows them in a sidebar pane
+    // with a Restore button per row.
+    struct WorkspaceSnapshotView {
+        std::string snapshotId;
+        std::uint64_t timestampMs = 0;
+        // Pre-formatted label for display, e.g. "12:34:56" or "2 min ago".
+        std::string displayLabel;
+    };
+    void SetWorkspaceSnapshots(const std::string& workspaceName,
+                               std::vector<WorkspaceSnapshotView> snapshots);
+    void SetSnapshotRestoreCallback(
+        std::function<void(const std::string& workspaceName,
+                           const std::string& snapshotId)> cb);
     bool ShouldLoadShowcaseWorkspaceOnStartup() const;
     void SetupDarkTheme() const;
     void SetupLightTheme() const;
@@ -420,7 +448,8 @@ private:
     std::function<bool(const std::string&, const std::string&)> onSaveDocument_;
     std::function<void(const std::string&, const std::string&)> onDocumentChanged_;
     std::function<void(const std::string&, const std::string&)> onActiveDocumentChanged_;
-    std::function<void(const std::string&)> onCreateWorkspace_;
+    std::function<void(const std::string&, const std::string&)> onCreateWorkspace_;
+    std::string pendingCreateWorkspaceTemplate_;
     std::function<void(const std::string&)> onDeleteWorkspace_;
     std::function<void(const std::string&)> onWorkspaceSwitched_;
     std::function<void(const std::string&, const std::string&, bool)> onWorkspaceLineAppended_;
@@ -514,6 +543,9 @@ private:
     std::string recorderToastText_;
     bool recorderToastIsError_ = false;
     bool recorderHotkeyHeld_ = false;
+
+    std::unordered_map<std::string, std::vector<WorkspaceSnapshotView>> snapshotsByWorkspace_;
+    std::function<void(const std::string&, const std::string&)> onSnapshotRestore_;
     bool showGlobalUniformsWindow_ = false;
     int selectedPipelineAddPassIndex_ = 0;
     bool openCreateWorkspacePopup_ = false;
@@ -554,6 +586,7 @@ private:
                               bool canDeleteAnyWorkspace,
                               std::string* pendingWorkspaceSwitch,
                               std::string* pendingWorkspaceDelete);
+    void DrawWorkspaceSnapshotPanel();
     void DrawEditorTabsArea();
     void DrawEditorPaneToggleOverlay(const ImGuiViewport* parentViewport,
                                      const ImVec2& paneTopLeft,

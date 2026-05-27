@@ -41,13 +41,24 @@ public:
     ~JitEngine();
 
     bool Init(const std::string& preamblePath);
-    std::shared_ptr<JitProgram> CompileSource(const std::string& sourceName, const std::string& sourceCode);
+    // `outDiagnostics` (when non-null) is filled with the verbatim preflight
+    // / parse / execute error text on a failed compile. Used by the host to
+    // map line numbers back into the user's source for editor markers.
+    std::shared_ptr<JitProgram> CompileSource(const std::string& sourceName,
+                                              const std::string& sourceCode,
+                                              std::string* outDiagnostics = nullptr);
     std::shared_ptr<JitProgram> CompileFile(const std::string& filepath);
     void SetOutputCallback(std::function<void(const std::string&)> cb);
+    // Number of newline-terminated lines the preamble (engine.hpp) consumes
+    // when prepended in front of user source. Compile errors report lines
+    // in the assembled buffer; subtracting this value (plus any host-side
+    // header lines) yields the line in the user's scene.cpp.
+    int GetPreambleLineCount() const { return preambleLineCount_; }
     void Terminate();
 private:
     std::function<void(const std::string&)> outputCallback_;
     std::string preamble_;
+    int preambleLineCount_ = 0;
 
     std::vector<std::string> argStorage_;
 

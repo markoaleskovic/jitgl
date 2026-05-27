@@ -70,6 +70,24 @@ private:
     bool networkEnabled_ = true;
 
     std::unique_ptr<VideoRecorder> videoRecorder_;
+
+    // Snapshot history: one entry stashed on each successful compile so the
+    // user can scrub back through prior versions of scene.cpp / shader.glsl
+    // when they break something. This is not a VCS — bounded to the last
+    // 50 successful compiles per workspace.
+    struct WorkspaceSnapshot {
+        std::string snapshotId;       // e.g., "20260527-143052-123"
+        std::uint64_t timestampMs = 0;
+        std::string sceneCpp;
+        std::string shaderGlsl;
+        std::string uniformsJson;
+    };
+    static constexpr std::size_t kMaxSnapshotsPerWorkspace = 50;
+    std::unordered_map<std::string, std::vector<WorkspaceSnapshot>> workspaceSnapshots_;
+    void TakeWorkspaceSnapshot(const std::string& workspaceName);
+    void LoadWorkspaceSnapshotsFromDisk(const std::string& workspaceName);
+    bool RestoreWorkspaceSnapshot(const std::string& workspaceName, const std::string& snapshotId);
+    void PushWorkspaceSnapshotsToUi(const std::string& workspaceName);
     bool HandleStartRecording(const EditorUI::RecorderStartRequest& request, std::string* errorMessage);
     void HandleStopRecording();
     void UpdateRecorderUiStatus(double nowSeconds);
@@ -146,6 +164,10 @@ private:
     std::unordered_map<std::string, std::vector<std::string>> latestStorageBufferNames_;
     std::unordered_map<std::string, std::vector<std::string>> latestShaderDependencies_;
     std::unordered_map<std::string, std::uint64_t> latestStateAbiHashes_;
+    // Newlines in the host-inserted prefix for the latest source we built
+    // for each workspace. Plumbed into CompileJob → CompileResult so the
+    // main thread can map clang error lines back to user lines.
+    std::unordered_map<std::string, int> latestUserPrefixLines_;
     // Per-workspace "earliest compile time" used for debounce/backoff scheduling.
     std::unordered_map<std::string, double> pendingCompilesAt_;
     std::unordered_map<std::string, double> ignoreWatcherUntil_;
@@ -178,6 +200,10 @@ private:
         std::vector<std::string> samplerUniformNames;
         std::vector<std::string> storageBufferNames;
         std::vector<std::string> shaderDependencies;
+        // Newlines in the host-inserted prefix that sits between the JIT
+        // preamble and the user's scene.cpp inside `source`. Used to
+        // subtract from driver-reported line numbers when surfacing errors.
+        int userPrefixLines = 0;
     };
 
     struct CompileResult {
@@ -189,6 +215,11 @@ private:
         std::vector<std::string> samplerUniformNames;
         std::vector<std::string> storageBufferNames;
         std::vector<std::string> shaderDependencies;
+        // Verbatim driver/clang output captured by the JIT worker; empty on
+        // success.
+        std::string diagnostics;
+        int userPrefixLines = 0;
+        std::string scenePath;  // workspace.cppPath, used to route markers.
     };
 
     struct CompileFailureState {
@@ -219,7 +250,8 @@ private:
 
     bool RegisterWorkspace(const WorkspaceDescriptor& descriptor);
     void SyncWorkspaceUiState();
-    bool CreateWorkspaceFromUI(const std::string& workspaceName);
+    bool CreateWorkspaceFromUI(const std::string& workspaceName, const std::string& templateId);
+    bool ApplyWorkspaceTemplate(const std::string& workspaceName, const std::string& templateId);
     bool DeleteWorkspaceFromUI(const std::string& workspaceName);
     void SwitchToWorkspace(const std::string& workspaceName, bool focusCppDocument);
     bool ExportActiveWorkspace(const std::string& targetPath) const;
@@ -250,7 +282,8 @@ private:
                                         std::vector<std::string>* outSamplerUniformNames,
                                         std::vector<std::string>* outStorageBufferNames,
                                         std::vector<std::string>* outShaderDependencies,
-                                        std::string* outError) const;
+                                        std::string* outError,
+                                        int* outUserPrefixLines = nullptr) const;
     void QueueCompileForWorkspace(const std::string& workspaceName, double nowSeconds, bool immediate);
     void UpdateWorkspaceSourceFromDocument(const std::string& workspaceName,
                                            const std::string& filepath,
@@ -351,6 +384,7 @@ private:
     void HandleScrollEvent(double xoffset, double yoffset);
     void HandleDropEvent(int count, const char** paths);
     void UpdateInputState();
+    void UpdateCameraState();
     void ApplyCursorRecenterMode(bool active);
 
     std::mutex droppedPathsMutex_;

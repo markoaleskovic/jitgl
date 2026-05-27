@@ -43,6 +43,45 @@ extern "C" {
     using JitLoadMeshFn    = JitMesh    (*)(EngineContext* ctx, const char* path);
 }
 
+// Opt-in 3D camera maintained by the host. Set `enabled = 1` from your
+// init() to have the host update view/proj each frame; otherwise the
+// struct is inert and you can build your own matrices.
+//
+// Two modes are provided:
+//   `mode = 0`: Orbit. Left-drag rotates around `target`, right-drag pans,
+//               scroll zooms `distance`. Good for inspecting a single model.
+//   `mode = 1`: Free-fly. WASD moves along forward/right, Q/E along world up,
+//               right-mouse drag rotates pitch/yaw. Classic FPS controls.
+//
+// Matrices follow the OpenGL convention: column-major float[16], applied as
+// gl_Position = proj * view * vec4(world_position, 1.0). The host computes
+// them after InputState is populated, so they're fresh at render() time.
+struct JitCamera {
+    // --- Host outputs (read by your shader / scene) ---
+    float view[16];               // world -> view
+    float projection[16];         // view -> clip
+    float view_projection[16];    // pre-multiplied, what you'd usually upload
+    float position[3];            // world-space eye, derived from target+distance in orbit mode
+    float forward[3];             // unit view direction (eye looking towards)
+    float right[3];               // unit right vector
+    float up[3];                  // unit up vector
+
+    // --- User inputs (set in init(); read by host each frame) ---
+    std::uint8_t enabled = 0;     // 0 = host leaves struct alone
+    std::uint8_t mode = 0;        // 0 = orbit, 1 = free-fly
+    std::uint8_t  _pad0[2] = {0, 0};
+    float target[3] = {0.0f, 0.0f, 0.0f};
+    float distance = 4.0f;        // orbit radius (orbit mode only)
+    float yaw = 0.0f;             // radians; both modes
+    float pitch = 0.0f;           // radians; clamped to roughly +/- pi/2
+    float fov_y_radians = 1.0472f; // 60 deg
+    float near_plane = 0.05f;
+    float far_plane = 200.0f;
+    float move_speed = 4.0f;      // free-fly: world units / sec
+    float look_sensitivity = 0.0035f;  // both modes: radians per pixel of drag
+    float zoom_sensitivity = 0.12f;    // orbit: scroll wheel -> distance scale
+};
+
 // Per-frame snapshot of keyboard and mouse state, populated by the host before
 // each JIT callback. JIT code reads this through KEY_DOWN / MOUSE_DOWN helpers
 // in engine.hpp; it should never write to it. When input capture is disabled
@@ -114,6 +153,10 @@ struct EngineContext {
     void* assets = nullptr;
     JitLoadTextureFn load_texture_fn = nullptr;
     JitLoadMeshFn    load_mesh_fn = nullptr;
+
+    // Opt-in 3D camera. Inert until you set `camera.enabled = 1` (typically
+    // in your scene's init()). See JitCamera doc above for modes / fields.
+    JitCamera camera{};
 
     // Helper to get memory that lives only for the current run/reload.
     void* allocate(std::size_t size, std::size_t alignment = alignof(std::max_align_t)) {

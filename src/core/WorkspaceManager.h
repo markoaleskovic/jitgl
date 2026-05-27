@@ -55,8 +55,12 @@ public:
     std::optional<std::string> ImportWorkspacePackage(const std::string& packageData,
                                                       const std::string& sourceHint = {}) const;
 
-private:
+    // Compose the on-disk paths for a workspace without creating it. Used
+    // by the engine to know where scene.cpp / shader.glsl land for a given
+    // name (e.g. when applying a template after CreateWorkspace).
     std::optional<WorkspaceDescriptor> BuildDescriptor(const std::string& workspaceName) const;
+
+private:
     bool EnsureWorkspaceScaffold(const WorkspaceDescriptor& descriptor) const;
     static bool IsValidWorkspaceName(const std::string& workspaceName);
     static std::vector<std::string> LoadLogFileLines(const std::string& logPath);
