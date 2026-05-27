@@ -188,6 +188,10 @@ public:
     struct PipelineResourceView {
         std::string name;
         unsigned int texture = 0;
+        // Sampleable depth texture matching the same FBO that wrote `texture`,
+        // or 0 if no depth attachment is associated. Used by the frame
+        // inspector to display the depth buffer for a pass.
+        unsigned int depthTexture = 0;
         int width = 0;
         int height = 0;
     };
@@ -540,6 +544,81 @@ private:
     void ApplyEditorPalette(Document& doc) const;
     bool IsLightTheme() const;
     void DrawRendererFullscreen();
+
+    // Frame inspector: a fullscreen overlay that displays an intermediate
+    // pipeline texture with channel isolation, pixel readout under the
+    // cursor, and min/max/avg statistics over the texture. Opened from per-
+    // pass entry-points in the pipeline tab. The 80% in-app substitute for
+    // launching RenderDoc.
+    enum class FrameInspectorChannel : std::uint8_t {
+        RGBA,
+        Red,
+        Green,
+        Blue,
+        Alpha,
+        Depth,
+    };
+
+    void OpenFrameInspector(const std::string& passName, FrameInspectorChannel channel);
+    void DrawFrameInspector();
+    bool EnsureFrameInspectorGpuResources();
+    void DestroyFrameInspectorGpuResources();
+    void BlitFrameInspectorChannel(unsigned int sourceTexture,
+                                   FrameInspectorChannel channel,
+                                   int width,
+                                   int height);
+    bool ReadInspectorColorPixel(unsigned int colorTexture,
+                                 int x,
+                                 int y,
+                                 unsigned char outRGBA[4]);
+    bool ReadInspectorDepthPixel(unsigned int depthTexture,
+                                 int x,
+                                 int y,
+                                 float* outDepth);
+    void RefreshFrameInspectorStats(unsigned int colorTexture,
+                                    unsigned int depthTexture,
+                                    int width,
+                                    int height);
+
+    bool frameInspectorOpen_ = false;
+    std::string frameInspectorPassName_;
+    FrameInspectorChannel frameInspectorChannel_ = FrameInspectorChannel::RGBA;
+
+    // GPU resources for the channel-isolation blit. Created lazily on first
+    // open and destroyed on UI shutdown. The preview texture is the render
+    // target of `frameInspectorBlitFbo_` and is what ImGui samples when the
+    // user picks a non-RGBA channel.
+    unsigned int frameInspectorPreviewTexture_ = 0;
+    int frameInspectorPreviewWidth_ = 0;
+    int frameInspectorPreviewHeight_ = 0;
+    unsigned int frameInspectorBlitProgram_ = 0;
+    int frameInspectorBlitModeLoc_ = -1;
+    int frameInspectorBlitDepthRangeLoc_ = -1;
+    unsigned int frameInspectorBlitVao_ = 0;
+    unsigned int frameInspectorBlitFbo_ = 0;
+    // Read-only helper FBO used to attach a texture as a single attachment
+    // and pull one pixel with glReadPixels — cheaper than glGetTexImage by
+    // orders of magnitude and avoids the per-frame pipeline stall that the
+    // earlier full-texture readback path was causing.
+    unsigned int frameInspectorReadFbo_ = 0;
+    bool frameInspectorGpuReady_ = false;
+
+    // Depth visualization range. Auto-range is opt-in (button) because
+    // computing min/max requires a full readback we want to avoid by
+    // default. Defaults give the canonical [0, 1] depth view.
+    float frameInspectorDepthRangeMin_ = 0.0f;
+    float frameInspectorDepthRangeMax_ = 1.0f;
+
+    // Stats are computed on demand (button). They are scoped to the most
+    // recent (pass, channel) tuple — invalidated whenever either changes.
+    bool frameInspectorStatsValid_ = false;
+    int frameInspectorStatsWidth_ = 0;
+    int frameInspectorStatsHeight_ = 0;
+    FrameInspectorChannel frameInspectorStatsChannel_ = FrameInspectorChannel::RGBA;
+    std::string frameInspectorStatsPassName_;
+    float frameInspectorMin_[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    float frameInspectorMax_[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    float frameInspectorAvg_[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 
     float currentDpiScale_ = 1.0f;
     float pendingDpiScale_ = 1.0f;

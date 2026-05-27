@@ -835,7 +835,9 @@ bool Engine::EnsureWorkspacePassTargets(WorkspaceState* workspace, const int wid
                               workspace->passFbos[0] != 0 &&
                               workspace->passFbos[1] != 0 &&
                               workspace->passColorTextures[0] != 0 &&
-                              workspace->passColorTextures[1] != 0;
+                              workspace->passColorTextures[1] != 0 &&
+                              workspace->passDepthTextures[0] != 0 &&
+                              workspace->passDepthTextures[1] != 0;
     if (alreadyValid) {
         return true;
     }
@@ -851,12 +853,30 @@ bool Engine::EnsureWorkspacePassTargets(WorkspaceState* workspace, const int wid
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
+        // Sampleable depth texture so the frame inspector can display this
+        // pass's depth buffer as a regular ImGui::Image. Cheaper than a PBO
+        // copy at inspect-time and unlocks "show me the depth buffer" with
+        // no extra plumbing on the read side.
+        glGenTextures(1, &workspace->passDepthTextures[static_cast<std::size_t>(i)]);
+        glBindTexture(GL_TEXTURE_2D, workspace->passDepthTextures[static_cast<std::size_t>(i)]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, width, height, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+
         glGenFramebuffers(1, &workspace->passFbos[static_cast<std::size_t>(i)]);
         glBindFramebuffer(GL_FRAMEBUFFER, workspace->passFbos[static_cast<std::size_t>(i)]);
         glFramebufferTexture2D(GL_FRAMEBUFFER,
                                GL_COLOR_ATTACHMENT0,
                                GL_TEXTURE_2D,
                                workspace->passColorTextures[static_cast<std::size_t>(i)],
+                               0);
+        glFramebufferTexture2D(GL_FRAMEBUFFER,
+                               GL_DEPTH_ATTACHMENT,
+                               GL_TEXTURE_2D,
+                               workspace->passDepthTextures[static_cast<std::size_t>(i)],
                                0);
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -891,6 +911,12 @@ void Engine::ReleaseWorkspacePassTargets(WorkspaceState* workspace) {
         }
     }
     for (GLuint& tex : workspace->passColorTextures) {
+        if (tex != 0) {
+            glDeleteTextures(1, &tex);
+            tex = 0;
+        }
+    }
+    for (GLuint& tex : workspace->passDepthTextures) {
         if (tex != 0) {
             glDeleteTextures(1, &tex);
             tex = 0;
@@ -3941,6 +3967,7 @@ void Engine::UpdatePipelineUiState() {
         EditorUI::PipelineResourceView view;
         view.name = name;
         view.texture = resource.texture;
+        view.depthTexture = resource.depthTexture;
         view.width = resource.width;
         view.height = resource.height;
         resources.push_back(std::move(view));
@@ -4332,7 +4359,8 @@ void Engine::RenderSceneToTexture() {
             continue;
         }
 
-        const SharedTextureResource resource{ prevFrameTexture, sceneWidth_, sceneHeight_ };
+        const GLuint prevFrameDepth = workspace.passDepthTextures[static_cast<std::size_t>(prevFrameIndex)];
+        const SharedTextureResource resource{ prevFrameTexture, prevFrameDepth, sceneWidth_, sceneHeight_ };
         sharedTextures_[outputName] = resource;
         sharedTextures_[workspaceName] = resource;
         sharedTextures_[outputName + "_prev"] = resource;
@@ -4420,15 +4448,17 @@ void Engine::RenderSceneToTexture() {
         finalWidth = sceneWidth_;
         finalHeight = sceneHeight_;
 
+        const GLuint finalDepth = workspace.passDepthTextures[static_cast<std::size_t>(writeIndex)];
         const std::string outputName = workspace.outputTextureName.empty() ? workspaceName : workspace.outputTextureName;
-        const SharedTextureResource outputResource{ finalTexture, sceneWidth_, sceneHeight_ };
+        const SharedTextureResource outputResource{ finalTexture, finalDepth, sceneWidth_, sceneHeight_ };
         sharedTextures_[outputName] = outputResource;
         sharedTextures_[workspaceName] = outputResource;
 
         const int prevFrameIndex = 1 - writeIndex;
         const GLuint prevFrameTexture = workspace.passColorTextures[static_cast<std::size_t>(prevFrameIndex)];
         if (prevFrameTexture != 0) {
-            const SharedTextureResource prevResource{ prevFrameTexture, sceneWidth_, sceneHeight_ };
+            const GLuint prevFrameDepth = workspace.passDepthTextures[static_cast<std::size_t>(prevFrameIndex)];
+            const SharedTextureResource prevResource{ prevFrameTexture, prevFrameDepth, sceneWidth_, sceneHeight_ };
             sharedTextures_[outputName + "_prev"] = prevResource;
             sharedTextures_[workspaceName + "_prev"] = prevResource;
         }

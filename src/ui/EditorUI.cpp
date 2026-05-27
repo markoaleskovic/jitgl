@@ -1,4 +1,5 @@
 #include "ui/EditorUI.h"
+#include <glad/gl.h>
 #include <imgui.h>
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_opengl3.h>
@@ -602,6 +603,7 @@ void EditorUI::Draw() {
     DrawGuidesPopup();
     DrawSettingsWindow();
     DrawFpsOverlay();
+    DrawFrameInspector();
 }
 
 void EditorUI::SetupDockspace() {
@@ -2857,12 +2859,40 @@ void EditorUI::DrawPipelineInspectorPanel(const std::string& orderText) {
             ImGui::TextDisabled("GPU: %.3f ms", pass.gpuTimeMs);
 
             if (preview != nullptr && preview->texture != 0 && preview->width > 0 && preview->height > 0) {
-                ImGui::Image(static_cast<ImTextureID>(preview->texture),
-                             ImVec2(previewWidth, previewHeight),
-                             ImVec2(0.0f, 1.0f),
-                             ImVec2(1.0f, 0.0f));
+                // Make the thumbnail itself a click target. Clicking the
+                // image is the most obvious way to "look at this pass" and
+                // matches the affordance of every screenshot viewer.
+                if (ImGui::ImageButton("##InspectThumb",
+                                       static_cast<ImTextureID>(preview->texture),
+                                       ImVec2(previewWidth, previewHeight),
+                                       ImVec2(0.0f, 1.0f),
+                                       ImVec2(1.0f, 0.0f))) {
+                    OpenFrameInspector(pass.workspaceName, FrameInspectorChannel::RGBA);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Click to inspect '%s' fullscreen.", pass.workspaceName.c_str());
+                }
             } else {
                 ImGui::TextDisabled("Preview unavailable");
+            }
+
+            if (ImGui::SmallButton("Inspect")) {
+                OpenFrameInspector(pass.workspaceName, FrameInspectorChannel::RGBA);
+            }
+            ImGui::SameLine();
+            const bool hasDepth = preview != nullptr && preview->depthTexture != 0;
+            if (!hasDepth) {
+                ImGui::BeginDisabled();
+            }
+            if (ImGui::SmallButton("Depth")) {
+                OpenFrameInspector(pass.workspaceName, FrameInspectorChannel::Depth);
+            }
+            if (!hasDepth) {
+                ImGui::EndDisabled();
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Alpha")) {
+                OpenFrameInspector(pass.workspaceName, FrameInspectorChannel::Alpha);
             }
 
             if (!pass.cppPath.empty()) {
@@ -2896,6 +2926,632 @@ void EditorUI::DrawPipelineInspectorPanel(const std::string& orderText) {
     }
 
     ImGui::EndChild();
+}
+
+void EditorUI::OpenFrameInspector(const std::string& passName, FrameInspectorChannel channel) {
+    frameInspectorOpen_ = true;
+    frameInspectorPassName_ = passName;
+    frameInspectorChannel_ = channel;
+    frameInspectorStatsValid_ = false;
+}
+
+namespace {
+    constexpr const char* kFrameInspectorBlitVs =
+        "#version 330 core\n"
+        "out vec2 vUV;\n"
+        "void main() {\n"
+        "    vec2 p = vec2((gl_VertexID & 1) * 4.0 - 1.0, (gl_VertexID & 2) * 2.0 - 1.0);\n"
+        "    vUV = (p + 1.0) * 0.5;\n"
+        "    gl_Position = vec4(p, 0.0, 1.0);\n"
+        "}\n";
+
+    constexpr const char* kFrameInspectorBlitFs =
+        "#version 330 core\n"
+        "in vec2 vUV;\n"
+        "out vec4 FragColor;\n"
+        "uniform sampler2D uSrc;\n"
+        "uniform int uMode;\n"          // 0=RGBA passthrough, 1..4 = R/G/B/A, 5 = depth
+        "uniform vec2 uDepthRange;\n"
+        "void main() {\n"
+        "    vec4 s = texture(uSrc, vUV);\n"
+        "    if (uMode == 0) { FragColor = vec4(s.rgb, 1.0); return; }\n"
+        "    float v;\n"
+        "    if (uMode == 1) v = s.r;\n"
+        "    else if (uMode == 2) v = s.g;\n"
+        "    else if (uMode == 3) v = s.b;\n"
+        "    else if (uMode == 4) v = s.a;\n"
+        "    else {\n"
+        "        float d = s.r;\n"
+        "        float range = max(uDepthRange.y - uDepthRange.x, 1e-6);\n"
+        "        v = clamp((d - uDepthRange.x) / range, 0.0, 1.0);\n"
+        "    }\n"
+        "    FragColor = vec4(v, v, v, 1.0);\n"
+        "}\n";
+
+    GLuint CompileInspectorBlitShader(GLenum type, const char* src) {
+        GLuint sh = glCreateShader(type);
+        glShaderSource(sh, 1, &src, nullptr);
+        glCompileShader(sh);
+        GLint ok = GL_FALSE;
+        glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
+        if (ok != GL_TRUE) {
+            char info[512];
+            GLsizei len = 0;
+            glGetShaderInfoLog(sh, sizeof(info), &len, info);
+            std::fprintf(stderr, "[FrameInspector] blit shader compile failed: %.*s\n", len, info);
+            glDeleteShader(sh);
+            return 0;
+        }
+        return sh;
+    }
+
+}
+
+bool EditorUI::EnsureFrameInspectorGpuResources() {
+    if (frameInspectorGpuReady_) {
+        return true;
+    }
+
+    GLuint vs = CompileInspectorBlitShader(GL_VERTEX_SHADER, kFrameInspectorBlitVs);
+    GLuint fs = CompileInspectorBlitShader(GL_FRAGMENT_SHADER, kFrameInspectorBlitFs);
+    if (vs == 0 || fs == 0) {
+        if (vs != 0) glDeleteShader(vs);
+        if (fs != 0) glDeleteShader(fs);
+        return false;
+    }
+
+    GLuint program = glCreateProgram();
+    glAttachShader(program, vs);
+    glAttachShader(program, fs);
+    glLinkProgram(program);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    GLint linked = GL_FALSE;
+    glGetProgramiv(program, GL_LINK_STATUS, &linked);
+    if (linked != GL_TRUE) {
+        char info[512];
+        GLsizei len = 0;
+        glGetProgramInfoLog(program, sizeof(info), &len, info);
+        std::fprintf(stderr, "[FrameInspector] blit program link failed: %.*s\n", len, info);
+        glDeleteProgram(program);
+        return false;
+    }
+
+    frameInspectorBlitProgram_ = program;
+    frameInspectorBlitModeLoc_ = glGetUniformLocation(program, "uMode");
+    frameInspectorBlitDepthRangeLoc_ = glGetUniformLocation(program, "uDepthRange");
+    glUseProgram(program);
+    const GLint texLoc = glGetUniformLocation(program, "uSrc");
+    if (texLoc >= 0) {
+        glUniform1i(texLoc, 0);
+    }
+    glUseProgram(0);
+
+    // GL core requires a bound VAO for draws; an empty one is fine since
+    // the vertex shader synthesizes positions from gl_VertexID.
+    GLuint vao = 0;
+    glGenVertexArrays(1, &vao);
+    frameInspectorBlitVao_ = vao;
+
+    GLuint fbo = 0;
+    glGenFramebuffers(1, &fbo);
+    frameInspectorBlitFbo_ = fbo;
+
+    GLuint readFbo = 0;
+    glGenFramebuffers(1, &readFbo);
+    frameInspectorReadFbo_ = readFbo;
+
+    frameInspectorGpuReady_ = true;
+    return true;
+}
+
+void EditorUI::DestroyFrameInspectorGpuResources() {
+    if (frameInspectorPreviewTexture_ != 0) {
+        GLuint t = frameInspectorPreviewTexture_;
+        glDeleteTextures(1, &t);
+        frameInspectorPreviewTexture_ = 0;
+    }
+    if (frameInspectorBlitProgram_ != 0) {
+        glDeleteProgram(frameInspectorBlitProgram_);
+        frameInspectorBlitProgram_ = 0;
+    }
+    if (frameInspectorBlitVao_ != 0) {
+        GLuint v = frameInspectorBlitVao_;
+        glDeleteVertexArrays(1, &v);
+        frameInspectorBlitVao_ = 0;
+    }
+    if (frameInspectorBlitFbo_ != 0) {
+        GLuint f = frameInspectorBlitFbo_;
+        glDeleteFramebuffers(1, &f);
+        frameInspectorBlitFbo_ = 0;
+    }
+    if (frameInspectorReadFbo_ != 0) {
+        GLuint f = frameInspectorReadFbo_;
+        glDeleteFramebuffers(1, &f);
+        frameInspectorReadFbo_ = 0;
+    }
+    frameInspectorPreviewWidth_ = 0;
+    frameInspectorPreviewHeight_ = 0;
+    frameInspectorBlitModeLoc_ = -1;
+    frameInspectorBlitDepthRangeLoc_ = -1;
+    frameInspectorGpuReady_ = false;
+}
+
+void EditorUI::BlitFrameInspectorChannel(unsigned int sourceTexture,
+                                         FrameInspectorChannel channel,
+                                         int width,
+                                         int height) {
+    if (sourceTexture == 0 || width <= 0 || height <= 0) {
+        return;
+    }
+    if (!EnsureFrameInspectorGpuResources()) {
+        return;
+    }
+
+    // Capture state we are about to clobber. ImGui's GL3 backend resets its
+    // own state in RenderDrawData, so the only thing we strictly need to
+    // restore is the active framebuffer (so any concurrent draws are safe)
+    // — but saving program / viewport / VAO too is cheap insurance.
+    GLint prevFbo = 0;
+    GLint prevReadFbo = 0;
+    GLint prevDrawFbo = 0;
+    GLint prevProgram = 0;
+    GLint prevVao = 0;
+    GLint prevActiveTexture = 0;
+    GLint prevTextureBinding = 0;
+    GLint prevViewport[4] = { 0, 0, 0, 0 };
+    GLboolean prevDepthTest = glIsEnabled(GL_DEPTH_TEST);
+    GLboolean prevBlend = glIsEnabled(GL_BLEND);
+    GLboolean prevCullFace = glIsEnabled(GL_CULL_FACE);
+    GLboolean prevScissor = glIsEnabled(GL_SCISSOR_TEST);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevReadFbo);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDrawFbo);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &prevProgram);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVao);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &prevActiveTexture);
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTextureBinding);
+    glGetIntegerv(GL_VIEWPORT, prevViewport);
+
+    // (Re)create the preview texture if size changed.
+    if (frameInspectorPreviewTexture_ == 0 ||
+        frameInspectorPreviewWidth_ != width ||
+        frameInspectorPreviewHeight_ != height) {
+        if (frameInspectorPreviewTexture_ == 0) {
+            GLuint t = 0;
+            glGenTextures(1, &t);
+            frameInspectorPreviewTexture_ = t;
+        }
+        glBindTexture(GL_TEXTURE_2D, frameInspectorPreviewTexture_);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        frameInspectorPreviewWidth_ = width;
+        frameInspectorPreviewHeight_ = height;
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, frameInspectorBlitFbo_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                           frameInspectorPreviewTexture_, 0);
+    const GLenum drawBuf = GL_COLOR_ATTACHMENT0;
+    glDrawBuffers(1, &drawBuf);
+
+    glViewport(0, 0, width, height);
+    if (prevDepthTest) glDisable(GL_DEPTH_TEST);
+    if (prevBlend)     glDisable(GL_BLEND);
+    if (prevCullFace)  glDisable(GL_CULL_FACE);
+    if (prevScissor)   glDisable(GL_SCISSOR_TEST);
+
+    glUseProgram(frameInspectorBlitProgram_);
+    int shaderMode = 0;
+    switch (channel) {
+        case FrameInspectorChannel::RGBA:  shaderMode = 0; break;
+        case FrameInspectorChannel::Red:   shaderMode = 1; break;
+        case FrameInspectorChannel::Green: shaderMode = 2; break;
+        case FrameInspectorChannel::Blue:  shaderMode = 3; break;
+        case FrameInspectorChannel::Alpha: shaderMode = 4; break;
+        case FrameInspectorChannel::Depth: shaderMode = 5; break;
+    }
+    if (frameInspectorBlitModeLoc_ >= 0) {
+        glUniform1i(frameInspectorBlitModeLoc_, shaderMode);
+    }
+    if (frameInspectorBlitDepthRangeLoc_ >= 0) {
+        glUniform2f(frameInspectorBlitDepthRangeLoc_,
+                    frameInspectorDepthRangeMin_, frameInspectorDepthRangeMax_);
+    }
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, sourceTexture);
+
+    glBindVertexArray(frameInspectorBlitVao_);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+
+    // Restore state.
+    glBindVertexArray(static_cast<GLuint>(prevVao));
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prevTextureBinding));
+    glActiveTexture(static_cast<GLenum>(prevActiveTexture));
+    glUseProgram(static_cast<GLuint>(prevProgram));
+    glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
+    if (prevDepthTest) glEnable(GL_DEPTH_TEST);
+    if (prevBlend)     glEnable(GL_BLEND);
+    if (prevCullFace)  glEnable(GL_CULL_FACE);
+    if (prevScissor)   glEnable(GL_SCISSOR_TEST);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(prevReadFbo));
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(prevDrawFbo));
+    if (prevFbo != prevDrawFbo) {
+        glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFbo));
+    }
+}
+
+bool EditorUI::ReadInspectorColorPixel(unsigned int colorTexture,
+                                       int x,
+                                       int y,
+                                       unsigned char outRGBA[4]) {
+    if (colorTexture == 0 || !EnsureFrameInspectorGpuResources()) {
+        return false;
+    }
+    // We only touch our own helper FBO's read-buffer state, so we don't try
+    // to save/restore it. (glReadBuffer is per-FBO; setting GL_BACK on a
+    // user FBO would generate GL_INVALID_OPERATION.) We do save/restore the
+    // FBO binding and pack-alignment because those are global.
+    GLint prevReadFbo = 0;
+    GLint prevPackAlign = 4;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevReadFbo);
+    glGetIntegerv(GL_PACK_ALIGNMENT, &prevPackAlign);
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, frameInspectorReadFbo_);
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, colorTexture, 0);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+
+    bool ok = false;
+    if (glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+        glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, outRGBA);
+        ok = true;
+    }
+
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+    glPixelStorei(GL_PACK_ALIGNMENT, prevPackAlign);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(prevReadFbo));
+    return ok;
+}
+
+bool EditorUI::ReadInspectorDepthPixel(unsigned int depthTexture,
+                                       int x,
+                                       int y,
+                                       float* outDepth) {
+    if (depthTexture == 0 || outDepth == nullptr || !EnsureFrameInspectorGpuResources()) {
+        return false;
+    }
+    GLint prevReadFbo = 0;
+    GLint prevPackAlign = 4;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevReadFbo);
+    glGetIntegerv(GL_PACK_ALIGNMENT, &prevPackAlign);
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, frameInspectorReadFbo_);
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depthTexture, 0);
+    // Depth-only FBOs require GL_NONE read buffer to be considered complete.
+    glReadBuffer(GL_NONE);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+
+    bool ok = false;
+    if (glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+        glReadPixels(x, y, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, outDepth);
+        ok = true;
+    }
+
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+    glPixelStorei(GL_PACK_ALIGNMENT, prevPackAlign);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(prevReadFbo));
+    return ok;
+}
+
+void EditorUI::RefreshFrameInspectorStats(unsigned int colorTexture,
+                                          unsigned int depthTexture,
+                                          int width,
+                                          int height) {
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+    const std::size_t pixels = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+
+    GLint prevPackAlign = 4;
+    GLint prevTex = 0;
+    glGetIntegerv(GL_PACK_ALIGNMENT, &prevPackAlign);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTex);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+
+    if (frameInspectorChannel_ == FrameInspectorChannel::Depth) {
+        if (depthTexture == 0) {
+            glPixelStorei(GL_PACK_ALIGNMENT, prevPackAlign);
+            glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prevTex));
+            return;
+        }
+        std::vector<float> depthBuf(pixels, 0.0f);
+        glBindTexture(GL_TEXTURE_2D, depthTexture);
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, GL_FLOAT, depthBuf.data());
+
+        float dmin = 1.0f;
+        float dmax = 0.0f;
+        double sum = 0.0;
+        for (const float d : depthBuf) {
+            if (d < dmin) dmin = d;
+            if (d > dmax) dmax = d;
+            sum += static_cast<double>(d);
+        }
+        frameInspectorMin_[0] = dmin;
+        frameInspectorMax_[0] = dmax;
+        frameInspectorAvg_[0] = static_cast<float>(sum / std::max<std::size_t>(1u, pixels));
+        // Useful side-effect: refreshing stats also calibrates the depth
+        // visualization to the actual buffer range.
+        frameInspectorDepthRangeMin_ = dmin;
+        frameInspectorDepthRangeMax_ = dmax;
+    } else {
+        if (colorTexture == 0) {
+            glPixelStorei(GL_PACK_ALIGNMENT, prevPackAlign);
+            glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prevTex));
+            return;
+        }
+        std::vector<unsigned char> colorBuf(pixels * 4u, 0u);
+        glBindTexture(GL_TEXTURE_2D, colorTexture);
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, colorBuf.data());
+
+        int mn[4] = { 255, 255, 255, 255 };
+        int mx[4] = { 0, 0, 0, 0 };
+        double sum[4] = { 0.0, 0.0, 0.0, 0.0 };
+        for (std::size_t i = 0; i < pixels; ++i) {
+            for (int c = 0; c < 4; ++c) {
+                const int v = colorBuf[i * 4u + static_cast<std::size_t>(c)];
+                if (v < mn[c]) mn[c] = v;
+                if (v > mx[c]) mx[c] = v;
+                sum[c] += static_cast<double>(v);
+            }
+        }
+        const double divisor = 255.0 * static_cast<double>(std::max<std::size_t>(1u, pixels));
+        for (int c = 0; c < 4; ++c) {
+            frameInspectorMin_[c] = static_cast<float>(mn[c]) / 255.0f;
+            frameInspectorMax_[c] = static_cast<float>(mx[c]) / 255.0f;
+            frameInspectorAvg_[c] = static_cast<float>(sum[c] / divisor);
+        }
+    }
+
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prevTex));
+    glPixelStorei(GL_PACK_ALIGNMENT, prevPackAlign);
+
+    frameInspectorStatsValid_ = true;
+    frameInspectorStatsWidth_ = width;
+    frameInspectorStatsHeight_ = height;
+    frameInspectorStatsChannel_ = frameInspectorChannel_;
+    frameInspectorStatsPassName_ = frameInspectorPassName_;
+}
+
+void EditorUI::DrawFrameInspector() {
+    if (!frameInspectorOpen_) {
+        return;
+    }
+
+    // Re-resolve the resource by name every frame because the pipeline
+    // ping-pongs FBOs and the texture id rotates each tick. Prefer an entry
+    // with a non-zero texture to skip placeholder duplicates that share a
+    // name with a real backed pass.
+    const PipelineResourceView* resource = nullptr;
+    for (const auto& r : pipelineResources_) {
+        if (r.name != frameInspectorPassName_) {
+            continue;
+        }
+        if (r.texture != 0 && r.width > 0 && r.height > 0) {
+            resource = &r;
+            break;
+        }
+        if (resource == nullptr) {
+            resource = &r;
+        }
+    }
+
+    bool open = true;
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->WorkPos, ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x * 0.92f, viewport->WorkSize.y * 0.92f),
+                             ImGuiCond_Appearing);
+    ImGui::SetNextWindowViewport(viewport->ID);
+
+    const std::string title = "Frame Inspector - " + frameInspectorPassName_ + "###FrameInspectorWindow";
+    constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse;
+    if (!ImGui::Begin(title.c_str(), &open, kFlags)) {
+        ImGui::End();
+        if (!open) {
+            frameInspectorOpen_ = false;
+        }
+        return;
+    }
+
+    if (resource == nullptr || resource->texture == 0 || resource->width <= 0 || resource->height <= 0) {
+        ImGui::Text("Resource '%s' is not currently available.", frameInspectorPassName_.c_str());
+        ImGui::TextDisabled("The pass may be disabled, mid-compile, or yet to render its first frame.");
+        ImGui::End();
+        if (!open) {
+            frameInspectorOpen_ = false;
+        }
+        return;
+    }
+
+    static constexpr const char* kChannelLabels[] = {
+        "RGBA", "Red", "Green", "Blue", "Alpha", "Depth",
+    };
+    const bool hasDepth = resource->depthTexture != 0;
+
+    int channelIdx = static_cast<int>(frameInspectorChannel_);
+    ImGui::SetNextItemWidth(140.0f);
+    if (ImGui::Combo("Channel", &channelIdx, kChannelLabels, IM_ARRAYSIZE(kChannelLabels))) {
+        // Silently bounce back to RGBA if the user picks Depth on a pass
+        // without a depth attachment (compute-only passes, etc).
+        if (channelIdx == static_cast<int>(FrameInspectorChannel::Depth) && !hasDepth) {
+            channelIdx = static_cast<int>(FrameInspectorChannel::RGBA);
+        }
+        if (channelIdx != static_cast<int>(frameInspectorChannel_)) {
+            frameInspectorChannel_ = static_cast<FrameInspectorChannel>(channelIdx);
+            frameInspectorStatsValid_ = false;
+        }
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("%dx%d", resource->width, resource->height);
+    ImGui::SameLine();
+    if (ImGui::Button("Close")) {
+        frameInspectorOpen_ = false;
+        ImGui::End();
+        return;
+    }
+    if (!hasDepth) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(no depth attachment)");
+    }
+
+    // Only run the GPU swizzle blit when we actually need to display a
+    // non-RGBA channel. RGBA is sampled straight from the source texture so
+    // the inspector adds zero per-frame GPU work for the common case.
+    if (frameInspectorChannel_ != FrameInspectorChannel::RGBA) {
+        const bool depthChannel = frameInspectorChannel_ == FrameInspectorChannel::Depth;
+        const unsigned int srcTex = depthChannel ? resource->depthTexture : resource->texture;
+        if (srcTex != 0) {
+            BlitFrameInspectorChannel(srcTex,
+                                      frameInspectorChannel_,
+                                      resource->width,
+                                      resource->height);
+        }
+    }
+
+    constexpr float kFooterHeight = 150.0f;
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const ImVec2 imageAreaSize(avail.x, std::max(64.0f, avail.y - kFooterHeight));
+    ImGui::BeginChild("##FrameInspectorImage", imageAreaSize, true);
+
+    const float texAspect = static_cast<float>(resource->width) /
+                            std::max(1.0f, static_cast<float>(resource->height));
+    const ImVec2 childAvail = ImGui::GetContentRegionAvail();
+    float imgW = childAvail.x;
+    float imgH = imgW / texAspect;
+    if (imgH > childAvail.y) {
+        imgH = childAvail.y;
+        imgW = imgH * texAspect;
+    }
+    const float offsetX = (childAvail.x - imgW) * 0.5f;
+    const float offsetY = (childAvail.y - imgH) * 0.5f;
+    if (offsetX > 0.0f) {
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + offsetX);
+    }
+    if (offsetY > 0.0f) {
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + offsetY);
+    }
+    const ImVec2 imageScreenMin = ImGui::GetCursorScreenPos();
+
+    unsigned int displayTexture = resource->texture;
+    if (frameInspectorChannel_ != FrameInspectorChannel::RGBA && frameInspectorPreviewTexture_ != 0) {
+        displayTexture = frameInspectorPreviewTexture_;
+    }
+    ImGui::Image(static_cast<ImTextureID>(displayTexture),
+                 ImVec2(imgW, imgH),
+                 ImVec2(0.0f, 1.0f),
+                 ImVec2(1.0f, 0.0f));
+
+    const bool imageHovered = ImGui::IsItemHovered();
+    const ImVec2 mp = ImGui::GetMousePos();
+    int px = -1;
+    int py = -1;
+    if (imageHovered && imgW > 0.0f && imgH > 0.0f) {
+        const float u = (mp.x - imageScreenMin.x) / imgW;
+        const float v = (mp.y - imageScreenMin.y) / imgH;
+        px = std::clamp(static_cast<int>(u * static_cast<float>(resource->width)),
+                        0, resource->width - 1);
+        // V is flipped because we draw with uv0.y=1, uv1.y=0. Image y=0
+        // (top) is texture row (height-1), and memory row 0 is the bottom.
+        const int rawY = std::clamp(static_cast<int>(v * static_cast<float>(resource->height)),
+                                    0, resource->height - 1);
+        py = resource->height - 1 - rawY;
+    }
+
+    ImGui::EndChild();
+
+    ImGui::Separator();
+    // Pixel readout: when hovering we issue a single-pixel glReadPixels for
+    // the color and (when available) for depth. This is cheap and confined
+    // to the hover-active frames, replacing the previous full-texture
+    // readback that was running every frame and stalling the pipeline.
+    if (px >= 0 && py >= 0) {
+        unsigned char pixelRGBA[4] = { 0, 0, 0, 0 };
+        const bool gotColor = ReadInspectorColorPixel(resource->texture, px, py, pixelRGBA);
+        ImGui::Text("Pixel (%d, %d)", px, py);
+        if (gotColor) {
+            ImGui::SameLine();
+            ImGui::ColorButton("##swatch",
+                               ImVec4(static_cast<float>(pixelRGBA[0]) / 255.0f,
+                                      static_cast<float>(pixelRGBA[1]) / 255.0f,
+                                      static_cast<float>(pixelRGBA[2]) / 255.0f,
+                                      static_cast<float>(pixelRGBA[3]) / 255.0f),
+                               ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoBorder,
+                               ImVec2(20.0f, 20.0f));
+            ImGui::SameLine();
+            ImGui::Text("RGBA u8: %3u %3u %3u %3u   norm: %.3f %.3f %.3f %.3f",
+                        pixelRGBA[0], pixelRGBA[1], pixelRGBA[2], pixelRGBA[3],
+                        static_cast<float>(pixelRGBA[0]) / 255.0f,
+                        static_cast<float>(pixelRGBA[1]) / 255.0f,
+                        static_cast<float>(pixelRGBA[2]) / 255.0f,
+                        static_cast<float>(pixelRGBA[3]) / 255.0f);
+        }
+        if (hasDepth) {
+            float depthValue = 0.0f;
+            if (ReadInspectorDepthPixel(resource->depthTexture, px, py, &depthValue)) {
+                ImGui::Text("Depth: %.6f", depthValue);
+            }
+        }
+    } else {
+        ImGui::TextDisabled("Hover the image to read pixel values.");
+    }
+
+    // Stats are opt-in. Computing min/max/avg requires reading back the
+    // full texture; we only do that when the user explicitly asks.
+    const bool statsApplyToCurrentResource =
+        frameInspectorStatsValid_ &&
+        frameInspectorStatsPassName_ == frameInspectorPassName_ &&
+        frameInspectorStatsChannel_ == frameInspectorChannel_ &&
+        frameInspectorStatsWidth_ == resource->width &&
+        frameInspectorStatsHeight_ == resource->height;
+
+    if (ImGui::SmallButton(statsApplyToCurrentResource ? "Refresh Stats" : "Compute Stats")) {
+        RefreshFrameInspectorStats(resource->texture,
+                                   hasDepth ? resource->depthTexture : 0u,
+                                   resource->width,
+                                   resource->height);
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(full-texture readback; do this sparingly)");
+
+    if (statsApplyToCurrentResource) {
+        if (frameInspectorChannel_ == FrameInspectorChannel::Depth) {
+            ImGui::Text("Depth stats - min %.6f  max %.6f  avg %.6f",
+                        frameInspectorMin_[0], frameInspectorMax_[0], frameInspectorAvg_[0]);
+            ImGui::TextDisabled("Depth visualization range was auto-calibrated to [%.4f, %.4f].",
+                                frameInspectorDepthRangeMin_, frameInspectorDepthRangeMax_);
+        } else {
+            ImGui::Text("RGBA min: %.3f %.3f %.3f %.3f",
+                        frameInspectorMin_[0], frameInspectorMin_[1],
+                        frameInspectorMin_[2], frameInspectorMin_[3]);
+            ImGui::Text("RGBA max: %.3f %.3f %.3f %.3f",
+                        frameInspectorMax_[0], frameInspectorMax_[1],
+                        frameInspectorMax_[2], frameInspectorMax_[3]);
+            ImGui::Text("RGBA avg: %.3f %.3f %.3f %.3f",
+                        frameInspectorAvg_[0], frameInspectorAvg_[1],
+                        frameInspectorAvg_[2], frameInspectorAvg_[3]);
+        }
+    }
+
+    ImGui::End();
+    if (!open) {
+        frameInspectorOpen_ = false;
+    }
 }
 
 void EditorUI::DrawPipelineGlobalUniformWindow() {
@@ -3846,6 +4502,8 @@ void EditorUI::Shutdown() {
     }
     shutdown_ = true;
     initialized_ = false;
+
+    DestroyFrameInspectorGpuResources();
 
     NFD_Quit();
 

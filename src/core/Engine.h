@@ -41,6 +41,10 @@ public:
 private:
     struct SharedTextureResource {
         GLuint texture = 0;
+        // Sampleable depth texture paired with this color attachment. 0 when
+        // no depth is associated (resources backed by something other than a
+        // workspace pass FBO).
+        GLuint depthTexture = 0;
         int width = 0;
         int height = 0;
     };
@@ -95,6 +99,7 @@ private:
         bool pipelineEnabled = true;
         std::array<GLuint, 2> passFbos{};
         std::array<GLuint, 2> passColorTextures{};
+        std::array<GLuint, 2> passDepthTextures{};
         int passWidth = 0;
         int passHeight = 0;
         int passWriteIndex = 0;
