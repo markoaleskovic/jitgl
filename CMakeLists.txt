@@ -178,6 +178,9 @@ endif()
 
 if(WIN32)
     target_link_libraries(jit_ide PRIVATE ws2_32 iphlpapi)
+    # MinGW analogue of Linux -rdynamic: export the executable's symbols so the
+    # ORC JIT can resolve host gl*/engine functions in user code at run time.
+    target_link_options(jit_ide PRIVATE -Wl,--export-all-symbols)
 endif()
 
 if(UNIX AND NOT APPLE)

@@ -8,6 +8,14 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/ManagedStatic.h"
 
+#if defined(_WIN32)
+#include "llvm/ExecutionEngine/Orc/LLJIT.h"
+#include "llvm/ExecutionEngine/Orc/Core.h"
+#include "llvm/ExecutionEngine/Orc/AbsoluteSymbols.h"
+#include "llvm/ExecutionEngine/Orc/Mangling.h"
+#include <cstdio>
+#endif
+
 #include <algorithm>
 #include <fstream>
 #include <sstream>
@@ -22,10 +30,12 @@
 #include <system_error>
 #include <cstdlib>
 
+#if !defined(_WIN32)
 #include <signal.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -42,8 +52,10 @@ namespace fs = std::filesystem;
 // ---
 
 namespace {
+#if !defined(_WIN32)
     constexpr int PRECHECK_TIMEOUT_MS = 3000;
     constexpr rlim_t PRECHECK_MEMORY_LIMIT_BYTES = 1024ULL * 1024ULL * 1024ULL;
+#endif
     constexpr std::size_t DIAGNOSTIC_LIMIT_BYTES = 10000;
 
     std::string truncateDiagnostics(const std::string& diagnostics) {
@@ -53,6 +65,7 @@ namespace {
         return std::format("{}\n[Error log truncated...]", diagnostics.substr(0, DIAGNOSTIC_LIMIT_BYTES));
     }
 
+#if !defined(_WIN32)
     fs::path buildPreflightTempPath() {
         const auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
         return fs::temp_directory_path() /
@@ -153,23 +166,41 @@ namespace {
         // Reserved fallback code: parent treats 127 as "clang++ unavailable".
         _exit(127);
     }
+#endif // !defined(_WIN32)
 
-    void ShutdownInterpreter(const std::shared_ptr<clang::Interpreter>& interpreter) {
-        if (!interpreter) {
-            return;
+#if defined(_WIN32)
+    // UCRT64's libstdc++ headers force __USE_MINGW_ANSI_STDIO=1, which redirects
+    // printf/scanf-family calls to static-only __mingw_* wrappers (libmingwex.a,
+    // no DLL). The ORC JIT's process symbol search can't resolve those for the
+    // JIT-compiled user code, so define them as absolute symbols. Each address
+    // is taken from the host where the same redirect makes &std::printf ==
+    // &__mingw_printf -- which also forces the wrapper to be linked into this
+    // executable so the address is valid.
+    llvm::Error DefineMinGWRuntimeSymbols(clang::Interpreter& interpreter) {
+        auto jitOrErr = interpreter.getExecutionEngine();
+        if (!jitOrErr) {
+            return jitOrErr.takeError();
         }
+        llvm::orc::LLJIT& jit = *jitOrErr;
+        llvm::orc::MangleAndInterner mangle(jit.getExecutionSession(), jit.getDataLayout());
 
-        auto lljitOrErr = interpreter->getExecutionEngine();
-        if (!lljitOrErr) {
-            llvm::consumeError(lljitOrErr.takeError());
-            return;
-        }
+        const llvm::JITSymbolFlags exported = llvm::JITSymbolFlags::Exported;
+        llvm::orc::SymbolMap symbols;
+        symbols[mangle("__mingw_printf")]    = llvm::orc::ExecutorSymbolDef::fromPtr(&std::printf, exported);
+        symbols[mangle("__mingw_fprintf")]   = llvm::orc::ExecutorSymbolDef::fromPtr(&std::fprintf, exported);
+        symbols[mangle("__mingw_sprintf")]   = llvm::orc::ExecutorSymbolDef::fromPtr(&std::sprintf, exported);
+        symbols[mangle("__mingw_snprintf")]  = llvm::orc::ExecutorSymbolDef::fromPtr(&std::snprintf, exported);
+        symbols[mangle("__mingw_vprintf")]   = llvm::orc::ExecutorSymbolDef::fromPtr(&std::vprintf, exported);
+        symbols[mangle("__mingw_vfprintf")]  = llvm::orc::ExecutorSymbolDef::fromPtr(&std::vfprintf, exported);
+        symbols[mangle("__mingw_vsprintf")]  = llvm::orc::ExecutorSymbolDef::fromPtr(&std::vsprintf, exported);
+        symbols[mangle("__mingw_vsnprintf")] = llvm::orc::ExecutorSymbolDef::fromPtr(&std::vsnprintf, exported);
+        symbols[mangle("__mingw_scanf")]     = llvm::orc::ExecutorSymbolDef::fromPtr(&std::scanf, exported);
+        symbols[mangle("__mingw_fscanf")]    = llvm::orc::ExecutorSymbolDef::fromPtr(&std::fscanf, exported);
+        symbols[mangle("__mingw_sscanf")]    = llvm::orc::ExecutorSymbolDef::fromPtr(&std::sscanf, exported);
 
-        clang::IncrementalExecutor& executor = *lljitOrErr;
-        if (auto err = executor.cleanUp()) {
-            llvm::consumeError(std::move(err));
-        }
+        return jit.getMainJITDylib().define(llvm::orc::absoluteSymbols(std::move(symbols)));
     }
+#endif // defined(_WIN32)
 
     template <typename Fn>
     Fn AddressToFunction(std::uintptr_t address) {
@@ -181,10 +212,9 @@ namespace {
 }
 
 JitProgram::~JitProgram() {
-    if (interpreter) {
-        ShutdownInterpreter(interpreter);
-        interpreter.reset();
-    }
+    // ~clang::Interpreter performs the JIT teardown (runs deinitializers and
+    // releases the ORC session); dropping the last reference is sufficient.
+    interpreter.reset();
 }
 
 
@@ -304,12 +334,31 @@ std::unique_ptr<clang::Interpreter> JitEngine::createInterpreter() const {
         return nullptr;
     }
 
+#if defined(_WIN32)
+    if (auto err = DefineMinGWRuntimeSymbols(**interpOrErr)) {
+        std::string msg;
+        llvm::raw_string_ostream os(msg);
+        llvm::logAllUnhandledErrors(std::move(err), os);
+        if (outputCallback_) outputCallback_("[JIT Warning] Could not register MinGW runtime symbols: " + os.str());
+    }
+#endif
+
     return std::move(*interpOrErr);
 }
 
 bool JitEngine::RunPreflightSyntaxCheck(const std::string& sourceName,
                                         const std::string& fullSource,
                                         std::string* diagnostics) const {
+#if defined(_WIN32)
+    // No out-of-process preflight on Windows (fork/exec/setrlimit unavailable).
+    // The in-process clang::Interpreter surfaces diagnostics during Parse().
+    (void)sourceName;
+    (void)fullSource;
+    if (diagnostics) {
+        diagnostics->clear();
+    }
+    return true;
+#else
     if (diagnostics) {
         diagnostics->clear();
     }
@@ -396,6 +445,7 @@ bool JitEngine::RunPreflightSyntaxCheck(const std::string& sourceName,
     }
 
     return true;
+#endif // defined(_WIN32)
 }
 
 std::shared_ptr<JitProgram> JitEngine::CompileFile(const std::string& filepath) {

@@ -1287,8 +1287,10 @@ bool Engine::InitUI() {
 
     consoleRedirect_ = std::make_unique<ConsoleRedirectSession>();
     if (!consoleRedirect_->Start(ui_.get())) {
-        std::cerr << "Console redirect init failed\n";
-        return false;
+        // Console capture is optional (and unsupported on Windows). Without it,
+        // engine stdout/stderr simply won't mirror into the UI console panel.
+        std::cerr << "Console redirect unavailable; continuing without it.\n";
+        consoleRedirect_.reset();
     }
 
     ui_->SetSaveCallback([this](const std::string& path, const std::string& content) {

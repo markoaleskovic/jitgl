@@ -6,18 +6,40 @@
 #include <cstdio>
 #include <iostream>
 
+#if !defined(_WIN32)
 #include <poll.h>
 #include <unistd.h>
-
-namespace {
-    constexpr int kStdoutFd = 1;
-    constexpr int kStderrFd = 2;
-}
+#endif
 
 ConsoleRedirectSession::ConsoleRedirectSession() = default;
 
 ConsoleRedirectSession::~ConsoleRedirectSession() {
     Stop();
+}
+
+#if defined(_WIN32)
+
+// Console capture relies on POSIX pipe/dup2/poll, which have no drop-in
+// equivalent here. Capture is disabled on Windows: Start() returns false and
+// the caller treats that as "no console capture", degrading gracefully.
+bool ConsoleRedirectSession::Start(EditorUI* ui) {
+    (void)ui;
+    return false;
+}
+
+void ConsoleRedirectSession::Stop() {}
+
+void ConsoleRedirectSession::ReaderLoop() {}
+void ConsoleRedirectSession::FlushPendingLine() {}
+bool ConsoleRedirectSession::WaitForPipeData() { return false; }
+bool ConsoleRedirectSession::ReadAvailableData(std::span<char>) { return false; }
+void ConsoleRedirectSession::ConsumeBuffer(std::span<const char>) {}
+
+#else
+
+namespace {
+    constexpr int kStdoutFd = 1;
+    constexpr int kStderrFd = 2;
 }
 
 bool ConsoleRedirectSession::WaitForPipeData() {
@@ -196,3 +218,5 @@ void ConsoleRedirectSession::Stop() {
     ui_ = nullptr;
     active_ = false;
 }
+
+#endif // defined(_WIN32)
