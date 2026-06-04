@@ -884,6 +884,8 @@ Engine::Engine() = default;
 Engine::~Engine() { Shutdown(); }
 
 bool Engine::Init() {
+    metrics_ = std::make_unique<MetricsRegistry>();
+    metrics_->RefreshMemorySnapshot();
     videoRecorder_ = std::make_unique<VideoRecorder>();
     if (!InitWindow()) return false;
     if (!InitGL()) return false;
@@ -1284,6 +1286,7 @@ bool Engine::InitUI() {
     if (sceneColorTex_ != 0 && sceneWidth_ > 0 && sceneHeight_ > 0) {
         ui_->SetRendererTexture(sceneColorTex_, sceneWidth_, sceneHeight_);
     }
+    ui_->SetMetricsRegistry(metrics_.get());
 
     consoleRedirect_ = std::make_unique<ConsoleRedirectSession>();
     if (!consoleRedirect_->Start(ui_.get())) {
@@ -2532,14 +2535,14 @@ bool Engine::DeleteWorkspaceFromUI(const std::string& workspaceName) {
 
     {
         std::scoped_lock lock(pendingMutex_);
-        std::queue<std::string> filteredReloads;
+        std::queue<PendingReload> filteredReloads;
         while (!pendingReloads_.empty()) {
-            std::string path = std::move(pendingReloads_.front());
+            PendingReload reload = std::move(pendingReloads_.front());
             pendingReloads_.pop();
-            if (path == workspaceCppPath || path == workspaceShaderPath) {
+            if (reload.filepath == workspaceCppPath || reload.filepath == workspaceShaderPath) {
                 continue;
             }
-            filteredReloads.push(std::move(path));
+            filteredReloads.push(std::move(reload));
         }
         pendingReloads_.swap(filteredReloads);
     }
@@ -2732,7 +2735,9 @@ bool Engine::InitWatcher() {
 
     watcher_ = std::make_unique<FileWatcher>(
         workspaceRoot_,
-        [this](const std::string& path) { OnFileChanged(path); }
+        [this](const std::string& path, std::chrono::steady_clock::time_point detectionTime) {
+            OnFileChanged(path, detectionTime);
+        }
     );
     watcher_->Start();
 
@@ -2810,7 +2815,7 @@ bool Engine::OpenWorkspaceFolder(const std::string& newRoot) {
 
     {
         std::scoped_lock lock(pendingMutex_);
-        std::queue<std::string> empty;
+        std::queue<PendingReload> empty;
         pendingReloads_.swap(empty);
     }
 
@@ -2892,7 +2897,9 @@ bool Engine::OpenWorkspaceFolder(const std::string& newRoot) {
 
     watcher_ = std::make_unique<FileWatcher>(
         workspaceRoot_,
-        [this](const std::string& path) { OnFileChanged(path); }
+        [this](const std::string& path, std::chrono::steady_clock::time_point detectionTime) {
+            OnFileChanged(path, detectionTime);
+        }
     );
     watcher_->Start();
 
@@ -2904,7 +2911,8 @@ bool Engine::OpenWorkspaceFolder(const std::string& newRoot) {
     return true;
 }
 
-void Engine::OnFileChanged(const std::string& filepath) {
+void Engine::OnFileChanged(const std::string& filepath,
+                           std::chrono::steady_clock::time_point detectionTime) {
     const std::string extension = std::filesystem::path(filepath).extension().string();
     std::string lowerExt = extension;
     std::ranges::transform(lowerExt, lowerExt.begin(), [](unsigned char c) {
@@ -2920,11 +2928,25 @@ void Engine::OnFileChanged(const std::string& filepath) {
     }
 
     std::scoped_lock lock(pendingMutex_);
-    pendingReloads_.push(filepath);
+    pendingReloads_.push(PendingReload{ filepath, detectionTime });
+}
+
+void Engine::RecordEditDetected(const std::string& workspaceName,
+                                std::chrono::steady_clock::time_point detectionTime) {
+    if (workspaceName.empty()) {
+        return;
+    }
+    auto& slot = pendingEditDetectionTimes_[workspaceName];
+    // Coalesce multiple edits before the compile fires: keep the earliest
+    // observed timestamp so the latency captures the full window the user
+    // perceives.
+    if (slot.time_since_epoch().count() == 0 || detectionTime < slot) {
+        slot = detectionTime;
+    }
 }
 
 void Engine::ProcessPendingReloads(double nowSeconds) {
-    std::vector<std::string> filesToProcess;
+    std::vector<PendingReload> filesToProcess;
     {
         std::scoped_lock lock(pendingMutex_);
         while (!pendingReloads_.empty()) {
@@ -2933,7 +2955,9 @@ void Engine::ProcessPendingReloads(double nowSeconds) {
         }
     }
 
-    for (const auto& filepath : filesToProcess) {
+    for (const auto& reload : filesToProcess) {
+        const auto& filepath = reload.filepath;
+        const auto detectionTime = reload.detectionTime;
         const std::filesystem::path filePath(filepath);
         const std::string normalizedPath = NormalizePathString(filePath);
         const std::string fileExt = filePath.extension().string();
@@ -2982,6 +3006,7 @@ void Engine::ProcessPendingReloads(double nowSeconds) {
                         workspace.shaderDependencies.end()) {
                         continue;
                     }
+                    RecordEditDetected(name, detectionTime);
                     QueueCompileForWorkspace(name, nowSeconds, true);
                     triggered = true;
                 }
@@ -3003,6 +3028,7 @@ void Engine::ProcessPendingReloads(double nowSeconds) {
                         workspace.shaderDependencies.end()) {
                         continue;
                     }
+                    RecordEditDetected(name, detectionTime);
                     QueueCompileForWorkspace(name, nowSeconds, true);
                     triggered = true;
                 }
@@ -3028,6 +3054,7 @@ void Engine::ProcessPendingReloads(double nowSeconds) {
 
         UpdateWorkspaceSourceFromDocument(workspaceName, filepath, *content);
         ui_->UpdateDocumentContent(filepath, *content);
+        RecordEditDetected(workspaceName, detectionTime);
         QueueCompileForWorkspace(workspaceName, nowSeconds, true);
         if (isGlslFile) {
             dependencyFlashUntil_[normalizedPath] = nowSeconds + 1.5;
@@ -3044,6 +3071,7 @@ void Engine::HandleDocumentEdited(const std::string& filepath, const std::string
 
     UpdateWorkspaceSourceFromDocument(workspaceName, filepath, content);
     if (workspaceName == activeWorkspaceName_) {
+        RecordEditDetected(workspaceName, std::chrono::steady_clock::now());
         QueueCompileForWorkspace(workspaceName, glfwGetTime(), false);
     }
 }
@@ -3206,18 +3234,24 @@ void Engine::EnqueueDueCompiles(const std::vector<std::string>& duePaths) {
             it != latestUserPrefixLines_.end()) {
             userPrefixLines = it->second;
         }
-        compileJobs_.emplace_back(CompileJob{
-            workspaceName,
-            workspaceIt->second.cppPath,
-            sourceIt->second,
-            sourceHash,
-            stateAbiHashIt->second,
-            uniformDescriptorsIt->second,
-            samplerUniformsIt->second,
-            storageBuffersIt->second,
-            shaderDependenciesIt->second,
-            userPrefixLines
-        });
+        CompileJob job;
+        job.workspaceName = workspaceName;
+        job.sourceName = workspaceIt->second.cppPath;
+        job.source = sourceIt->second;
+        job.sourceHash = sourceHash;
+        job.stateAbiHash = stateAbiHashIt->second;
+        job.uniformDescriptors = uniformDescriptorsIt->second;
+        job.samplerUniformNames = samplerUniformsIt->second;
+        job.storageBufferNames = storageBuffersIt->second;
+        job.shaderDependencies = shaderDependenciesIt->second;
+        job.userPrefixLines = userPrefixLines;
+        if (auto editIt = pendingEditDetectionTimes_.find(workspaceName);
+            editIt != pendingEditDetectionTimes_.end()) {
+            job.hasEditDetectionTime = true;
+            job.editDetectionTime = editIt->second;
+            pendingEditDetectionTimes_.erase(editIt);
+        }
+        compileJobs_.emplace_back(std::move(job));
         pendingCompilesAt_.erase(workspaceName);
     }
 }
@@ -3276,7 +3310,18 @@ void Engine::CompileThreadMain(std::shared_ptr<std::atomic<bool>> running) {
 
         // Heavy JIT/Clang work happens off the UI thread.
         std::string diagnostics;
-        auto program = currentJit->CompileSource(job.sourceName, job.source, &diagnostics);
+        const auto compileStartTime = std::chrono::steady_clock::now();
+        double parseToReadyMs = -1.0;
+        auto program = currentJit->CompileSource(job.sourceName, job.source,
+                                                 &diagnostics, &parseToReadyMs);
+        const auto compileEndTime = std::chrono::steady_clock::now();
+        // Recompilation time = clang Parse() -> JitProgram ready (worker
+        // returns -1 on failure). Recorded eagerly so the metric reflects
+        // every successful Parse->Ready hop, even compiles that aren't tied
+        // to an observed edit (cold load, snapshot restore, etc.).
+        if (parseToReadyMs >= 0.0 && metrics_) {
+            metrics_->RecordRecompile(parseToReadyMs);
+        }
         {
             std::scoped_lock lock(compileMutex_);
             inFlightSourceHashes_.erase(job.workspaceName);
@@ -3292,6 +3337,11 @@ void Engine::CompileThreadMain(std::shared_ptr<std::atomic<bool>> running) {
             result.shaderDependencies = std::move(job.shaderDependencies);
             result.diagnostics = std::move(diagnostics);
             result.userPrefixLines = job.userPrefixLines;
+            result.hasEditDetectionTime = job.hasEditDetectionTime;
+            result.editDetectionTime = job.editDetectionTime;
+            result.compileStartTime = compileStartTime;
+            result.compileEndTime = compileEndTime;
+            result.parseToReadyMs = parseToReadyMs;
             // scenePath is looked up later on the main thread (we don't
             // want to read workspaces_ off-thread).
             compileResults_.push(std::move(result));
@@ -4272,6 +4322,17 @@ void Engine::HandleCompileSuccess(const CompileResult& result) {
     InitializeProgramIfNeeded(activeProgram_);
     SaveActiveWorkspaceRuntimeState();
     TakeWorkspaceSnapshot(result.workspaceName);
+
+    // Stash the breakdown timestamps so the next renderFrame for this
+    // workspace closes the loop on the edit-to-display latency metric.
+    if (result.hasEditDetectionTime && metrics_) {
+        PendingFirstFrame pending;
+        pending.editDetectionTime = result.editDetectionTime;
+        pending.compileStartTime = result.compileStartTime;
+        pending.compileEndTime = result.compileEndTime;
+        pending.parseToReadyMs = result.parseToReadyMs;
+        pendingFirstFrameByWorkspace_[result.workspaceName] = pending;
+    }
     DebugLog("HandleCompileSuccess activated(workspace=" + result.workspaceName +
              ", ctx.state_i0=" + std::to_string(ctx_.state_i[0]) +
              ", glIsProgram=" + std::to_string(ctx_.state_i[0] != 0 &&
@@ -4515,6 +4576,49 @@ void Engine::PushWorkspaceSnapshotsToUi(const std::string& workspaceName) {
         views.push_back(std::move(view));
     }
     ui_->SetWorkspaceSnapshots(workspaceName, std::move(views));
+}
+
+void Engine::RecordFirstFrameForWorkspace(const std::string& workspaceName) {
+    if (!metrics_) {
+        return;
+    }
+    auto it = pendingFirstFrameByWorkspace_.find(workspaceName);
+    if (it == pendingFirstFrameByWorkspace_.end()) {
+        return;
+    }
+
+    using namespace std::chrono;
+    const auto now = steady_clock::now();
+    const auto& pending = it->second;
+
+    MetricsRegistry::LatencySample sample;
+    sample.timestampMs = static_cast<std::uint64_t>(
+        duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count());
+    sample.workspaceName = workspaceName;
+    sample.detectionDelayMs =
+        duration<double, std::milli>(pending.compileStartTime - pending.editDetectionTime).count();
+    if (pending.parseToReadyMs >= 0.0) {
+        sample.compileMs = pending.parseToReadyMs;
+    } else {
+        sample.compileMs =
+            duration<double, std::milli>(pending.compileEndTime - pending.compileStartTime).count();
+    }
+    sample.installToRenderMs =
+        duration<double, std::milli>(now - pending.compileEndTime).count();
+    sample.totalMs =
+        duration<double, std::milli>(now - pending.editDetectionTime).count();
+
+    // Clamp negative-but-near-zero values that can sneak in if clocks drift
+    // between recording sites. A negative latency is meaningless to the
+    // graph and harder to spot than a 0.
+    auto clampNonNeg = [](double v) { return v < 0.0 ? 0.0 : v; };
+    sample.detectionDelayMs = clampNonNeg(sample.detectionDelayMs);
+    sample.compileMs = clampNonNeg(sample.compileMs);
+    sample.installToRenderMs = clampNonNeg(sample.installToRenderMs);
+    sample.totalMs = clampNonNeg(sample.totalMs);
+
+    metrics_->RecordLatencySample(sample);
+    pendingFirstFrameByWorkspace_.erase(it);
 }
 
 void Engine::ProcessCompileResults() {
@@ -5262,6 +5366,7 @@ void Engine::RenderSceneToTexture() {
                 ApplyWorkspaceUniforms(activeWorkspaceName_);
                 if (program->functions.render) {
                     program->functions.render(&ctx_);
+                    RecordFirstFrameForWorkspace(activeWorkspaceName_);
                 }
 
                 glEndQuery(GL_TIME_ELAPSED);
@@ -5383,6 +5488,7 @@ void Engine::RenderSceneToTexture() {
         ApplyWorkspaceUniforms(workspaceName);
         if (program->functions.render) {
             program->functions.render(&ctx_);
+            RecordFirstFrameForWorkspace(workspaceName);
         }
 
         glEndQuery(GL_TIME_ELAPSED);
@@ -5557,6 +5663,16 @@ void Engine::Run() {
 
         ui_->Render();
         glfwSwapBuffers(window_);
+
+        // Cold-start metric: process launch -> first frame swapped. Only
+        // captured once; subsequent reloads/snapshots don't reset it.
+        if (!firstFrameRecorded_ && metrics_) {
+            metrics_->RecordFirstFrameRendered();
+            firstFrameRecorded_ = true;
+        }
+        if (metrics_) {
+            metrics_->RefreshMemorySnapshot();
+        }
 
         FrameCapWait(frameStartSeconds);
         if (ui_) {

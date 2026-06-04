@@ -601,6 +601,7 @@ void EditorUI::Draw() {
     DrawUniformsTab();
     DrawIncomingWorkspaceSharePopup();
     DrawNetworkDiagnosticsWindow();
+    DrawMetricsWindow();
     DrawGuidesPopup();
     DrawSettingsWindow();
     DrawFpsOverlay();
@@ -1744,6 +1745,7 @@ void EditorUI::DrawViewMenu() {
     (void)ImGui::MenuItem("Uniform Controls", nullptr, &showUniformControlsPanel_);
     (void)ImGui::MenuItem("Playback Controls", nullptr, &showPlaybackControlsPanel_);
     (void)ImGui::MenuItem("Network Diagnostics", nullptr, &showNetworkDiagnostics_);
+    (void)ImGui::MenuItem("Metrics", nullptr, &showMetricsWindow_);
     ImGui::EndMenu();
 }
 
@@ -2169,6 +2171,228 @@ void EditorUI::DrawNetworkDiagnosticsWindow() {
             ImGui::TextUnformatted(peer.ipAddress.c_str());
             ImGui::TableSetColumnIndex(2);
             ImGui::TextUnformatted(peer.id.c_str());
+        }
+        ImGui::EndTable();
+    }
+
+    ImGui::End();
+}
+
+namespace {
+    std::string FormatBytesHuman(std::size_t kilobytes) {
+        // /proc/self/status reports values in kibibytes. Stick to that so
+        // the display matches `cat /proc/.../status` exactly when the
+        // researcher cross-references.
+        const double bytes = static_cast<double>(kilobytes) * 1024.0;
+        if (bytes >= 1024.0 * 1024.0 * 1024.0) {
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%.2f GiB", bytes / (1024.0 * 1024.0 * 1024.0));
+            return buf;
+        }
+        if (bytes >= 1024.0 * 1024.0) {
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%.2f MiB", bytes / (1024.0 * 1024.0));
+            return buf;
+        }
+        if (bytes >= 1024.0) {
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%.2f KiB", bytes / 1024.0);
+            return buf;
+        }
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%zu B", static_cast<std::size_t>(bytes));
+        return buf;
+    }
+
+    std::string DefaultMetricsCsvPath() {
+        using namespace std::chrono;
+        const auto now = system_clock::to_time_t(system_clock::now());
+        std::tm tm{};
+#if defined(_WIN32)
+        localtime_s(&tm, &now);
+#else
+        localtime_r(&now, &tm);
+#endif
+        char buf[64];
+        std::strftime(buf, sizeof(buf), "jitgl-metrics-%Y%m%d-%H%M%S.csv", &tm);
+        return buf;
+    }
+}
+
+void EditorUI::RenderMetricsBlock(const char* title,
+                                  const MetricsRegistry::Stats& stats,
+                                  const std::vector<float>& history,
+                                  const char* unitSuffix) {
+    ImGui::PushID(title);
+    ImGui::SeparatorText(title);
+    if (stats.count == 0) {
+        ImGui::TextDisabled("No samples recorded yet.");
+        ImGui::PopID();
+        return;
+    }
+    ImGui::Text("count: %zu", stats.count);
+    ImGui::Text("last:  %.3f %s", stats.last, unitSuffix);
+    ImGui::Text("min:   %.3f %s", stats.min, unitSuffix);
+    ImGui::Text("mean:  %.3f %s", stats.mean, unitSuffix);
+    ImGui::Text("p50:   %.3f %s", stats.p50, unitSuffix);
+    ImGui::Text("p95:   %.3f %s", stats.p95, unitSuffix);
+    ImGui::Text("max:   %.3f %s", stats.max, unitSuffix);
+
+    if (!history.empty()) {
+        char overlay[64];
+        std::snprintf(overlay, sizeof(overlay), "last %.2f %s", stats.last, unitSuffix);
+        const float plotMax = static_cast<float>(std::max(stats.max * 1.05, 1.0));
+        ImGui::PlotLines("##history", history.data(), static_cast<int>(history.size()),
+                         0, overlay, 0.0f, plotMax, ImVec2(0.0f, 80.0f));
+    }
+    ImGui::PopID();
+}
+
+void EditorUI::DrawMetricsWindow() {
+    if (!showMetricsWindow_) {
+        return;
+    }
+
+    ImGui::SetNextWindowSize(ImVec2(540.0f, 720.0f), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Metrics", &showMetricsWindow_)) {
+        ImGui::End();
+        return;
+    }
+
+    if (!metricsRegistry_) {
+        ImGui::TextDisabled("Metrics registry is not attached.");
+        ImGui::End();
+        return;
+    }
+
+    ImGui::TextWrapped(
+        "Thesis instrumentation. Edit a workspace file to populate the "
+        "edit-to-display and recompilation samples; the memory + cold-start "
+        "numbers fill in passively.");
+    ImGui::Spacing();
+
+    // ── Action bar ──────────────────────────────────────────────────────
+    if (ImGui::Button("Reset Samples")) {
+        metricsRegistry_->Reset();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Refresh Memory")) {
+        metricsRegistry_->RefreshMemorySnapshot();
+    }
+    ImGui::SameLine();
+    static std::array<char, 512> csvPathBuffer{};
+    static bool csvPathInitialized = false;
+    if (!csvPathInitialized) {
+        const std::string defaultPath = DefaultMetricsCsvPath();
+        std::snprintf(csvPathBuffer.data(), csvPathBuffer.size(), "%s", defaultPath.c_str());
+        csvPathInitialized = true;
+    }
+    if (ImGui::Button("Export CSV")) {
+        const std::string path(csvPathBuffer.data());
+        const bool ok = metricsRegistry_->ExportToCsv(path);
+        if (ok) {
+            AddLogOutput("[Metrics] Wrote CSV to " + path);
+        } else {
+            AddLogOutput("[Metrics] FAILED to write CSV to " + path);
+        }
+    }
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::InputText("##csv-path", csvPathBuffer.data(), csvPathBuffer.size());
+
+    ImGui::Spacing();
+
+    // ── Cold start ──────────────────────────────────────────────────────
+    ImGui::SeparatorText("Cold Start");
+    if (metricsRegistry_->HasColdStart()) {
+        const double coldStart = metricsRegistry_->GetColdStartMs();
+        ImGui::Text("Process launch -> first frame: %.2f ms (%.3f s)",
+                    coldStart, coldStart / 1000.0);
+    } else {
+        ImGui::TextDisabled("Pending first rendered frame...");
+    }
+
+    // ── Memory ──────────────────────────────────────────────────────────
+    const auto memory = metricsRegistry_->GetMemorySnapshot();
+    ImGui::SeparatorText("Memory (/proc/self/status)");
+    if (!memory.valid) {
+        ImGui::TextDisabled("Memory snapshot not available on this platform.");
+    } else {
+        ImGui::Text("VmPeak (peak virtual):  %s (%zu kB)",
+                    FormatBytesHuman(memory.vmPeakKb).c_str(), memory.vmPeakKb);
+        ImGui::Text("VmSize (current virt.): %s (%zu kB)",
+                    FormatBytesHuman(memory.vmSizeKb).c_str(), memory.vmSizeKb);
+        ImGui::Text("VmHWM  (peak resident): %s (%zu kB)",
+                    FormatBytesHuman(memory.vmHwmKb).c_str(), memory.vmHwmKb);
+        ImGui::Text("VmRSS  (current RSS):   %s (%zu kB)",
+                    FormatBytesHuman(memory.vmRssKb).c_str(), memory.vmRssKb);
+    }
+
+    // ── Recompilation time ─────────────────────────────────────────────
+    RenderMetricsBlock("Recompilation Time (Parse() -> JitProgram ready)",
+                       metricsRegistry_->GetRecompileStats(),
+                       metricsRegistry_->GetRecompileHistory(),
+                       "ms");
+
+    // ── Edit-to-display latency ────────────────────────────────────────
+    RenderMetricsBlock("Edit-to-Display Latency (total)",
+                       metricsRegistry_->GetLatencyStats(),
+                       metricsRegistry_->GetLatencyHistory(),
+                       "ms");
+
+    ImGui::SeparatorText("Edit-to-Display Breakdown");
+    const auto detectionStats = metricsRegistry_->GetDetectionDelayStats();
+    const auto compileStats = metricsRegistry_->GetCompileBreakdownStats();
+    const auto installStats = metricsRegistry_->GetInstallToRenderStats();
+    if (detectionStats.count == 0) {
+        ImGui::TextDisabled("No edit -> render samples yet. Edit a workspace file to populate.");
+    } else {
+        if (ImGui::BeginTable("breakdown", 6,
+                              ImGuiTableFlags_Borders | ImGuiTableFlags_SizingStretchProp)) {
+            ImGui::TableSetupColumn("Component");
+            ImGui::TableSetupColumn("count");
+            ImGui::TableSetupColumn("last (ms)");
+            ImGui::TableSetupColumn("mean (ms)");
+            ImGui::TableSetupColumn("p50 (ms)");
+            ImGui::TableSetupColumn("p95 (ms)");
+            ImGui::TableHeadersRow();
+
+            auto row = [&](const char* name, const MetricsRegistry::Stats& s) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted(name);
+                ImGui::TableSetColumnIndex(1); ImGui::Text("%zu", s.count);
+                ImGui::TableSetColumnIndex(2); ImGui::Text("%.2f", s.last);
+                ImGui::TableSetColumnIndex(3); ImGui::Text("%.2f", s.mean);
+                ImGui::TableSetColumnIndex(4); ImGui::Text("%.2f", s.p50);
+                ImGui::TableSetColumnIndex(5); ImGui::Text("%.2f", s.p95);
+            };
+            row("Detection delay", detectionStats);
+            row("Compile (Parse->Ready)", compileStats);
+            row("Install -> first render", installStats);
+            ImGui::EndTable();
+        }
+    }
+
+    // ── Recent latency samples ─────────────────────────────────────────
+    ImGui::SeparatorText("Recent Edit-to-Display Samples");
+    const auto recent = metricsRegistry_->GetRecentLatencySamples(16);
+    if (recent.empty()) {
+        ImGui::TextDisabled("No samples yet.");
+    } else if (ImGui::BeginTable("recent-latency", 5,
+                                 ImGuiTableFlags_Borders | ImGuiTableFlags_SizingStretchProp |
+                                 ImGuiTableFlags_RowBg)) {
+        ImGui::TableSetupColumn("Workspace");
+        ImGui::TableSetupColumn("Detect (ms)");
+        ImGui::TableSetupColumn("Compile (ms)");
+        ImGui::TableSetupColumn("Install (ms)");
+        ImGui::TableSetupColumn("Total (ms)");
+        ImGui::TableHeadersRow();
+        for (auto it = recent.rbegin(); it != recent.rend(); ++it) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted(it->workspaceName.c_str());
+            ImGui::TableSetColumnIndex(1); ImGui::Text("%.2f", it->detectionDelayMs);
+            ImGui::TableSetColumnIndex(2); ImGui::Text("%.2f", it->compileMs);
+            ImGui::TableSetColumnIndex(3); ImGui::Text("%.2f", it->installToRenderMs);
+            ImGui::TableSetColumnIndex(4); ImGui::Text("%.2f", it->totalMs);
         }
         ImGui::EndTable();
     }

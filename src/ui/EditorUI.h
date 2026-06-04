@@ -11,6 +11,7 @@
 #include "TextEditor.h"
 #include "imgui_markdown.h"
 #include "system/AppPreferences.h"
+#include "system/MetricsRegistry.h"
 #include "uniform/UniformControls.h"
 
 struct GLFWwindow;
@@ -413,6 +414,11 @@ public:
     void SetSnapshotRestoreCallback(
         std::function<void(const std::string& workspaceName,
                            const std::string& snapshotId)> cb);
+    // Engine hands a non-owning pointer so the metrics window can pull
+    // recompile / latency / memory snapshots each frame. nullptr means the
+    // metrics window opens empty.
+    void SetMetricsRegistry(MetricsRegistry* metrics) { metricsRegistry_ = metrics; }
+
     bool ShouldLoadShowcaseWorkspaceOnStartup() const;
     void SetupDarkTheme() const;
     void SetupLightTheme() const;
@@ -732,6 +738,14 @@ private:
     bool ctrlRenderModeChordHeld_ = false;
     bool ctrlFullscreenChordHeld_ = false;
     bool ctrlSettingsChordHeld_ = false;
+    MetricsRegistry* metricsRegistry_ = nullptr;
+    bool showMetricsWindow_ = false;
+    void DrawMetricsWindow();
+    void RenderMetricsBlock(const char* title,
+                            const MetricsRegistry::Stats& stats,
+                            const std::vector<float>& history,
+                            const char* unitSuffix);
+
     bool showWelcomeOnStartup_ = true;
     bool doNotShowWelcomeAgain_ = false;
     bool openGuidesPopupRequested_ = false;

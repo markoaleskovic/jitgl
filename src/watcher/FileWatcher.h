@@ -2,6 +2,7 @@
 #pragma once
 #include <string>
 #include <functional>
+#include <chrono>
 #include <filesystem>
 #include <unordered_map>
 #include <thread>
@@ -10,7 +11,11 @@
 
 class FileWatcher {
 public:
-    using Callback = std::function<void(const std::string& filepath)>;
+    // detectionTime is captured the instant the poll loop noticed the mtime
+    // change. Engine uses it as the starting timestamp for the edit-to-
+    // display latency metric.
+    using Callback = std::function<void(const std::string& filepath,
+                                        std::chrono::steady_clock::time_point detectionTime)>;
 
     FileWatcher(std::string watchDir, Callback cb);
     ~FileWatcher();

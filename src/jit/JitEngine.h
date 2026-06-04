@@ -44,9 +44,13 @@ public:
     // `outDiagnostics` (when non-null) is filled with the verbatim preflight
     // / parse / execute error text on a failed compile. Used by the host to
     // map line numbers back into the user's source for editor markers.
+    // `outParseToReadyMs` (when non-null) receives the wall-clock time, in
+    // milliseconds, from the first Parse() call to a fully resolved
+    // JitProgram. Matches the "recompilation time" thesis metric.
     std::shared_ptr<JitProgram> CompileSource(const std::string& sourceName,
                                               const std::string& sourceCode,
-                                              std::string* outDiagnostics = nullptr);
+                                              std::string* outDiagnostics = nullptr,
+                                              double* outParseToReadyMs = nullptr);
     std::shared_ptr<JitProgram> CompileFile(const std::string& filepath);
     void SetOutputCallback(std::function<void(const std::string&)> cb);
     // Number of newline-terminated lines the preamble (engine.hpp) consumes

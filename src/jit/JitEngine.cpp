@@ -409,7 +409,11 @@ std::shared_ptr<JitProgram> JitEngine::CompileFile(const std::string& filepath) 
 
 std::shared_ptr<JitProgram> JitEngine::CompileSource(const std::string& sourceName,
                                                      const std::string& sourceCode,
-                                                     std::string* outDiagnostics) {
+                                                     std::string* outDiagnostics,
+                                                     double* outParseToReadyMs) {
+    if (outParseToReadyMs) {
+        *outParseToReadyMs = -1.0;
+    }
     log(std::format("[JIT] Starting compilation for {}...", sourceName));
     const std::string fullSource = preamble_ + "\n" + sourceCode;
 
@@ -427,6 +431,12 @@ std::shared_ptr<JitProgram> JitEngine::CompileSource(const std::string& sourceNa
         return nullptr;
     }
 
+    // Parse() -> first available JitProgram == the thesis "recompilation
+    // time" definition. Wall-clock so it covers Parse + Execute + symbol
+    // lookup (i.e. everything between the user's edit and a runnable
+    // program), but excludes the out-of-process preflight which is reported
+    // separately if needed.
+    const auto parseStart = std::chrono::steady_clock::now();
     log("[JIT] Parsing source...");
     auto ptuOrErr = stagingInterpreter->Parse(fullSource);
     if (!ptuOrErr) {
@@ -465,6 +475,12 @@ std::shared_ptr<JitProgram> JitEngine::CompileSource(const std::string& sourceNa
     // Program keeps interpreter alive so resolved function pointers remain valid.
     program->interpreter = std::move(keepAliveInterpreter);
     program->functions = functions;
+
+    if (outParseToReadyMs) {
+        const auto delta = std::chrono::steady_clock::now() - parseStart;
+        *outParseToReadyMs =
+            std::chrono::duration<double, std::milli>(delta).count();
+    }
 
     log(std::format("[JIT] Hot-swap successful for {}.", sourceName));
     if (functions.init) log("  -> init()");

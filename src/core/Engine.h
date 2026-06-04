@@ -23,6 +23,7 @@
 #include "system/network/LanWorkspaceShareService.h"
 #include "system/VideoRecorder.h"
 #include "assets/AssetRegistry.h"
+#include "system/MetricsRegistry.h"
 
 struct GLFWwindow;
 class FileWatcher;
@@ -70,6 +71,8 @@ private:
     bool networkEnabled_ = true;
 
     std::unique_ptr<VideoRecorder> videoRecorder_;
+    std::unique_ptr<MetricsRegistry> metrics_;
+    bool firstFrameRecorded_ = false;
 
     // Snapshot history: one entry stashed on each successful compile so the
     // user can scrub back through prior versions of scene.cpp / shader.glsl
@@ -179,6 +182,24 @@ private:
     std::unordered_map<std::string, double> dependencyFlashUntil_;
     double lastTime_ = 0.0;
 
+    // Per-workspace earliest "edit detected" timestamp for a not-yet-compiled
+    // change. Set by the watcher path (ProcessPendingReloads) or the editor
+    // path (HandleDocumentEdited). Consumed when a CompileJob is enqueued so
+    // the worker can compute the detection-delay component.
+    std::unordered_map<std::string, std::chrono::steady_clock::time_point>
+        pendingEditDetectionTimes_;
+
+    // Latency breakdown waiting on the next renderFrame to fire. Populated
+    // in HandleCompileSuccess; cleared after the workspace's first post-
+    // install render call returns.
+    struct PendingFirstFrame {
+        std::chrono::steady_clock::time_point editDetectionTime{};
+        std::chrono::steady_clock::time_point compileStartTime{};
+        std::chrono::steady_clock::time_point compileEndTime{};
+        double parseToReadyMs = -1.0;
+    };
+    std::unordered_map<std::string, PendingFirstFrame> pendingFirstFrameByWorkspace_;
+
     // Scene render target shown in UI renderer tab
     unsigned int sceneFbo_ = 0;
     unsigned int sceneColorTex_ = 0;
@@ -186,9 +207,15 @@ private:
     int sceneWidth_ = 0;
     int sceneHeight_ = 0;
 
-    // Pending file paths posted by watcher thread, consumed on main thread
+    // Pending file paths posted by watcher thread, consumed on main thread.
+    // The timestamp is the moment the watcher detected the mtime change —
+    // used as the starting point for edit-to-display latency.
+    struct PendingReload {
+        std::string filepath;
+        std::chrono::steady_clock::time_point detectionTime{};
+    };
     std::mutex pendingMutex_;
-    std::queue<std::string> pendingReloads_;
+    std::queue<PendingReload> pendingReloads_;
 
     struct CompileJob {
         std::string workspaceName;
@@ -204,6 +231,14 @@ private:
         // preamble and the user's scene.cpp inside `source`. Used to
         // subtract from driver-reported line numbers when surfacing errors.
         int userPrefixLines = 0;
+        // When the originating edit was first detected. Carried through so
+        // the worker thread can compute detection-delay and the main thread
+        // can compute the edit-to-display latency once the first frame ships.
+        // hasEditDetectionTime == false means this compile wasn't triggered
+        // by an observed edit (e.g. startup/cold-load) and should not
+        // contribute to the latency metric.
+        bool hasEditDetectionTime = false;
+        std::chrono::steady_clock::time_point editDetectionTime{};
     };
 
     struct CompileResult {
@@ -220,6 +255,16 @@ private:
         std::string diagnostics;
         int userPrefixLines = 0;
         std::string scenePath;  // workspace.cppPath, used to route markers.
+
+        // Per-job timing for the metrics window. parseToReadyMs == -1 when
+        // the JIT did not return a timing (compile failure case). The three
+        // *Time fields capture the moments the latency-breakdown numbers
+        // are derived from on the main thread.
+        bool hasEditDetectionTime = false;
+        std::chrono::steady_clock::time_point editDetectionTime{};
+        std::chrono::steady_clock::time_point compileStartTime{};
+        std::chrono::steady_clock::time_point compileEndTime{};
+        double parseToReadyMs = -1.0;
     };
 
     struct CompileFailureState {
@@ -247,6 +292,11 @@ private:
     std::unordered_map<std::string, std::deque<double>> recentErrors_;
     bool resetRequested_ = false;
     bool resetWaitLogged_ = false;
+
+    MetricsRegistry* MetricsForUi() const { return metrics_.get(); }
+    void RecordEditDetected(const std::string& workspaceName,
+                            std::chrono::steady_clock::time_point detectionTime);
+    void RecordFirstFrameForWorkspace(const std::string& workspaceName);
 
     bool RegisterWorkspace(const WorkspaceDescriptor& descriptor);
     void SyncWorkspaceUiState();
@@ -305,7 +355,8 @@ private:
 
     void ResetJIT();
     void CompletePendingJITReset();
-    void OnFileChanged(const std::string& filepath);
+    void OnFileChanged(const std::string& filepath,
+                       std::chrono::steady_clock::time_point detectionTime);
     void ProcessPendingReloads(double nowSeconds);
 
     void HandleDocumentEdited(const std::string& filepath, const std::string& content);

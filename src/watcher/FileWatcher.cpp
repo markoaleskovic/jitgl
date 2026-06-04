@@ -37,15 +37,17 @@ void FileWatcher::PollLoop(std::stop_token stopToken) {
             if (it == lastWriteTimes_.end()) {
                 // New files are reported once and then tracked normally.
                 lastWriteTimes_[path] = currentTime;
+                const auto detectionTime = std::chrono::steady_clock::now();
                 std::scoped_lock lock(callbackMutex_);
-                callback_(path);
+                callback_(path, detectionTime);
                 continue;
             }
 
             if (it->second != currentTime) {
                 it->second = currentTime;
+                const auto detectionTime = std::chrono::steady_clock::now();
                 std::scoped_lock lock(callbackMutex_);
-                callback_(path);
+                callback_(path, detectionTime);
             }
         }
     }
