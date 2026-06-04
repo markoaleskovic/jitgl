@@ -72,7 +72,6 @@ private:
 
     std::unique_ptr<VideoRecorder> videoRecorder_;
     std::unique_ptr<MetricsRegistry> metrics_;
-    bool firstFrameRecorded_ = false;
 
     // Snapshot history: one entry stashed on each successful compile so the
     // user can scrub back through prior versions of scene.cpp / shader.glsl

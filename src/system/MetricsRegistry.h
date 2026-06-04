@@ -40,6 +40,12 @@ public:
         std::string workspaceName;
     };
 
+    struct RecompileSample {
+        std::uint64_t timestampMs = 0;
+        double parseToReadyMs = 0.0;
+        std::string workspaceName;
+    };
+
     struct Stats {
         std::size_t count = 0;
         double min = 0.0;
@@ -72,27 +78,35 @@ public:
 
     // Cold start: invoked from the render loop once, the moment we know the
     // first frame from the default workspace finished swapping. Subsequent
-    // calls are ignored so reloads don't reset the value.
+    // calls are ignored so reloads don't reset the value — use
+    // ReArmColdStart() if you want to measure another window.
     void RecordFirstFrameRendered();
     bool HasColdStart() const;
     double GetColdStartMs() const;
+    // Re-anchor the cold-start clock to `newAnchor` and clear the captured
+    // flag. The next RecordFirstFrameRendered() will measure from there.
+    // Used by the metrics window's "Simulate Cold Start" button.
+    void ReArmColdStart(time_point newAnchor);
 
     // Recompilation time. Pushed from the JIT worker each successful
     // compile. Stored independently of LatencySample so unrelated compiles
     // (no preceding edit event) still contribute to the recompile stats.
-    void RecordRecompile(double parseToReadyMs);
-    Stats GetRecompileStats() const;
-    std::vector<float> GetRecompileHistory() const;
+    void RecordRecompile(const std::string& workspaceName, double parseToReadyMs);
+    // Pass workspaceFilter to restrict to a single workspace; nullptr
+    // aggregates across all workspaces.
+    Stats GetRecompileStats(const std::string* workspaceFilter = nullptr) const;
+    std::vector<float> GetRecompileHistory(const std::string* workspaceFilter = nullptr) const;
 
     // Edit-to-display latency end-to-end. Pushed from the render thread once
     // the new program's first renderFrame returns.
     void RecordLatencySample(const LatencySample& sample);
-    Stats GetLatencyStats() const;
-    Stats GetDetectionDelayStats() const;
-    Stats GetCompileBreakdownStats() const;
-    Stats GetInstallToRenderStats() const;
-    std::vector<float> GetLatencyHistory() const;
-    std::vector<LatencySample> GetRecentLatencySamples(std::size_t maxSamples) const;
+    Stats GetLatencyStats(const std::string* workspaceFilter = nullptr) const;
+    Stats GetDetectionDelayStats(const std::string* workspaceFilter = nullptr) const;
+    Stats GetCompileBreakdownStats(const std::string* workspaceFilter = nullptr) const;
+    Stats GetInstallToRenderStats(const std::string* workspaceFilter = nullptr) const;
+    std::vector<float> GetLatencyHistory(const std::string* workspaceFilter = nullptr) const;
+    std::vector<LatencySample> GetRecentLatencySamples(std::size_t maxSamples,
+                                                       const std::string* workspaceFilter = nullptr) const;
 
     // Memory. Cheap enough to refresh every render frame; we still throttle
     // internally to ~250ms intervals so /proc reads don't dominate flamegraphs.
@@ -103,27 +117,24 @@ public:
     // Useful when collecting fresh data for a thesis run without restarting
     // the process.
     void Reset();
+    // Drop only the samples belonging to `workspaceName`. Cold start +
+    // memory stay untouched since they're process-wide.
+    void ResetWorkspace(const std::string& workspaceName);
 
     // Dump all collected samples to CSV. Returns false on file open failure.
     bool ExportToCsv(const std::string& path) const;
 
 private:
-    static Stats ComputeStats(const std::deque<double>& samples);
-    static std::vector<float> SnapshotHistory(const std::deque<double>& samples);
+    static Stats ComputeStats(const std::vector<double>& samples);
+    static std::vector<float> ToFloatVector(const std::vector<double>& samples);
 
     mutable std::mutex mu_;
 
     bool coldStartCaptured_ = false;
     double coldStartMs_ = 0.0;
 
-    std::deque<double> recompileSamplesMs_;
+    std::deque<RecompileSample> recompileSamples_;
     std::deque<LatencySample> latencySamples_;
-    // Cached column projections for stats so we don't reallocate on each UI
-    // frame. Maintained in lockstep with latencySamples_.
-    std::deque<double> latencyTotalMs_;
-    std::deque<double> latencyDetectionMs_;
-    std::deque<double> latencyCompileMs_;
-    std::deque<double> latencyInstallMs_;
 
     MemorySnapshot memorySnapshot_{};
     double lastMemoryRefreshSeconds_ = -1.0;

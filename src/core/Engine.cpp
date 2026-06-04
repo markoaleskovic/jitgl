@@ -1333,6 +1333,15 @@ bool Engine::InitUI() {
     ui_->SetHardResetRuntimeCallback([this]() {
         HardResetActiveWorkspaceState("manual hard reset", true);
     });
+    ui_->SetForceRecompileCallback([this](const std::string& workspaceName) {
+        if (workspaceName.empty()) {
+            return;
+        }
+        // Mark detection time so the worker pipeline emits a full
+        // edit-to-display sample for this forced recompile.
+        RecordEditDetected(workspaceName, std::chrono::steady_clock::now());
+        QueueCompileForWorkspace(workspaceName, glfwGetTime(), true);
+    });
     ui_->SetAppSettingsAppliedCallback([this](const EditorUI::AppSettings& settings) {
         ApplyGraphicsSettings(settings);
     });
@@ -3320,7 +3329,7 @@ void Engine::CompileThreadMain(std::shared_ptr<std::atomic<bool>> running) {
         // every successful Parse->Ready hop, even compiles that aren't tied
         // to an observed edit (cold load, snapshot restore, etc.).
         if (parseToReadyMs >= 0.0 && metrics_) {
-            metrics_->RecordRecompile(parseToReadyMs);
+            metrics_->RecordRecompile(job.workspaceName, parseToReadyMs);
         }
         {
             std::scoped_lock lock(compileMutex_);
@@ -5664,11 +5673,12 @@ void Engine::Run() {
         ui_->Render();
         glfwSwapBuffers(window_);
 
-        // Cold-start metric: process launch -> first frame swapped. Only
-        // captured once; subsequent reloads/snapshots don't reset it.
-        if (!firstFrameRecorded_ && metrics_) {
+        // Cold-start metric: process launch -> first frame swapped. Captured
+        // once at startup; the metrics window's "Simulate Cold Start" button
+        // calls ReArmColdStart(), which clears HasColdStart() so we'll
+        // re-record the next frame to swap.
+        if (metrics_ && !metrics_->HasColdStart()) {
             metrics_->RecordFirstFrameRendered();
-            firstFrameRecorded_ = true;
         }
         if (metrics_) {
             metrics_->RefreshMemorySnapshot();

@@ -2259,15 +2259,60 @@ void EditorUI::DrawMetricsWindow() {
         return;
     }
 
+    // Filter: when on, every per-sample section is scoped to the active
+    // workspace so switching workspaces switches the view without manual
+    // resets. Cold start + memory remain global since they're process-wide.
+    const std::string activeWorkspace = activeWorkspaceName_;
+    const bool filterAvailable = !activeWorkspace.empty();
+    if (!filterAvailable) {
+        metricsFilterToActiveWorkspace_ = false;
+    }
+    const std::string* filterPtr =
+        (metricsFilterToActiveWorkspace_ && filterAvailable) ? &activeWorkspace : nullptr;
+    const char* scopeLabel = filterPtr ? activeWorkspace.c_str() : "all workspaces";
+
     ImGui::TextWrapped(
-        "Thesis instrumentation. Edit a workspace file to populate the "
-        "edit-to-display and recompilation samples; the memory + cold-start "
-        "numbers fill in passively.");
+        "Thesis instrumentation. Per-sample metrics filter to the active "
+        "workspace by default; cold start + memory are process-wide.");
     ImGui::Spacing();
 
-    // ── Action bar ──────────────────────────────────────────────────────
-    if (ImGui::Button("Reset Samples")) {
+    // ── Scope + helpers ─────────────────────────────────────────────────
+    ImGui::Text("Scope: %s", scopeLabel);
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!filterAvailable);
+    ImGui::Checkbox("Filter to active workspace", &metricsFilterToActiveWorkspace_);
+    ImGui::EndDisabled();
+
+    ImGui::BeginDisabled(!filterAvailable);
+    if (ImGui::Button("Force Recompile")) {
+        if (onForceRecompile_) {
+            onForceRecompile_(activeWorkspace);
+            AddLogOutput("[Metrics] Forced recompile of '" + activeWorkspace + "'");
+        }
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Re-queue an immediate compile of the active workspace.\n"
+                          "Marks edit-detection time so a full edit-to-display sample is captured.");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Reset Active Workspace")) {
+        metricsRegistry_->ResetWorkspace(activeWorkspace);
+        AddLogOutput("[Metrics] Cleared samples for '" + activeWorkspace + "'");
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Reset All")) {
         metricsRegistry_->Reset();
+        AddLogOutput("[Metrics] Cleared all samples (incl. cold start)");
+    }
+
+    if (ImGui::Button("Simulate Cold Start")) {
+        metricsRegistry_->ReArmColdStart(MetricsRegistry::clock::now());
+        AddLogOutput("[Metrics] Re-armed cold start; next swapped frame becomes the new sample");
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Re-anchor the cold-start clock to now and clear the captured value.\n"
+                          "The next frame to swap will record a fresh launch -> first-frame measurement.");
     }
     ImGui::SameLine();
     if (ImGui::Button("Refresh Memory")) {
@@ -2296,10 +2341,10 @@ void EditorUI::DrawMetricsWindow() {
     ImGui::Spacing();
 
     // ── Cold start ──────────────────────────────────────────────────────
-    ImGui::SeparatorText("Cold Start");
+    ImGui::SeparatorText("Cold Start (process-wide)");
     if (metricsRegistry_->HasColdStart()) {
         const double coldStart = metricsRegistry_->GetColdStartMs();
-        ImGui::Text("Process launch -> first frame: %.2f ms (%.3f s)",
+        ImGui::Text("Anchor -> first frame: %.2f ms (%.3f s)",
                     coldStart, coldStart / 1000.0);
     } else {
         ImGui::TextDisabled("Pending first rendered frame...");
@@ -2307,7 +2352,7 @@ void EditorUI::DrawMetricsWindow() {
 
     // ── Memory ──────────────────────────────────────────────────────────
     const auto memory = metricsRegistry_->GetMemorySnapshot();
-    ImGui::SeparatorText("Memory (/proc/self/status)");
+    ImGui::SeparatorText("Memory (/proc/self/status, process-wide)");
     if (!memory.valid) {
         ImGui::TextDisabled("Memory snapshot not available on this platform.");
     } else {
@@ -2323,22 +2368,22 @@ void EditorUI::DrawMetricsWindow() {
 
     // ── Recompilation time ─────────────────────────────────────────────
     RenderMetricsBlock("Recompilation Time (Parse() -> JitProgram ready)",
-                       metricsRegistry_->GetRecompileStats(),
-                       metricsRegistry_->GetRecompileHistory(),
+                       metricsRegistry_->GetRecompileStats(filterPtr),
+                       metricsRegistry_->GetRecompileHistory(filterPtr),
                        "ms");
 
     // ── Edit-to-display latency ────────────────────────────────────────
     RenderMetricsBlock("Edit-to-Display Latency (total)",
-                       metricsRegistry_->GetLatencyStats(),
-                       metricsRegistry_->GetLatencyHistory(),
+                       metricsRegistry_->GetLatencyStats(filterPtr),
+                       metricsRegistry_->GetLatencyHistory(filterPtr),
                        "ms");
 
     ImGui::SeparatorText("Edit-to-Display Breakdown");
-    const auto detectionStats = metricsRegistry_->GetDetectionDelayStats();
-    const auto compileStats = metricsRegistry_->GetCompileBreakdownStats();
-    const auto installStats = metricsRegistry_->GetInstallToRenderStats();
+    const auto detectionStats = metricsRegistry_->GetDetectionDelayStats(filterPtr);
+    const auto compileStats = metricsRegistry_->GetCompileBreakdownStats(filterPtr);
+    const auto installStats = metricsRegistry_->GetInstallToRenderStats(filterPtr);
     if (detectionStats.count == 0) {
-        ImGui::TextDisabled("No edit -> render samples yet. Edit a workspace file to populate.");
+        ImGui::TextDisabled("No edit -> render samples for %s yet.", scopeLabel);
     } else {
         if (ImGui::BeginTable("breakdown", 6,
                               ImGuiTableFlags_Borders | ImGuiTableFlags_SizingStretchProp)) {
@@ -2368,7 +2413,7 @@ void EditorUI::DrawMetricsWindow() {
 
     // ── Recent latency samples ─────────────────────────────────────────
     ImGui::SeparatorText("Recent Edit-to-Display Samples");
-    const auto recent = metricsRegistry_->GetRecentLatencySamples(16);
+    const auto recent = metricsRegistry_->GetRecentLatencySamples(16, filterPtr);
     if (recent.empty()) {
         ImGui::TextDisabled("No samples yet.");
     } else if (ImGui::BeginTable("recent-latency", 5,

@@ -418,6 +418,12 @@ public:
     // recompile / latency / memory snapshots each frame. nullptr means the
     // metrics window opens empty.
     void SetMetricsRegistry(MetricsRegistry* metrics) { metricsRegistry_ = metrics; }
+    // Metrics window "Force Recompile" button. The engine implements this by
+    // marking edit-detection time and queueing an immediate compile so a
+    // full edit-to-display sample lands in the registry.
+    void SetForceRecompileCallback(std::function<void(const std::string& workspaceName)> cb) {
+        onForceRecompile_ = std::move(cb);
+    }
 
     bool ShouldLoadShowcaseWorkspaceOnStartup() const;
     void SetupDarkTheme() const;
@@ -739,7 +745,9 @@ private:
     bool ctrlFullscreenChordHeld_ = false;
     bool ctrlSettingsChordHeld_ = false;
     MetricsRegistry* metricsRegistry_ = nullptr;
+    std::function<void(const std::string&)> onForceRecompile_;
     bool showMetricsWindow_ = false;
+    bool metricsFilterToActiveWorkspace_ = true;
     void DrawMetricsWindow();
     void RenderMetricsBlock(const char* title,
                             const MetricsRegistry::Stats& stats,

@@ -35,16 +35,16 @@ namespace {
         return duration<double>(clock::now().time_since_epoch()).count();
     }
 
-    void TrimDeque(std::deque<double>& d) {
+    template <typename T>
+    void TrimDeque(std::deque<T>& d) {
         while (d.size() > MetricsRegistry::kMaxSamples) {
             d.pop_front();
         }
     }
 
-    void TrimSamples(std::deque<MetricsRegistry::LatencySample>& d) {
-        while (d.size() > MetricsRegistry::kMaxSamples) {
-            d.pop_front();
-        }
+    bool MatchesFilter(const std::string& sampleWorkspace,
+                       const std::string* workspaceFilter) {
+        return workspaceFilter == nullptr || *workspaceFilter == sampleWorkspace;
     }
 
     bool ParseKbField(std::string_view line, std::size_t* outKb) {
@@ -85,6 +85,17 @@ MetricsRegistry::time_point MetricsRegistry::GetProcessStartTime() {
     return a.start;
 }
 
+namespace {
+    // Force-set the process anchor, bypassing the set-once gate. Used by
+    // ReArmColdStart so the user can run repeated cold-start measurements
+    // without restarting the process.
+    void ResetProcessStartTime(MetricsRegistry::time_point t) {
+        auto& a = anchor();
+        a.start = t;
+        a.set.store(true);
+    }
+}
+
 MetricsRegistry::MetricsRegistry() {
     // Lazy-init the anchor in case nothing else has set it yet. This catches
     // tests that instantiate MetricsRegistry directly without going through
@@ -113,74 +124,109 @@ double MetricsRegistry::GetColdStartMs() const {
     return coldStartMs_;
 }
 
-void MetricsRegistry::RecordRecompile(double parseToReadyMs) {
+void MetricsRegistry::RecordRecompile(const std::string& workspaceName, double parseToReadyMs) {
     if (parseToReadyMs < 0.0) {
         return;
     }
     std::scoped_lock lock(mu_);
-    recompileSamplesMs_.push_back(parseToReadyMs);
-    TrimDeque(recompileSamplesMs_);
+    RecompileSample sample;
+    sample.timestampMs = NowUnixMs();
+    sample.parseToReadyMs = parseToReadyMs;
+    sample.workspaceName = workspaceName;
+    recompileSamples_.push_back(std::move(sample));
+    TrimDeque(recompileSamples_);
 }
 
-MetricsRegistry::Stats MetricsRegistry::GetRecompileStats() const {
+MetricsRegistry::Stats MetricsRegistry::GetRecompileStats(const std::string* workspaceFilter) const {
     std::scoped_lock lock(mu_);
-    return ComputeStats(recompileSamplesMs_);
+    std::vector<double> filtered;
+    filtered.reserve(recompileSamples_.size());
+    for (const auto& s : recompileSamples_) {
+        if (MatchesFilter(s.workspaceName, workspaceFilter)) {
+            filtered.push_back(s.parseToReadyMs);
+        }
+    }
+    return ComputeStats(filtered);
 }
 
-std::vector<float> MetricsRegistry::GetRecompileHistory() const {
+std::vector<float> MetricsRegistry::GetRecompileHistory(const std::string* workspaceFilter) const {
     std::scoped_lock lock(mu_);
-    return SnapshotHistory(recompileSamplesMs_);
+    std::vector<double> filtered;
+    filtered.reserve(recompileSamples_.size());
+    for (const auto& s : recompileSamples_) {
+        if (MatchesFilter(s.workspaceName, workspaceFilter)) {
+            filtered.push_back(s.parseToReadyMs);
+        }
+    }
+    return ToFloatVector(filtered);
 }
 
 void MetricsRegistry::RecordLatencySample(const LatencySample& sample) {
     std::scoped_lock lock(mu_);
     latencySamples_.push_back(sample);
-    latencyTotalMs_.push_back(sample.totalMs);
-    latencyDetectionMs_.push_back(sample.detectionDelayMs);
-    latencyCompileMs_.push_back(sample.compileMs);
-    latencyInstallMs_.push_back(sample.installToRenderMs);
-    TrimSamples(latencySamples_);
-    TrimDeque(latencyTotalMs_);
-    TrimDeque(latencyDetectionMs_);
-    TrimDeque(latencyCompileMs_);
-    TrimDeque(latencyInstallMs_);
+    TrimDeque(latencySamples_);
 }
 
-MetricsRegistry::Stats MetricsRegistry::GetLatencyStats() const {
-    std::scoped_lock lock(mu_);
-    return ComputeStats(latencyTotalMs_);
+namespace {
+    template <typename Projector>
+    std::vector<double> ProjectFiltered(const std::deque<MetricsRegistry::LatencySample>& samples,
+                                        const std::string* workspaceFilter,
+                                        Projector project) {
+        std::vector<double> out;
+        out.reserve(samples.size());
+        for (const auto& s : samples) {
+            if (MatchesFilter(s.workspaceName, workspaceFilter)) {
+                out.push_back(project(s));
+            }
+        }
+        return out;
+    }
 }
 
-MetricsRegistry::Stats MetricsRegistry::GetDetectionDelayStats() const {
+MetricsRegistry::Stats MetricsRegistry::GetLatencyStats(const std::string* workspaceFilter) const {
     std::scoped_lock lock(mu_);
-    return ComputeStats(latencyDetectionMs_);
+    return ComputeStats(ProjectFiltered(latencySamples_, workspaceFilter,
+                                        [](const LatencySample& s) { return s.totalMs; }));
 }
 
-MetricsRegistry::Stats MetricsRegistry::GetCompileBreakdownStats() const {
+MetricsRegistry::Stats MetricsRegistry::GetDetectionDelayStats(const std::string* workspaceFilter) const {
     std::scoped_lock lock(mu_);
-    return ComputeStats(latencyCompileMs_);
+    return ComputeStats(ProjectFiltered(latencySamples_, workspaceFilter,
+                                        [](const LatencySample& s) { return s.detectionDelayMs; }));
 }
 
-MetricsRegistry::Stats MetricsRegistry::GetInstallToRenderStats() const {
+MetricsRegistry::Stats MetricsRegistry::GetCompileBreakdownStats(const std::string* workspaceFilter) const {
     std::scoped_lock lock(mu_);
-    return ComputeStats(latencyInstallMs_);
+    return ComputeStats(ProjectFiltered(latencySamples_, workspaceFilter,
+                                        [](const LatencySample& s) { return s.compileMs; }));
 }
 
-std::vector<float> MetricsRegistry::GetLatencyHistory() const {
+MetricsRegistry::Stats MetricsRegistry::GetInstallToRenderStats(const std::string* workspaceFilter) const {
     std::scoped_lock lock(mu_);
-    return SnapshotHistory(latencyTotalMs_);
+    return ComputeStats(ProjectFiltered(latencySamples_, workspaceFilter,
+                                        [](const LatencySample& s) { return s.installToRenderMs; }));
+}
+
+std::vector<float> MetricsRegistry::GetLatencyHistory(const std::string* workspaceFilter) const {
+    std::scoped_lock lock(mu_);
+    return ToFloatVector(ProjectFiltered(latencySamples_, workspaceFilter,
+                                         [](const LatencySample& s) { return s.totalMs; }));
 }
 
 std::vector<MetricsRegistry::LatencySample>
-MetricsRegistry::GetRecentLatencySamples(std::size_t maxSamples) const {
+MetricsRegistry::GetRecentLatencySamples(std::size_t maxSamples,
+                                         const std::string* workspaceFilter) const {
     std::scoped_lock lock(mu_);
     std::vector<LatencySample> out;
-    const std::size_t count = std::min(maxSamples, latencySamples_.size());
-    out.reserve(count);
-    auto it = latencySamples_.end();
-    for (std::size_t i = 0; i < count; ++i) {
-        --it;
+    out.reserve(std::min(maxSamples, latencySamples_.size()));
+    for (auto it = latencySamples_.rbegin(); it != latencySamples_.rend(); ++it) {
+        if (!MatchesFilter(it->workspaceName, workspaceFilter)) {
+            continue;
+        }
         out.push_back(*it);
+        if (out.size() >= maxSamples) {
+            break;
+        }
     }
     std::reverse(out.begin(), out.end());
     return out;
@@ -242,14 +288,25 @@ void MetricsRegistry::Reset() {
     std::scoped_lock lock(mu_);
     coldStartCaptured_ = false;
     coldStartMs_ = 0.0;
-    recompileSamplesMs_.clear();
+    recompileSamples_.clear();
     latencySamples_.clear();
-    latencyTotalMs_.clear();
-    latencyDetectionMs_.clear();
-    latencyCompileMs_.clear();
-    latencyInstallMs_.clear();
     memorySnapshot_ = MemorySnapshot{};
     lastMemoryRefreshSeconds_ = -1.0;
+}
+
+void MetricsRegistry::ResetWorkspace(const std::string& workspaceName) {
+    std::scoped_lock lock(mu_);
+    std::erase_if(recompileSamples_,
+                  [&](const RecompileSample& s) { return s.workspaceName == workspaceName; });
+    std::erase_if(latencySamples_,
+                  [&](const LatencySample& s) { return s.workspaceName == workspaceName; });
+}
+
+void MetricsRegistry::ReArmColdStart(time_point newAnchor) {
+    ResetProcessStartTime(newAnchor);
+    std::scoped_lock lock(mu_);
+    coldStartCaptured_ = false;
+    coldStartMs_ = 0.0;
 }
 
 bool MetricsRegistry::ExportToCsv(const std::string& path) const {
@@ -264,20 +321,29 @@ bool MetricsRegistry::ExportToCsv(const std::string& path) const {
     Stats compile;
     Stats install;
     std::vector<LatencySample> latencyRows;
-    std::vector<double> recompileRows;
+    std::vector<RecompileSample> recompileRows;
     MemorySnapshot memory;
     bool coldStartValid = false;
     double coldStart = 0.0;
 
     {
         std::scoped_lock lock(mu_);
-        recompile = ComputeStats(recompileSamplesMs_);
-        latency = ComputeStats(latencyTotalMs_);
-        detection = ComputeStats(latencyDetectionMs_);
-        compile = ComputeStats(latencyCompileMs_);
-        install = ComputeStats(latencyInstallMs_);
+        std::vector<double> recompileMs;
+        recompileMs.reserve(recompileSamples_.size());
+        for (const auto& s : recompileSamples_) {
+            recompileMs.push_back(s.parseToReadyMs);
+        }
+        recompile = ComputeStats(recompileMs);
+        latency = ComputeStats(ProjectFiltered(latencySamples_, nullptr,
+                                               [](const LatencySample& s) { return s.totalMs; }));
+        detection = ComputeStats(ProjectFiltered(latencySamples_, nullptr,
+                                                 [](const LatencySample& s) { return s.detectionDelayMs; }));
+        compile = ComputeStats(ProjectFiltered(latencySamples_, nullptr,
+                                               [](const LatencySample& s) { return s.compileMs; }));
+        install = ComputeStats(ProjectFiltered(latencySamples_, nullptr,
+                                               [](const LatencySample& s) { return s.installToRenderMs; }));
         latencyRows.assign(latencySamples_.begin(), latencySamples_.end());
-        recompileRows.assign(recompileSamplesMs_.begin(), recompileSamplesMs_.end());
+        recompileRows.assign(recompileSamples_.begin(), recompileSamples_.end());
         memory = memorySnapshot_;
         coldStartValid = coldStartCaptured_;
         coldStart = coldStartMs_;
@@ -312,15 +378,15 @@ bool MetricsRegistry::ExportToCsv(const std::string& path) const {
     }
 
     out << '\n';
-    out << "recompile_index,recompile_ms\n";
-    for (std::size_t i = 0; i < recompileRows.size(); ++i) {
-        out << i << ',' << recompileRows[i] << '\n';
+    out << "recompile_timestamp_ms,workspace,recompile_ms\n";
+    for (const auto& row : recompileRows) {
+        out << row.timestampMs << ',' << row.workspaceName << ',' << row.parseToReadyMs << '\n';
     }
 
     return static_cast<bool>(out);
 }
 
-MetricsRegistry::Stats MetricsRegistry::ComputeStats(const std::deque<double>& samples) {
+MetricsRegistry::Stats MetricsRegistry::ComputeStats(const std::vector<double>& samples) {
     Stats stats{};
     if (samples.empty()) {
         return stats;
@@ -348,7 +414,7 @@ MetricsRegistry::Stats MetricsRegistry::ComputeStats(const std::deque<double>& s
     return stats;
 }
 
-std::vector<float> MetricsRegistry::SnapshotHistory(const std::deque<double>& samples) {
+std::vector<float> MetricsRegistry::ToFloatVector(const std::vector<double>& samples) {
     std::vector<float> out;
     out.reserve(samples.size());
     for (double v : samples) {
