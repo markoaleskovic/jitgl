@@ -440,12 +440,7 @@ void EditorUI::ApplyThemeAndScale(float dpiScale, bool recreateFontTexture) {
         SetupDarkTheme();
     }
 
-    ImGuiIO& io = ImGui::GetIO();
     ImGuiStyle& style = ImGui::GetStyle();
-    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
-        style.WindowRounding = 0.0f;
-        style.Colors[ImGuiCol_WindowBg].w = 1.0f;
-    }
     style.ScaleAllSizes(dpiScale);
     if (style.ScrollbarSize <= 0.0f || !std::isfinite(style.ScrollbarSize)) {
         style.ScrollbarSize = 1.0f;
@@ -508,7 +503,6 @@ void EditorUI::Init(GLFWwindow *win) {
     ImGuiIO &io = ImGui::GetIO();
 
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
 
     // Disable Dear ImGui's default Ctrl+Tab/Super+Tab window switcher so Ctrl+Tab can switch editor files.
     ImGuiContext* context = ImGui::GetCurrentContext();
@@ -3335,7 +3329,7 @@ void EditorUI::DrawPipelineTab() {
     if (!anyEnabled) {
         ImGui::BeginDisabled();
     }
-    if (ImGui::Button("Disable All", ImVec2(disableAllButtonWidth, 0.0f)) && onPipelineEdit_) {
+    if (ImGui::Button("Disable", ImVec2(disableAllButtonWidth, 0.0f)) && onPipelineEdit_) {
         for (const auto& pass : pipelinePasses_) {
             if (!pass.enabled) {
                 continue;
@@ -5193,14 +5187,6 @@ void EditorUI::DrawConsolePane() {
 void EditorUI::Render() {
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-
-    ImGuiIO &io = ImGui::GetIO();
-    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
-        GLFWwindow *backup_current_context = glfwGetCurrentContext();
-        ImGui::UpdatePlatformWindows();
-        ImGui::RenderPlatformWindowsDefault();
-        glfwMakeContextCurrent(backup_current_context);
-    }
 }
 
 void EditorUI::Shutdown() {
